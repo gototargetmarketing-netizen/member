@@ -1,0 +1,50 @@
+/* ธีม luxury — โทนเข้ม หรูหรา (มาจากดีไซน์รุ่นแรกของคำหวาน)
+ * เหมาะกับ: ร้านอาหาร คาเฟ่พรีเมียม ร้านขนม ร้านเสริมสวย
+ * ร้านเปลี่ยนสีได้ใน config.js → colors (ไม่ต้องแก้ไฟล์นี้) */
+:root {
+  --bg: #f3eee7;
+  --surface: #fffdf9;
+  --surface2: #f6efe4;
+  --text: #2b2520;
+  --muted: #857c74;
+  --line: #ebe2d5;
+  --primary: #1f1914;
+  --on-primary: #ffffff;
+  --on-primary-muted: #b9ada1;
+  --button: #8b5e34;
+  --on-button: #ffffff;
+  --accent: #d4af37;
+  --on-accent: #1f1914;
+  --highlight: #e8d099;
+  --card-from: #30231a;
+  --card-to: #17120e;
+  --on-card: #ffffff;
+  --card-muted: #b3a89d;
+  --radius: 22px;
+  --radius-sm: 14px;
+}
+
+/* ลวดลายวงแหวนทองมุมหัวหน้าเว็บ */
+.hero::after {
+  content: "";
+  position: absolute;
+  width: 190px; height: 190px;
+  right: -70px; top: -90px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  box-shadow: 0 0 0 26px color-mix(in srgb, var(--accent) 5%, transparent), 0 0 0 52px color-mix(in srgb, var(--accent) 3%, transparent);
+}
+
+/* จุดทองบนบัตรสมาชิก + ขอบทอง */
+.member-card { border: 1px solid color-mix(in srgb, var(--highlight) 30%, transparent); }
+.member-card::before {
+  content: "";
+  position: absolute; inset: 0; z-index: 0;
+  opacity: .14;
+  background:
+    radial-gradient(circle at 10% 20%, var(--accent) 0 2px, transparent 3px),
+    radial-gradient(circle at 80% 70%, var(--accent) 0 1px, transparent 2px);
+  background-size: 42px 42px;
+}
+.mc-qr { background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, var(--button))); }
+.mc-points { letter-spacing: -.5px; }

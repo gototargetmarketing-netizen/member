@@ -1,0 +1,35 @@
+/* ธีม minimal — สว่าง สะอาด ทันสมัย
+ * เหมาะกับ: คาเฟ่ ร้านเครื่องดื่ม ร้านค้าปลีก ฟิตเนส
+ * หัวหน้าเว็บเป็นสีขาว ใช้สีของร้าน (button/accent/cardFrom/cardTo) เป็นจุดเด่น */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface2: #f1f5f9;
+  --text: #0f172a;
+  --muted: #64748b;
+  --line: #e2e8f0;
+  --primary: #ffffff;
+  --on-primary: #0f172a;
+  --on-primary-muted: #64748b;
+  --button: #0ea5e9;
+  --on-button: #ffffff;
+  --accent: #0ea5e9;
+  --on-accent: #ffffff;
+  --highlight: #ffffff;
+  --card-from: #38bdf8;
+  --card-to: #0284c7;
+  --on-card: #ffffff;
+  --card-muted: rgba(255, 255, 255, .82);
+  --radius: 18px;
+  --radius-sm: 12px;
+  --shadow: 0 2px 10px rgba(15, 23, 42, .05);
+}
+
+.hero { border-radius: 0; border-bottom: 1px solid var(--line); padding-bottom: 46px; }
+.avatar { border-color: var(--line); }
+.member-card { box-shadow: 0 14px 30px color-mix(in srgb, var(--card-to) 30%, transparent); }
+.mc-qr { background: #ffffff; color: var(--card-to); }
+.reward-cost { background: var(--button); color: var(--on-button); }
+.staff-head { border-bottom: 1px solid var(--line); }
+.staff-me .chip { background: var(--surface2); color: var(--text); }
+.chip-btn.active { background: var(--button); border-color: var(--button); color: var(--on-button); }

@@ -1,0 +1,17 @@
+{
+  "trailingSlash": false,
+  "rewrites": [
+    { "source": "/staff", "destination": "/staff.html" },
+    { "source": "/:shop([a-z0-9-]+)/staff", "destination": "/staff.html" },
+    { "source": "/:shop([a-z0-9-]+)", "destination": "/index.html" }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+      ]
+    }
+  ]
+}
