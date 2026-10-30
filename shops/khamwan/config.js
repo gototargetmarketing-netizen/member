@@ -11,7 +11,7 @@ export default {
 
   // URL ของ Apps Script v2 ของร้าน (ลงท้าย /exec) — ใส่หลัง Deploy
   // หมายเหตุ: URL เดิมของ v1 ใช้กับโค้ดนี้ไม่ได้ ต้อง Deploy code.gs ตัวใหม่ก่อน
-  apiUrl: '',
+  apiUrl: 'https://script.google.com/macros/s/AKfycbzXzdFh6fY0mmz2qpuuQ0OiCrdR2SeYVEcSG1mUMqnYfjGi7HnaFQW9xS8rC4x1kW5aHg/exec',
 
   // สไตล์สำเร็จรูป: 'luxury' (หรู โทนเข้ม) หรือ 'minimal' (สว่าง เรียบ)
   theme: 'luxury',
