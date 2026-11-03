@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1F1914">
+  <title>บัตรสมาชิก</title>
+  <!-- หน้าลูกค้า (ใช้ร่วมกันทุกร้าน) — ร้านไหนดูจากโดเมนหรือลิงก์ /ชื่อร้าน ค่าของร้านอยู่ใน shops/<ร้าน>/config.js -->
+  <link rel="preconnect" href="https://script.google.com">
+  <link rel="preconnect" href="https://script.googleusercontent.com">
+  <link rel="stylesheet" href="/themes/base.css">
+  <link rel="stylesheet" id="theme-css">
+  <script defer src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+  <!-- สร้าง QR ในเครื่อง (MIT) ไม่ส่งรหัสสมาชิกไปเว็บภายนอก -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+  <script type="module" src="/app/customer.js"></script>
+</head>
+<body>
+  <div id="app" class="app"><div class="boot"><div class="spinner"></div></div></div>
+  <div id="modal-root"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <noscript>กรุณาเปิดผ่านแอป LINE</noscript>
+</body>
+</html>
