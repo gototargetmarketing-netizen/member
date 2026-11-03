@@ -18,7 +18,8 @@ export default {
     greeting: 'สวัสดี',
     pointUnit: 'แต้ม'
   },
-  features: { tiers: false },
+  // แพ็กเกจพื้นฐาน: ไม่มีหลายสาขา (เปิดด้วย branches: true + maxBranches)
+  features: { tiers: false, branches: false },
   legal: {
     privacyUrl: '',
     privacyText: 'ตัวอย่างนโยบายความเป็นส่วนตัว — ร้านจริงต้องใส่ข้อความของตัวเอง'

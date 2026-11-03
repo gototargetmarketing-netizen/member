@@ -16,7 +16,7 @@
  * ทุกคำสั่งต้องมี LINE ID Token ซึ่งตรวจกับ LINE ที่นี่ — ห้ามเชื่อ userId ที่หน้าเว็บส่งมา
  *******************************************************/
 
-const APP_VERSION = '2.5.1';
+const APP_VERSION = '2.6.0';
 const TZ = 'Asia/Bangkok';
 
 const SHEET = {
@@ -26,7 +26,9 @@ const SHEET = {
   REWARDS: 'Rewards',
   COUPONS: 'Coupons',
   STAFF: 'Staff',
-  PROMOS: 'Promotions'
+  PROMOS: 'Promotions',
+  // หลายสาขา (2.6.0) — ร้านที่ยังไม่เพิ่มสาขาจะไม่มีชีตนี้ก็ได้ ระบบซ่อนเรื่องสาขาทั้งหมด
+  BRANCHES: 'Branches'
 };
 
 // รูปแบบเซลล์ — ตั้งก่อนเขียนทุกครั้ง เพราะ Google Sheets แปลงค่าเอง
@@ -48,12 +50,16 @@ const COLUMNS = {
     ['Consent_Version', F_TEXT], ['Consent_At', F_DATETIME], ['Marketing_Consent', F_TEXT],
     ['Status', F_TEXT], ['Note', F_TEXT],
     // เพิ่มใน 2.3.0 — Name ยังเก็บ "ชื่อ นามสกุล" รวมกัน (หน้าพนักงาน/หลังบ้านใช้ต่อได้)
-    ['First_Name', F_TEXT], ['Last_Name', F_TEXT]
+    ['First_Name', F_TEXT], ['Last_Name', F_TEXT],
+    // เพิ่มใน 2.6.0: สาขาที่สมัคร (รหัสสาขา / ONLINE = ไม่ได้สแกน QR สาขา / ว่าง = ร้านยังไม่มีสาขา)
+    ['Joined_Branch', F_TEXT]
   ],
   Transactions: [
     ['Tx_ID', F_TEXT], ['Date', F_DATETIME], ['Member_ID', F_TEXT], ['Type', F_TEXT],
     ['Amount', F_MONEY], ['Points', F_INT], ['Balance_After', F_INT], ['Detail', F_TEXT],
-    ['Staff', F_TEXT], ['Request_ID', F_TEXT], ['Ref', F_TEXT]
+    ['Staff', F_TEXT], ['Request_ID', F_TEXT], ['Ref', F_TEXT],
+    // เพิ่มใน 2.6.0: สาขาที่เกิดรายการ (ADMIN = ปรับแต้มจากหลังบ้าน / ว่าง = ก่อนเปิดใช้สาขา)
+    ['Branch', F_TEXT]
   ],
   Rewards: [
     ['Reward_ID', F_TEXT], ['Name', F_TEXT], ['Description', F_TEXT], ['Points', F_INT],
@@ -64,16 +70,23 @@ const COLUMNS = {
   Coupons: [
     ['Coupon_Code', F_TEXT], ['Member_ID', F_TEXT], ['Reward_ID', F_TEXT], ['Name', F_TEXT],
     ['Points_Used', F_INT], ['Issued_At', F_DATETIME], ['Expires_At', F_DATETIME],
-    ['Used_At', F_DATETIME], ['Used_By', F_TEXT], ['Status', F_TEXT], ['Tx_ID', F_TEXT]
+    ['Used_At', F_DATETIME], ['Used_By', F_TEXT], ['Status', F_TEXT], ['Tx_ID', F_TEXT],
+    ['Used_Branch', F_TEXT] // เพิ่มใน 2.6.0: สาขาที่พนักงานสแกนใช้คูปอง
   ],
   Staff: [
     ['LINE_User_ID', F_TEXT], ['Name', F_TEXT], ['Role', F_TEXT], ['Status', F_TEXT],
-    ['Requested_At', F_DATETIME], ['Note', F_TEXT]
+    ['Requested_At', F_DATETIME], ['Note', F_TEXT],
+    // เพิ่มใน 2.6.0: สาขาที่ทำงานได้ เช่น B001,B002 (ว่าง หรือ ALL = ทุกสาขา — พนักงานเดิมจึงใช้งานต่อได้ทันที)
+    ['Branches', F_TEXT]
   ],
   Promotions: [
     ['Promo_ID', F_TEXT], ['Title', F_TEXT], ['Subtitle', F_TEXT], ['Tag', F_TEXT],
     ['Image', F_TEXT], ['Link', F_TEXT], ['Start_Date', F_DATE], ['End_Date', F_DATE],
     ['Sort', F_INT], ['Status', F_TEXT]
+  ],
+  // ไม่มีปุ่มลบสาขา (รายการเก่าอ้างถึงอยู่) ใช้ Status = INACTIVE แทน
+  Branches: [
+    ['Branch_ID', F_TEXT], ['Name', F_TEXT], ['Status', F_TEXT], ['Sort', F_INT], ['Created_At', F_DATETIME]
   ]
 };
 
@@ -110,7 +123,12 @@ const LEGACY_SHOP_NAME = 'ร้านของฉัน';
 
 // คอลัมน์ที่เพิ่มทีหลัง: ชีตของร้านเดิมยังไม่มีก็ทำงานได้ (ระบบเติมให้เองตอนต้องเขียน)
 // กันกรณีวาง code.gs ใหม่แล้วลืมรัน testSetup → ทั้งระบบล่มเพราะหาคอลัมน์ไม่เจอ
-const LATE_COLUMNS = { Members: ['First_Name', 'Last_Name'] };
+const LATE_COLUMNS = {
+  Members: ['First_Name', 'Last_Name', 'Joined_Branch'],
+  Transactions: ['Branch'],
+  Coupons: ['Used_Branch'],
+  Staff: ['Branches']
+};
 
 const ROLES = ['OWNER', 'ADMIN', 'CASHIER'];
 const ALL_STAFF = ROLES;
@@ -158,7 +176,10 @@ const ACTIONS = {
   adminUploadImage: { roles: MANAGERS, run: actAdminUploadImage_ },
   // หน้าตาร้าน (ชื่อ โลโก้ สี ข้อความ นโยบาย): ผู้จัดการดูได้ / แก้ได้เฉพาะเจ้าของร้าน (ภาพลักษณ์ร้าน + เรื่องกฎหมาย PDPA)
   adminBrand: { roles: MANAGERS, run: actAdminBrand_ },
-  adminBrandSave: { roles: ['OWNER'], run: actAdminBrandSave_ }
+  adminBrandSave: { roles: ['OWNER'], run: actAdminBrandSave_ },
+  // สาขา: ผู้จัดการดูได้ / เพิ่ม-แก้-ปิดสาขาได้เฉพาะเจ้าของร้าน
+  adminBranches: { roles: MANAGERS, run: actAdminBranches_ },
+  adminBranchSave: { roles: ['OWNER'], run: actAdminBranchSave_ }
 };
 
 // เปิด URL ตรงๆ ใช้เช็กว่า Deploy สำเร็จ (ไม่คืนข้อมูลใดๆ)
@@ -186,7 +207,10 @@ function doPost(e) {
     const out = { ok: true };
     if (isTestMode_()) out.testMode = true;
     // หลังบ้านเปิดครั้งแรก: ขอข้อมูลผู้ใช้มาพร้อมข้อมูลหน้าแรกเลย ไม่ต้องเรียก Apps Script 2 รอบ (ประหยัด ~2 วินาที)
-    if (body.withMe === true && ctx.staff) out.me = { userId: ctx.user.userId, name: ctx.staff.name, role: ctx.staff.role };
+    if (body.withMe === true && ctx.staff) {
+      out.me = { userId: ctx.user.userId, name: ctx.staff.name, role: ctx.staff.role };
+      out.branches = branchList_(); // ทุกหน้าหลังบ้านใช้รายชื่อสาขา (ช่องเลือกสาขา / ชื่อสาขาในตาราง)
+    }
     // หน้าตาร้านล่าสุด (ชื่อ สี โลโก้ ข้อความ) ส่งไปพร้อมคำสั่งแรกของทุกหน้า — อ่านจากค่าที่จำไว้ จึงแทบไม่เพิ่มเวลา
     if (body.withBrand === true) out.brand = publicBrand_(getSettings_());
     Object.keys(result).forEach(function (k) { out[k] = result[k]; });
@@ -293,7 +317,7 @@ function requireStaff_(user, roles) {
   if (roles.indexOf(role) < 0) {
     throw userError_('บทบาท ' + role + ' ใช้คำสั่งนี้ไม่ได้', 'NO_ROLE');
   }
-  return { userId: user.userId, name: String(s.Name || user.name || 'พนักงาน'), role: role };
+  return { userId: user.userId, name: String(s.Name || user.name || 'พนักงาน'), role: role, branches: staffBranches_(s) };
 }
 
 
@@ -345,6 +369,7 @@ function actRegister_(p, ctx) {
   if (!birthDate) throw userError_('กรุณาเลือกวันเกิด', 'BAD_BIRTHDATE');
   const phone = cleanPhone_(p.phone);
   const c = cfg_();
+  const joined = joinedBranch_(p.branch); // สาขาจาก QR ที่ลูกค้าสแกน (ร้านไม่มีสาขา = '')
 
   return withLock_(function () {
     const existing = findMemberByLine_(ctx.user.userId);
@@ -375,7 +400,8 @@ function actRegister_(p, ctx) {
       Status: 'ACTIVE',
       Note: '',
       First_Name: firstName,
-      Last_Name: lastName
+      Last_Name: lastName,
+      Joined_Branch: joined
     };
     member._row = appendObj_(SHEET.MEMBERS, member);
 
@@ -498,6 +524,12 @@ function actStaffMe_(p, ctx) {
       maxPurchase: c.maxPurchase,
       confirmOver: c.confirmOver
     };
+    // สาขาที่พนักงานคนนี้เลือกได้ (ร้านไม่มีสาขา = [] หน้าพนักงานไม่แสดงเรื่องสาขาเลย)
+    const me = { role: role, branches: staffBranches_(s) };
+    const active = activeBranches_();
+    out.hasBranches = active.length > 0;
+    out.branches = active.filter(function (b) { return staffCanUse_(me, b.id); })
+      .map(function (b) { return { id: b.id, name: b.name }; });
   }
   return out;
 }
@@ -540,6 +572,7 @@ function actAddPurchase_(p, ctx) {
   }
   const note = cleanNote_(p.note);
   const points = Math.floor(amount / c.pointRate + 1e-9);
+  const branch = resolveStaffBranch_(p, ctx.staff);
 
   return withLock_(function () {
     return once_('addPurchase', ctx.user.userId, p.requestId, function (reqId) {
@@ -566,7 +599,7 @@ function actAddPurchase_(p, ctx) {
       const detail = note || ('ซื้อสินค้า ' + fmtMoney_(amount) + ' บาท' + (points ? '' : ' (ไม่ถึงเกณฑ์รับแต้ม)'));
       const txId = appendTx_({
         memberId: memberId, type: 'EARN', amount: amount, points: points, balance: balance,
-        detail: detail, staff: ctx.staff.name, requestId: reqId
+        detail: detail, staff: ctx.staff.name, requestId: reqId, branch: branch
       });
 
       m.Points = balance; m.Total_Spend = spend; m.Visit_Count = visits; m.Last_Visit_At = now;
@@ -579,6 +612,7 @@ function actAddPurchase_(p, ctx) {
 function actUseCoupon_(p, ctx) {
   const code = String(p.code || '').trim().toUpperCase();
   if (!/^CP-[A-Z0-9]{4,20}$/.test(code)) throw userError_('รหัสคูปองไม่ถูกต้อง', 'BAD_CODE');
+  const branch = resolveStaffBranch_(p, ctx.staff);
 
   return withLock_(function () {
     return once_('useCoupon', ctx.user.userId, p.requestId, function () {
@@ -594,8 +628,10 @@ function actUseCoupon_(p, ctx) {
       const owner = findOne_(SHEET.MEMBERS, 'Member_ID', cp.Member_ID);
       if (owner) assertActiveMember_(owner);
 
-      updateFields_(SHEET.COUPONS, row, { Status: 'USED', Used_At: now, Used_By: ctx.staff.name });
-      cp.Status = 'USED'; cp.Used_At = now; cp.Used_By = ctx.staff.name;
+      const used = { Status: 'USED', Used_At: now, Used_By: ctx.staff.name };
+      if (branch) { ensureColumns_(SHEET.COUPONS); used.Used_Branch = branch; }
+      updateFields_(SHEET.COUPONS, row, used);
+      cp.Status = 'USED'; cp.Used_At = now; cp.Used_By = ctx.staff.name; cp.Used_Branch = branch;
       return { coupon: publicCoupon_(cp, now), member: owner ? staffMember_(owner) : null };
     });
   });
@@ -610,6 +646,7 @@ function actAdjustPoints_(p, ctx) {
   }
   const reason = cleanNote_(p.reason);
   if (reason.length < 3) throw userError_('กรุณาใส่เหตุผลในการปรับแต้ม', 'NO_REASON');
+  const branch = p.branchId ? resolveStaffBranch_(p, ctx.staff) : (activeBranches_().length ? BRANCH_ADMIN : '');
 
   return withLock_(function () {
     return once_('adjustPoints', ctx.user.userId, p.requestId, function (reqId) {
@@ -625,7 +662,7 @@ function actAdjustPoints_(p, ctx) {
       updateFields_(SHEET.MEMBERS, row, { Points: balance });
       appendTx_({
         memberId: memberId, type: 'ADJUST', points: delta, balance: balance,
-        detail: 'ปรับแต้ม: ' + reason, staff: ctx.staff.name, requestId: reqId
+        detail: 'ปรับแต้ม: ' + reason, staff: ctx.staff.name, requestId: reqId, branch: branch
       });
       m.Points = balance;
       return { pointsAdded: delta, balance: balance, member: staffMember_(m) };
@@ -634,13 +671,16 @@ function actAdjustPoints_(p, ctx) {
 }
 
 // รายการล่าสุดของร้าน (ให้พนักงานตรวจสิ่งที่เพิ่งบันทึก) — อ่านเฉพาะท้ายชีต ไม่อ่านทั้งชีต
-function actStaffRecent_() {
+// มีสาขา: แสดงเฉพาะสาขาที่พนักงานเลือกอยู่ (อ่านท้ายชีตมากขึ้น เพราะรายการของหลายสาขาปนกัน)
+function actStaffRecent_(p, ctx) {
+  const branch = p.branchId ? resolveStaffBranch_(p, ctx.staff) : '';
   const t = table_(SHEET.TX);
   const last = t.sheet.getLastRow();
   if (last < 2) return { items: [] };
-  const n = Math.min(15, last - 1);
+  const n = Math.min(branch ? 400 : 15, last - 1);
   const rows = t.sheet.getRange(last - n + 1, 1, n, t.width).getValues()
-    .map(function (v, i) { return rowToObj_(t, v, last - n + 1 + i); }).reverse();
+    .map(function (v, i) { return rowToObj_(t, v, last - n + 1 + i); }).reverse()
+    .filter(function (tx) { return sameBranch_(tx.Branch, branch); }).slice(0, 15);
 
   const names = {};
   const mt = table_(SHEET.MEMBERS);
@@ -677,16 +717,22 @@ function actAdminMe_(p, ctx) {
   const c = cfg_();
   return {
     me: { userId: ctx.user.userId, name: ctx.staff.name, role: ctx.staff.role },
-    settings: { shopName: c.shopName, pointRate: c.pointRate, memberPrefix: c.memberPrefix }
+    settings: { shopName: c.shopName, pointRate: c.pointRate, memberPrefix: c.memberPrefix },
+    branches: branchList_()
   };
 }
 
 // ภาพรวมของช่วงเวลาที่เลือก + ช่วงก่อนหน้าที่ยาวเท่ากัน (ไว้เทียบว่าดีขึ้นหรือแย่ลง)
+// เลือกสาขา (p.branch): ยอดซื้อ/แต้ม = รายการที่เกิดที่สาขานั้น · สมาชิกใหม่ = สมัครที่สาขานั้น · คูปอง = ใช้ที่สาขานั้น
 function actAdminDashboard_(p) {
   const per = period_(p);
-  const members = readAll_(SHEET.MEMBERS).filter(function (m) { return m.Member_ID; });
-  const coupons = readAll_(SHEET.COUPONS).filter(function (c) { return c.Coupon_Code; });
-  const txs = txBetween_(per.prevFrom, per.end);
+  const branch = branchFilter_(p.branch);
+  const allMembers = readAll_(SHEET.MEMBERS).filter(function (m) { return m.Member_ID; });
+  const allCoupons = readAll_(SHEET.COUPONS).filter(function (c) { return c.Coupon_Code; });
+  const members = allMembers.filter(function (m) { return sameBranch_(m.Joined_Branch, branch); });
+  const coupons = allCoupons.filter(function (c) { return sameBranch_(c.Used_Branch, branch); });
+  const allTxs = txBetween_(per.prevFrom, per.end);
+  const txs = allTxs.filter(function (tx) { return sameBranch_(tx.Branch, branch); });
   const cur = txs.filter(function (tx) { return tx._date.getTime() >= per.from.getTime(); });
   const prev = txs.filter(function (tx) { return tx._date.getTime() < per.from.getTime(); });
 
@@ -731,7 +777,7 @@ function actAdminDashboard_(p) {
 
   // ลูกค้าที่ซื้อมากสุด / ยอดตามพนักงาน (นับเฉพาะรายการยอดซื้อในช่วงนี้)
   const names = {};
-  members.forEach(function (m) { names[String(m.Member_ID)] = String(m.Name || ''); });
+  allMembers.forEach(function (m) { names[String(m.Member_ID)] = String(m.Name || ''); }); // ลูกค้าสมัครสาขาหนึ่ง ซื้ออีกสาขาได้
   const byMember = {};
   const byStaff = {};
   cur.forEach(function (tx) {
@@ -751,9 +797,10 @@ function actAdminDashboard_(p) {
   });
 
   // ของรางวัลยอดนิยม: คูปองที่แลกในช่วงนี้ และในนั้นถูกใช้ที่ร้านแล้วกี่ใบ
+  // เลือกสาขา: ลูกค้าแลกในแอป (ไม่ได้อยู่สาขาไหน) จึงนับเฉพาะคูปองที่ใช้ที่สาขานั้นในช่วงนี้
   const byReward = {};
   coupons.forEach(function (c) {
-    if (!between_(c.Issued_At, per.from, per.end)) return;
+    if (!between_(branch ? c.Used_At : c.Issued_At, per.from, per.end)) return;
     const k = String(c.Reward_ID || c.Name);
     const r = byReward[k] || (byReward[k] = { rewardId: String(c.Reward_ID || ''), name: String(c.Name || ''), issued: 0, used: 0, points: 0 });
     r.issued++;
@@ -765,7 +812,7 @@ function actAdminDashboard_(p) {
   const roundSales = function (r) { r.sales = round2_(r.sales); return r; };
   let outstanding = 0;
   let activeMembers = 0;
-  members.forEach(function (m) {
+  allMembers.forEach(function (m) {
     if ((upper_(m.Status) || 'ACTIVE') !== 'ACTIVE') return;
     activeMembers++;
     outstanding += toInt_(m.Points);
@@ -773,7 +820,9 @@ function actAdminDashboard_(p) {
 
   return {
     period: { from: p.from, to: p.to, days: per.days, bucket: bucket },
-    totals: { members: members.length, activeMembers: activeMembers, pointsOutstanding: outstanding },
+    totals: { members: allMembers.length, activeMembers: activeMembers, pointsOutstanding: outstanding, branchMembers: members.length },
+    branch: branch,
+    byBranch: branch ? [] : compareBranches_(allTxs, allMembers, allCoupons, per),
     current: summary(cur, per.from, per.end),
     previous: summary(prev, per.prevFrom, per.from),
     series: series,
@@ -783,14 +832,49 @@ function actAdminDashboard_(p) {
   };
 }
 
+// ตารางเทียบสาขา (หน้าภาพรวม ตอนดูทุกสาขา) — ร้านไม่มีสาขาได้ []
+// รายการที่ไม่มีสาขา (ก่อนเปิดใช้สาขา / สมัครออนไลน์ / ปรับจากหลังบ้าน) รวมเป็นแถว OTHER
+function compareBranches_(txs, members, coupons, per) {
+  const list = branchList_();
+  if (!list.length) return [];
+  const rows = {};
+  const known = {};
+  list.forEach(function (b) {
+    known[b.id] = true;
+    rows[b.id] = { id: b.id, name: b.name, status: b.status, sales: 0, bills: 0, buyers: 0, pointsIssued: 0, couponsUsed: 0, newMembers: 0, _buyers: {} };
+  });
+  rows.OTHER = { id: 'OTHER', name: '', status: '', sales: 0, bills: 0, buyers: 0, pointsIssued: 0, couponsUsed: 0, newMembers: 0, _buyers: {} };
+  const rowOf = function (v) { const k = upper_(v); return rows[known[k] ? k : 'OTHER']; };
+  txs.forEach(function (tx) {
+    if (tx._date.getTime() < per.from.getTime()) return; // ช่วงก่อนหน้า (ใช้เทียบในการ์ดสรุป) ไม่นับ
+    const r = rowOf(tx.Branch);
+    const pts = toInt_(tx.Points);
+    if (upper_(tx.Type) === 'EARN') { r.sales += toNum_(tx.Amount); r.bills++; r._buyers[String(tx.Member_ID)] = true; }
+    if (pts > 0) r.pointsIssued += pts;
+  });
+  members.forEach(function (m) { if (between_(m.Joined_At, per.from, per.end)) rowOf(m.Joined_Branch).newMembers++; });
+  coupons.forEach(function (c) { if (upper_(c.Status) === 'USED' && between_(c.Used_At, per.from, per.end)) rowOf(c.Used_Branch).couponsUsed++; });
+  return Object.keys(rows).map(function (k) {
+    const r = rows[k];
+    r.buyers = Object.keys(r._buyers).length;
+    delete r._buyers;
+    r.sales = round2_(r.sales);
+    return r;
+  }).filter(function (r) {
+    // สาขาที่ปิดแล้วและไม่มีข้อมูลในช่วงนี้ / แถว "อื่นๆ" ที่ว่าง → ไม่ต้องแสดง
+    return r.status === 'ACTIVE' || r.sales || r.bills || r.pointsIssued || r.couponsUsed || r.newMembers;
+  });
+}
+
 // รายชื่อสมาชิก: ค้นหา + เรียง + แบ่งหน้า
 function actAdminMembers_(p, ctx) {
   const role = ctx.staff.role;
   const q = String(p.q || '').trim().toLowerCase().slice(0, 40);
   const sort = ['joined', 'points', 'spend', 'lastVisit', 'name'].indexOf(p.sort) >= 0 ? p.sort : 'joined';
   const status = ['ACTIVE', 'BLOCKED'].indexOf(upper_(p.status)) >= 0 ? upper_(p.status) : '';
+  const branch = branchFilter_(p.branch); // สาขาที่สมัคร
 
-  let list = readAll_(SHEET.MEMBERS).filter(function (m) { return m.Member_ID; });
+  let list = readAll_(SHEET.MEMBERS).filter(function (m) { return m.Member_ID && sameBranch_(m.Joined_Branch, branch); });
   if (status) list = list.filter(function (m) { return (upper_(m.Status) || 'ACTIVE') === status; });
   if (q) {
     // ค้นเบอร์: เจ้าของร้านค้นบางส่วนได้ / ผู้จัดการต้องพิมพ์เบอร์เต็ม (กันไล่เดาเบอร์ลูกค้าทีละหลัก)
@@ -838,17 +922,29 @@ function actAdminMember_(p, ctx) {
   out.lineLinked = !!String(m.LINE_User_ID || '');
   out.firstName = String(m.First_Name || '');
   out.lastName = String(m.Last_Name || '');
+  out.joinedBranch = upper_(m.Joined_Branch);
+  const history = rowsWhere_(SHEET.TX, 'Member_ID', id, 200).reverse();
+  // สาขาที่มาบ่อยที่สุด (นับจากบิลซื้อในประวัติล่าสุด) — ช่วยดูว่าลูกค้าเป็นขาประจำสาขาไหน
+  const visits = {};
+  history.forEach(function (tx) {
+    const b = upper_(tx.Branch);
+    if (upper_(tx.Type) === 'EARN' && b) visits[b] = (visits[b] || 0) + 1;
+  });
+  out.topBranch = Object.keys(visits).sort(function (a, b) { return visits[b] - visits[a]; })[0] || '';
+  out.topBranchVisits = out.topBranch ? visits[out.topBranch] : 0;
   return {
     member: out,
-    history: rowsWhere_(SHEET.TX, 'Member_ID', id, 200).reverse().map(function (tx) {
+    history: history.map(function (tx) {
       const o = publicTx_(tx);
       o.staff = String(tx.Staff || '');
       o.ref = String(tx.Ref || '');
+      o.branch = upper_(tx.Branch);
       return o;
     }),
     coupons: rowsWhere_(SHEET.COUPONS, 'Member_ID', id, 200).reverse().map(function (c) {
       const o = publicCoupon_(c, now);
       o.usedBy = String(c.Used_By || '');
+      o.usedBranch = upper_(c.Used_Branch);
       return o;
     })
   };
@@ -860,9 +956,10 @@ function actAdminTransactions_(p) {
   const type = TX_TYPES.indexOf(upper_(p.type)) >= 0 ? upper_(p.type) : '';
   const staff = String(p.staff || '').slice(0, 60);
   const q = String(p.q || '').trim().toLowerCase().slice(0, 40);
+  const branch = branchFilter_(p.branch);
   const names = memberNames_();
 
-  const inRange = txBetween_(per.from, per.end);
+  const inRange = txBetween_(per.from, per.end).filter(function (tx) { return sameBranch_(tx.Branch, branch); });
   const staffNames = {};
   inRange.forEach(function (tx) { if (tx.Staff) staffNames[String(tx.Staff)] = true; });
 
@@ -892,6 +989,7 @@ function actAdminTransactions_(p) {
       o.memberName = names[o.memberId] || '';
       o.staff = String(tx.Staff || '');
       o.ref = String(tx.Ref || '');
+      o.branch = upper_(tx.Branch);
       return o;
     }),
     summary: sum,
@@ -904,17 +1002,20 @@ function actAdminTransactions_(p) {
 function actAdminCoupons_(p) {
   const per = period_(p);
   const status = ['ACTIVE', 'USED', 'EXPIRED', 'CANCELLED'].indexOf(upper_(p.status)) >= 0 ? upper_(p.status) : '';
+  // เลือกสาขา = คูปองที่ถูกใช้ที่สาขานั้น (ตอนแลกลูกค้ายังไม่ได้อยู่สาขาไหน)
+  const branch = branchFilter_(p.branch);
   const now = new Date();
   const names = memberNames_();
   const counts = { ACTIVE: 0, USED: 0, EXPIRED: 0, CANCELLED: 0 };
 
   const all = readAll_(SHEET.COUPONS).filter(function (c) {
-    return c.Coupon_Code && between_(c.Issued_At, per.from, per.end);
+    return c.Coupon_Code && between_(c.Issued_At, per.from, per.end) && sameBranch_(c.Used_Branch, branch);
   }).map(function (c) {
     const o = publicCoupon_(c, now);
     o.memberId = String(c.Member_ID || '');
     o.memberName = names[o.memberId] || '';
     o.usedBy = String(c.Used_By || '');
+    o.usedBranch = upper_(c.Used_Branch);
     if (counts[o.status] != null) counts[o.status]++;
     return o;
   });
@@ -953,6 +1054,7 @@ function actAdminStaffUpdate_(p, ctx) {
   if (STAFF_STATUSES.indexOf(status) < 0) throw userError_('สถานะไม่ถูกต้อง', 'BAD_STATUS');
   const name = cleanLineName_(p.name);
   const isOwner = ctx.staff.role === 'OWNER';
+  const branches = p.branches === undefined ? null : cleanStaffBranches_(p.branches); // null = ไม่แก้สาขา
 
   return withLock_(function () {
     const row = findRow_(SHEET.STAFF, 'LINE_User_ID', userId);
@@ -964,6 +1066,7 @@ function actAdminStaffUpdate_(p, ctx) {
     }
     const fields = { Role: role, Status: status };
     if (name) fields.Name = name;
+    if (branches !== null) { ensureColumns_(SHEET.STAFF); fields.Branches = branches; }
     updateFields_(SHEET.STAFF, row, fields);
     return { staff: adminStaffRow_(readRow_(SHEET.STAFF, row), ctx.user.userId) };
   });
@@ -972,6 +1075,10 @@ function actAdminStaffUpdate_(p, ctx) {
 // ส่งออกเป็นไฟล์ (หน้าเว็บแปลงเป็น CSV เอง) — เฉพาะเจ้าของร้าน และบันทึกไว้ใน Log ว่าใครส่งออกเมื่อไร
 function actAdminExport_(p, ctx) {
   const kind = String(p.kind || '');
+  // คอลัมน์สาขาใส่เฉพาะร้านที่มีสาขา (ร้านสาขาเดียวไม่ต้องมีคอลัมน์ว่าง)
+  const withBranch = branchList_().length > 0;
+  const bn = branchNames_();
+  const branchName = function (v) { const k = upper_(v); return k ? (bn[k] || k) : 'ไม่ระบุ'; };
   let columns, rows;
   if (kind === 'members') {
     columns = ['รหัสสมาชิก', 'ชื่อ', 'นามสกุล', 'เบอร์โทร', 'วันเกิด', 'แต้มคงเหลือ', 'ยอดซื้อรวม', 'จำนวนครั้งที่มา',
@@ -982,16 +1089,19 @@ function actAdminExport_(p, ctx) {
       return [String(m.Member_ID), first, String(m.Last_Name || ''), fmtPhone_(m.Phone), String(m.Birth_Date || ''),
         toInt_(m.Points), toNum_(m.Total_Spend), toInt_(m.Visit_Count), fmtDateTimeOrBlank_(m.Joined_At),
         fmtDateTimeOrBlank_(m.Last_Visit_At), upper_(m.Marketing_Consent) === 'YES' ? 'ใช่' : 'ไม่',
-        upper_(m.Status) || 'ACTIVE'];
+        upper_(m.Status) || 'ACTIVE'].concat(withBranch ? [branchName(m.Joined_Branch)] : []);
     });
+    if (withBranch) columns.push('สาขาที่สมัคร');
   } else if (kind === 'transactions') {
     const per = period_(p);
     const names = memberNames_();
     columns = ['รหัสรายการ', 'วันเวลา', 'รหัสสมาชิก', 'ชื่อสมาชิก', 'ประเภท', 'ยอดซื้อ', 'แต้ม', 'แต้มคงเหลือ', 'รายละเอียด', 'พนักงาน'];
     rows = txBetween_(per.from, per.end).map(function (tx) {
       return [String(tx.Tx_ID || ''), fmtDateTimeOrBlank_(tx.Date), String(tx.Member_ID || ''), names[String(tx.Member_ID)] || '',
-        upper_(tx.Type), toNum_(tx.Amount), toInt_(tx.Points), toInt_(tx.Balance_After), String(tx.Detail || ''), String(tx.Staff || '')];
+        upper_(tx.Type), toNum_(tx.Amount), toInt_(tx.Points), toInt_(tx.Balance_After), String(tx.Detail || ''), String(tx.Staff || '')]
+        .concat(withBranch ? [branchName(tx.Branch)] : []);
     });
+    if (withBranch) columns.push('สาขา');
   } else {
     throw userError_('ไม่รู้จักข้อมูลที่จะส่งออก', 'BAD_EXPORT');
   }
@@ -1523,13 +1633,31 @@ function adminMember_(m, role) {
   const o = staffMember_(m);
   o.joinedAt = iso_(m.Joined_At);
   o.picture = safeUrl_(m.Picture);
+  o.joinedBranch = upper_(m.Joined_Branch);
   if (role === 'OWNER') o.phone = String(m.Phone || '');
   return o;
+}
+
+// สาขาของพนักงานจากหลังบ้าน: ['ALL'] = ทุกสาขา / รายการรหัสที่มีอยู่จริง → เก็บเป็น "B001,B002"
+function cleanStaffBranches_(v) {
+  if (!Array.isArray(v) || v.length > MAX_BRANCHES) throw userError_('สาขาไม่ถูกต้อง', 'BAD_BRANCH');
+  const ids = v.map(function (x) { return upper_(x); });
+  if (ids.indexOf('ALL') >= 0) return 'ALL';
+  if (!ids.length) throw userError_('กรุณาเลือกอย่างน้อย 1 สาขา', 'BAD_BRANCH');
+  const known = {};
+  branchList_().forEach(function (b) { known[b.id] = true; });
+  const out = [];
+  ids.forEach(function (id) {
+    if (!known[id]) throw userError_('ไม่พบสาขา ' + id, 'BAD_BRANCH');
+    if (out.indexOf(id) < 0) out.push(id);
+  });
+  return out.join(',');
 }
 
 function adminStaffRow_(s, myId) {
   const role = upper_(s.Role);
   return {
+    branches: staffBranches_(s) || ['ALL'],
     userId: String(s.LINE_User_ID || ''),
     name: String(s.Name || ''),
     role: ROLES.indexOf(role) >= 0 ? role : 'CASHIER',
@@ -1613,6 +1741,165 @@ function fmtPhone_(v) {
 
 function fmtDateTimeOrBlank_(v) {
   return toDate_(v) ? fmtDateTime_(v) : '';
+}
+
+
+/* =====================================================
+ * 4.5) หลายสาขา (2.6.0)
+ * - ร้านที่ยังไม่เพิ่มสาขา: ทุกอย่างทำงานเหมือนเดิม (ไม่บังคับเลือกสาขา ไม่บันทึกสาขา)
+ * - พอมีสาขาที่เปิดอยู่: รายการยอดซื้อ / ใช้คูปอง / ปรับแต้มจากหน้าพนักงาน ต้องระบุสาขาเสมอ
+ *   และพนักงานต้องมีสิทธิ์ในสาขานั้น (ตรวจที่นี่ ไม่เชื่อสาขาที่หน้าเว็บส่งมา)
+ * - แต้มใช้ร่วมกันทุกสาขา (ผู้ใช้ตกลง 3 พ.ย. 2569) สาขาจึงเป็นแค่ข้อมูลประกอบรายงาน ไม่แยกยอดแต้ม
+ * ===================================================== */
+const MAX_BRANCHES = 50;
+const BRANCH_ONLINE = 'ONLINE'; // ลูกค้าสมัครเองโดยไม่ได้สแกน QR ของสาขา
+const BRANCH_ADMIN = 'ADMIN';   // ปรับแต้มจากหลังบ้าน (ไม่ได้อยู่หน้าร้านสาขาไหน)
+
+// แถวในชีต Branches (จำไว้ 5 นาทีเหมือนรางวัล/โปรโมชัน) — ร้านที่ไม่มีชีตนี้ได้ [] โดยไม่ error
+let branchRows__ = null;
+function branchRows_() {
+  if (branchRows__) return branchRows__;
+  let rows;
+  if (getSpreadsheet_().getSheetByName(SHEET.BRANCHES)) {
+    rows = cachedRows_(SHEET.BRANCHES);
+  } else {
+    rows = [];
+  }
+  branchRows__ = rows.filter(function (r) { return r.Branch_ID; });
+  return branchRows__;
+}
+
+// อ่านชีตตรงๆ (หลังเพิ่ม/แก้สาขาในคำขอเดียวกัน ค่าที่จำไว้ยังเป็นของเก่า)
+function branchesFresh_() {
+  branchRows__ = null;
+  invalidateRows_([SHEET.BRANCHES]);
+  return branchList_();
+}
+
+function branchList_() {
+  return branchRows_().map(function (r) {
+    return {
+      id: upper_(r.Branch_ID),
+      name: String(r.Name || ''),
+      status: upper_(r.Status) === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
+      sort: toInt_(r.Sort)
+    };
+  }).sort(function (a, b) { return (a.sort - b.sort) || (a.id < b.id ? -1 : 1); });
+}
+
+function activeBranches_() {
+  return branchList_().filter(function (b) { return b.status === 'ACTIVE'; });
+}
+
+// สาขาที่พนักงานคนนี้ทำงานได้: null = ทุกสาขา (ช่องว่าง / ALL) หรือรายการรหัสสาขา
+function staffBranches_(s) {
+  const raw = upper_(s && s.Branches);
+  if (!raw || raw === 'ALL') return null;
+  return raw.split(/[,\s]+/).filter(function (x) { return x; });
+}
+
+// เจ้าของร้านใช้ได้ทุกสาขาเสมอ (กันเจ้าของร้านล็อกตัวเองออกจากสาขา)
+function staffCanUse_(staff, branchId) {
+  return staff.role === 'OWNER' || !staff.branches || staff.branches.indexOf(branchId) >= 0;
+}
+
+// สาขาที่จะบันทึกกับรายการจากหน้าพนักงาน — ร้านไม่มีสาขา = '' (บันทึกเหมือนเดิม)
+function resolveStaffBranch_(p, staff) {
+  const active = activeBranches_();
+  if (!active.length) return '';
+  const id = upper_(p.branchId);
+  if (!id) throw userError_('กรุณาเลือกสาขาก่อนบันทึก', 'NO_BRANCH');
+  if (!active.some(function (b) { return b.id === id; })) {
+    throw userError_('ไม่พบสาขานี้ หรือสาขาปิดแล้ว กรุณาเลือกสาขาใหม่', 'BAD_BRANCH');
+  }
+  if (!staffCanUse_(staff, id)) {
+    throw userError_('คุณไม่ได้อยู่ในสาขานี้ กรุณาเลือกสาขาใหม่ หรือติดต่อเจ้าของร้าน', 'BAD_BRANCH');
+  }
+  return id;
+}
+
+// สาขาที่ลูกค้าสมัคร: มาจาก QR ของสาขา (?branch=...) — สาขาไม่มีจริง/ปิดแล้ว = สมัครออนไลน์
+function joinedBranch_(v) {
+  const active = activeBranches_();
+  if (!active.length) return '';
+  const id = upper_(v);
+  return active.some(function (b) { return b.id === id; }) ? id : BRANCH_ONLINE;
+}
+
+// ตัวกรองสาขาในหลังบ้าน: '' = ทุกสาขา / รหัสที่รูปแบบถูกต้อง (ไม่มีจริงก็แค่ไม่เจอข้อมูล)
+function branchFilter_(v) {
+  const id = upper_(v);
+  if (!id) return '';
+  if (!/^[A-Z0-9]{1,12}$/.test(id)) throw userError_('สาขาไม่ถูกต้อง', 'BAD_BRANCH');
+  return id;
+}
+
+function sameBranch_(value, branch) {
+  return !branch || upper_(value) === branch;
+}
+
+function branchNames_() {
+  const names = {};
+  branchList_().forEach(function (b) { names[b.id] = b.name; });
+  names[BRANCH_ONLINE] = 'ออนไลน์';
+  names[BRANCH_ADMIN] = 'หลังบ้าน';
+  return names;
+}
+
+// รายชื่อสาขา + จำนวนพนักงาน / สมาชิกที่สมัครแต่ละสาขา
+function actAdminBranches_() {
+  const items = branchList_();
+  const staffCount = {};
+  const memberCount = {};
+  readAll_(SHEET.STAFF).forEach(function (s) {
+    if (!s.LINE_User_ID || upper_(s.Status) !== 'ACTIVE') return;
+    const list = staffBranches_(s);
+    items.forEach(function (b) {
+      if (upper_(s.Role) === 'OWNER' || !list || list.indexOf(b.id) >= 0) staffCount[b.id] = (staffCount[b.id] || 0) + 1;
+    });
+  });
+  readAll_(SHEET.MEMBERS).forEach(function (m) {
+    const k = upper_(m.Joined_Branch);
+    if (m.Member_ID && k) memberCount[k] = (memberCount[k] || 0) + 1;
+  });
+  items.forEach(function (b) { b.staff = staffCount[b.id] || 0; b.members = memberCount[b.id] || 0; });
+  return { items: items, online: memberCount[BRANCH_ONLINE] || 0 };
+}
+
+// เพิ่มสาขา (ไม่มี id) หรือแก้ชื่อ / ลำดับ / เปิด-ปิดสาขา
+function actAdminBranchSave_(p, ctx) {
+  const b = p.branch || {};
+  const id = b.id ? branchFilter_(b.id) : '';
+  const name = cleanText_(b.name, 40, 'ชื่อสาขา', true);
+  const sort = optInt_(b.sort, 0, 9999, 'ลำดับ');
+  const status = cleanStatus_(b.status || 'ACTIVE');
+
+  return afterWrite_([SHEET.BRANCHES], function () { return withLock_(function () {
+    return once_('branchSave', ctx.user.userId, p.requestId, function () {
+      const ss = getSpreadsheet_();
+      if (!ss.getSheetByName(SHEET.BRANCHES)) ensureSheet_(ss, SHEET.BRANCHES);
+      const rows = readAll_(SHEET.BRANCHES).filter(function (r) { return r.Branch_ID; });
+      const same = rows.filter(function (r) {
+        return upper_(r.Branch_ID) !== id && String(r.Name || '').trim().toLowerCase() === name.toLowerCase();
+      });
+      if (same.length) throw userError_('มีสาขาชื่อ "' + name + '" อยู่แล้ว', 'DUP_BRANCH');
+      let row;
+      if (id) {
+        row = findRow_(SHEET.BRANCHES, 'Branch_ID', id);
+        if (!row) throw userError_('ไม่พบสาขานี้', 'NOT_FOUND');
+        updateFields_(SHEET.BRANCHES, row, { Name: name, Sort: sort === '' ? 0 : sort, Status: status });
+      } else {
+        if (rows.length >= MAX_BRANCHES) throw userError_('เพิ่มสาขาได้ไม่เกิน ' + MAX_BRANCHES + ' สาขา', 'TOO_MANY');
+        row = appendObj_(SHEET.BRANCHES, {
+          Branch_ID: nextId_(SHEET.BRANCHES, 'Branch_ID', 'B'), Name: name,
+          Status: status, Sort: sort === '' ? rows.length + 1 : sort, Created_At: new Date()
+        });
+      }
+      const saved = readRow_(SHEET.BRANCHES, row);
+      console.log((id ? 'แก้สาขา ' : 'เพิ่มสาขา ') + saved.Branch_ID + ' ' + name + ' (' + status + ') โดย ' + ctx.staff.name);
+      return { branch: { id: upper_(saved.Branch_ID), name: name, status: status }, created: !id, items: branchesFresh_() };
+    });
+  }); });
 }
 
 
@@ -1915,6 +2202,7 @@ function updateFields_(name, row, fields) {
 
 function appendTx_(o) {
   const id = 'TX-' + randomCode_(10);
+  if (o.branch) ensureColumns_(SHEET.TX); // ชีตเก่ายังไม่มีคอลัมน์ Branch → เติมให้ (เรียกภายใน lock อยู่แล้ว)
   appendObj_(SHEET.TX, {
     Tx_ID: id,
     Date: new Date(),
@@ -1926,7 +2214,8 @@ function appendTx_(o) {
     Detail: o.detail || '',
     Staff: o.staff || '',
     Request_ID: o.requestId || '',
-    Ref: o.ref || ''
+    Ref: o.ref || '',
+    Branch: o.branch || ''
   });
   return id;
 }
@@ -2007,12 +2296,12 @@ function invalidateRows_(names) {
 // (onEdit ทำงานเองเมื่อมีคนพิมพ์ในชีตที่ผูกกับสคริปต์นี้ ไม่ต้องตั้งค่าอะไรเพิ่ม)
 function onEdit(e) {
   const name = e && e.range ? e.range.getSheet().getName() : '';
-  if (name === SHEET.SETTINGS || name === SHEET.REWARDS || name === SHEET.PROMOS) invalidateRows_([name]);
+  if (name === SHEET.SETTINGS || name === SHEET.REWARDS || name === SHEET.PROMOS || name === SHEET.BRANCHES) invalidateRows_([name]);
 }
 
 // กด Run เองได้ ถ้าแก้ชีตด้วยวิธีอื่น (เช่นวางข้อมูลจากที่อื่น) แล้วอยากให้ลูกค้าเห็นทันที
 function clearCache() {
-  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS]);
+  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS, SHEET.BRANCHES]);
   Logger.log('ล้างข้อมูลที่จำไว้แล้ว ลูกค้าจะเห็นค่าล่าสุดจากชีต');
 }
 
@@ -2199,7 +2488,7 @@ function testSetup() {
   Object.keys(COLUMNS).forEach(function (name) { ensureSheet_(ss, name); });
   seedSettings_();
   seedSamples_();
-  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS]); // ค่าที่จำไว้อาจเป็นของเก่า
+  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS, SHEET.BRANCHES]); // ค่าที่จำไว้อาจเป็นของเก่า
   settings_ = null;
   const c = cfg_();
   const s = getSettings_();
@@ -2217,7 +2506,7 @@ function testSetup() {
     Logger.log('⚠️ โฟลเดอร์เก็บรูป: ' + (e && e.userMessage ? e.userMessage : e));
   }
   // ไม่ทิ้งค่าที่จำไว้ (เจ้าของร้านมักกรอก LIFF_ID ในชีตต่อจากนี้ทันที)
-  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS]);
+  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS, SHEET.BRANCHES]);
 }
 
 // เปิดโหมดทดสอบ: ใช้กับ Apps Script ตัวทดสอบของเราเท่านั้น — ห้ามรันในสคริปต์ของร้านจริง
@@ -2260,7 +2549,8 @@ function ensureSheet_(ss, name) {
     Rewards: { Status: ['ACTIVE', 'INACTIVE'] },
     Promotions: { Status: ['ACTIVE', 'INACTIVE'] },
     Coupons: { Status: ['ACTIVE', 'USED', 'CANCELLED'] },
-    Staff: { Role: ROLES, Status: ['PENDING', 'ACTIVE', 'DISABLED'] }
+    Staff: { Role: ROLES, Status: ['PENDING', 'ACTIVE', 'DISABLED'] },
+    Branches: { Status: ['ACTIVE', 'INACTIVE'] }
   }[name] || {};
   Object.keys(lists).forEach(function (h) {
     const rule = SpreadsheetApp.newDataValidation().requireValueInList(lists[h], true).setAllowInvalid(false).build();

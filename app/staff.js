@@ -11,7 +11,11 @@ const ROLE_LABEL = { OWNER: 'เจ้าของร้าน', ADMIN: 'ผู�
 const TX_LABEL = { EARN: 'ยอดซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกรางวัล', ADJUST: 'ปรับแต้ม' };
 
 const app = document.getElementById('app');
-const S = { shop: null, line: null, api: null, me: null, settings: null, view: null, flash: null, scanner: null, ready: false };
+const S = {
+  shop: null, line: null, api: null, me: null, settings: null, view: null, flash: null, scanner: null, ready: false, testMode: false,
+  // หลายสาขา: hasBranches = ร้านมีสาขาที่เปิดอยู่ / branches = สาขาที่คนนี้เลือกได้ / branch = สาขาที่ทำงานอยู่ตอนนี้
+  hasBranches: false, branches: [], branch: null
+};
 // ข้อความในป๊อปอัป "กำลังโหลด" — null = ทำเบื้องหลัง (รายการล่าสุดโหลดเองหลังบันทึก ไม่ต้องบังจอ)
 const LOADING_TEXT = { staffLookup: 'กำลังค้นหา...', addPurchase: 'กำลังบันทึก...', useCoupon: 'กำลังบันทึก...', adjustPoints: 'กำลังบันทึก...', staffRecent: null };
 const withRequestId = createRetryKeeper();
@@ -43,14 +47,27 @@ async function main() {
     if (r.brand) await applyBrand(S.shop, r.brand);
     S.me = r.staff;
     S.settings = r.settings || null;
+    S.testMode = !!r.testMode;
     S.ready = true;
     if (S.me.status !== 'ACTIVE') return renderPending(r.testMode);
-    renderMain(r.testMode);
-    loadRecent();
-    restoreStaffDraft();
+    S.hasBranches = !!r.hasBranches;
+    S.branches = r.branches || [];
+    if (S.hasBranches) {
+      if (!S.branches.length) return renderNoBranch();
+      // สาขาที่เลือกไว้ครั้งก่อนในเครื่องนี้ / อยู่สาขาเดียวก็เลือกให้เลย / หลายสาขาให้เลือกก่อนเริ่มงาน
+      S.branch = savedBranch() || (S.branches.length === 1 ? S.branches[0] : null);
+      if (!S.branch) return renderBranchPicker(true);
+    }
+    startMain();
   } catch (e) {
     renderFatal(e);
   }
+}
+
+function startMain() {
+  renderMain(S.testMode);
+  loadRecent();
+  restoreStaffDraft();
 }
 
 function onClick(e) {
@@ -67,6 +84,8 @@ function onClick(e) {
     case 'recent': loadRecent(); break;
     case 'copy-id': copyText(S.me.userId); break;
     case 'close': closeModal(); break;
+    case 'branch-pick': if (S.branches.length > 1) renderBranchPicker(false); break;
+    case 'branch-set': setBranch(id); break;
     case 'reload': window.location.reload(); break;
     case 'relogin': if (S.line) S.line.relogin(); break;
   }
@@ -110,6 +129,97 @@ function renderPending(testMode) {
 }
 
 /* =====================================================
+ * สาขา (เฉพาะร้านที่มีหลายสาขา)
+ * ทุกรายการที่บันทึกจะติดสาขาที่เลือกไว้ — Apps Script ตรวจซ้ำว่าคนนี้อยู่สาขานั้นจริง
+ * ===================================================== */
+const branchKey = () => `crm_staff_branch:${S.shop.id}:${S.me.userId}`;
+
+// จำสาขาไว้ในเครื่อง: พนักงานที่ประจำเครื่องหน้าร้านไม่ต้องเลือกใหม่ทุกครั้งที่เปิด
+function savedBranch() {
+  try {
+    const id = localStorage.getItem(branchKey());
+    return S.branches.find(b => b.id === id) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function setBranch(id) {
+  const b = S.branches.find(x => x.id === id);
+  if (!b) return;
+  const first = !S.branch || !document.getElementById('lookup');
+  S.branch = b;
+  try { localStorage.setItem(branchKey(), b.id); } catch (e) { /* เครื่องไม่ให้จำ ก็เลือกใหม่ครั้งหน้า */ }
+  closeModal();
+  if (first) return startMain();
+  const badge = document.getElementById('branch-badge');
+  if (badge) badge.outerHTML = branchBadge();
+  const title = document.getElementById('recent-title');
+  if (title) title.textContent = recentTitle();
+  toast(`เปลี่ยนเป็น${b.name}แล้ว`, 'ok');
+  loadRecent();
+}
+
+// ส่งไปกับทุกคำสั่งที่บันทึกข้อมูล (ร้านไม่มีสาขา = ไม่ส่ง)
+const branchData = () => (S.branch ? { branchId: S.branch.id } : {});
+
+function branchListHtml() {
+  return `<div class="branch-list">${S.branches.map(b => `
+    <button type="button" class="branch-option ${S.branch && S.branch.id === b.id ? 'active' : ''}" data-act="branch-set" data-id="${esc(b.id)}">
+      ${icon('pin', 20)}<span class="grow">${esc(b.name)}</span>${S.branch && S.branch.id === b.id ? icon('check', 18) : icon('right', 18)}
+    </button>`).join('')}</div>`;
+}
+
+// startup = ก่อนเริ่มงาน (เต็มหน้า) / ไม่ใช่ = เปลี่ยนสาขาระหว่างวัน (ป๊อปอัป)
+function renderBranchPicker(startup) {
+  if (startup) {
+    app.innerHTML = (S.testMode ? '<div class="test-banner">โหมดทดสอบ — ข้อมูลไม่ใช่ของจริง</div>' : '') + `
+      <div class="state-page branch-page">
+        <div class="state-icon">${icon('pin', 40)}</div>
+        <h1>วันนี้ทำงานสาขาไหน</h1>
+        <p class="muted">${esc(S.me.name)} · เลือกครั้งเดียว เครื่องนี้จะจำไว้ให้</p>
+        ${branchListHtml()}
+        ${creditHtml('credit-page')}
+      </div>`;
+    return;
+  }
+  openModal(`
+    <div class="modal-head"><h2>เปลี่ยนสาขา</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <p class="muted">รายการที่บันทึกหลังจากนี้จะเป็นของสาขาที่เลือก</p>
+    ${branchListHtml()}`);
+}
+
+function renderNoBranch() {
+  app.innerHTML = `
+    <div class="state-page">
+      <div class="state-icon">${icon('pin', 40)}</div>
+      <h1>ยังไม่มีสาขาที่คุณใช้งานได้</h1>
+      <p>สาขาของคุณอาจปิดไปแล้ว แจ้งเจ้าของร้านหรือผู้จัดการให้ตั้งสาขาในหลังบ้าน (เมนูพนักงาน)</p>
+      <button class="btn btn-primary" data-act="reload">${icon('refresh', 18)} ตรวจสอบอีกครั้ง</button>
+      ${creditHtml('credit-page')}
+    </div>`;
+}
+
+// ชื่อสาขาแสดงตัวใหญ่ที่หัวหน้าเสมอ กันลืมว่าบันทึกให้สาขาไหน (หลายสาขากดเปลี่ยนได้)
+function branchBadge() {
+  if (!S.branch) return '';
+  const many = S.branches.length > 1;
+  return `<button type="button" id="branch-badge" class="branch-badge" data-act="branch-pick" ${many ? '' : 'disabled'} aria-label="สาขา ${esc(S.branch.name)}${many ? ' (กดเพื่อเปลี่ยน)' : ''}">
+    ${icon('pin', 16)}<span>${esc(S.branch.name)}</span>${many ? `<small>เปลี่ยน</small>` : ''}</button>`;
+}
+
+const recentTitle = () => (S.branch ? `รายการล่าสุด · ${S.branch.name}` : 'รายการล่าสุดของร้าน');
+
+// สาขาที่เลือกไว้ใช้ไม่ได้แล้ว (ถูกปิด / ถูกย้ายสาขา) → ล้างที่จำไว้ แล้วให้เลือกใหม่
+function onBranchError(e) {
+  if (e.code !== 'BAD_BRANCH' && e.code !== 'NO_BRANCH') return false;
+  try { localStorage.removeItem(branchKey()); } catch (x) { /* ข้าม */ }
+  toast(e.message, 'err');
+  setTimeout(() => window.location.reload(), 1800); // โหลดรายชื่อสาขาล่าสุดจากหลังบ้าน
+  return true;
+}
+
+/* =====================================================
  * หน้าหลักของพนักงาน
  * ===================================================== */
 function renderMain(testMode) {
@@ -118,6 +228,7 @@ function renderMain(testMode) {
       <div>
         <div class="staff-shop">${esc(cfg().name)}</div>
         <div class="staff-sub">หน้าพนักงาน · ทุก ${fmtMoney(S.settings.pointRate)} บาท = 1 ${esc(unit())}</div>
+        ${branchBadge()}
       </div>
       <div class="staff-me"><span>${esc(S.me.name)}</span><span class="chip">${esc(ROLE_LABEL[S.me.role] || S.me.role)}</span></div>
     </header>
@@ -131,7 +242,7 @@ function renderMain(testMode) {
       </section>
       <div id="result"></div>
       <section class="card">
-        <div class="card-head"><h2>รายการล่าสุดของร้าน</h2><button class="link" data-act="recent">${icon('refresh', 14)} รีเฟรช</button></div>
+        <div class="card-head"><h2 id="recent-title">${esc(recentTitle())}</h2><button class="link" data-act="recent">${icon('refresh', 14)} รีเฟรช</button></div>
         <div id="recent"><div class="muted small">กำลังโหลด...</div></div>
       </section>
       ${creditHtml('credit-page')}
@@ -309,8 +420,8 @@ async function doPurchase(btn) {
   if (!p) return;
   setBusy(btn, true);
   try {
-    const key = ['purchase', p.memberId, p.amount, p.note].join('|');
-    const r = await withRequestId(key, rid => S.api.call('addPurchase', { ...p, requestId: rid }));
+    const key = ['purchase', p.memberId, p.amount, p.note, S.branch ? S.branch.id : ''].join('|');
+    const r = await withRequestId(key, rid => S.api.call('addPurchase', { ...p, ...branchData(), requestId: rid }));
     closeModal();
     S.pendingPurchase = null;
     if (r.member) S.view.member = r.member;
@@ -322,6 +433,7 @@ async function doPurchase(btn) {
     loadRecent();
   } catch (e) {
     setBusy(btn, false);
+    if (onBranchError(e)) return;
     toast(e.code === 'NETWORK' ? e.message + ' (กดบันทึกอีกครั้งได้ ระบบจะไม่บันทึกซ้ำ)' : e.message, 'err');
   }
 }
@@ -352,7 +464,7 @@ function confirmUseCoupon(code) {
 async function doUseCoupon(code, btn) {
   setBusy(btn, true, 'กำลังบันทึก...');
   try {
-    const r = await withRequestId('coupon|' + code, rid => S.api.call('useCoupon', { code, requestId: rid }));
+    const r = await withRequestId('coupon|' + code, rid => S.api.call('useCoupon', { code, ...branchData(), requestId: rid }));
     closeModal();
     if (S.view.kind === 'coupon') {
       S.view.coupon = r.coupon;
@@ -365,6 +477,7 @@ async function doUseCoupon(code, btn) {
   } catch (e) {
     setBusy(btn, false);
     closeModal();
+    if (onBranchError(e)) return;
     toast(e.message, 'err');
   }
 }
@@ -397,8 +510,8 @@ async function doAdjust(btn) {
   if (!p) return;
   setBusy(btn, true);
   try {
-    const key = ['adjust', p.memberId, p.points, p.reason].join('|');
-    const r = await withRequestId(key, rid => S.api.call('adjustPoints', { ...p, requestId: rid }));
+    const key = ['adjust', p.memberId, p.points, p.reason, S.branch ? S.branch.id : ''].join('|');
+    const r = await withRequestId(key, rid => S.api.call('adjustPoints', { ...p, ...branchData(), requestId: rid }));
     closeModal();
     S.pendingAdjust = null;
     if (r.member) S.view.member = r.member;
@@ -407,6 +520,7 @@ async function doAdjust(btn) {
     loadRecent();
   } catch (e) {
     setBusy(btn, false);
+    if (onBranchError(e)) return;
     toast(e.message, 'err');
   }
 }
@@ -418,7 +532,7 @@ async function loadRecent() {
   const box = document.getElementById('recent');
   if (!box) return;
   try {
-    const r = await S.api.call('staffRecent');
+    const r = await S.api.call('staffRecent', branchData());
     box.innerHTML = r.items.length ? `<div class="recent">${r.items.map(t => `
       <div class="recent-row">
         <div class="grow">

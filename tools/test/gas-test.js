@@ -24,13 +24,17 @@ function setCell(name, matchCol, matchVal, col, val) {
   s.data[ri][h.indexOf(col)] = val;
   W.cache.delete('rows:' + name); // เหมือนรอให้ค่าที่จำไว้หมดอายุ (แก้ในชีตเองเห็นผลภายใน 5 นาที)
 }
+function rowsOfW(world, name) {
+  const s = world.ss.getSheetByName(name); const h = s.data[0];
+  return s.data.slice(1).filter(r => r.some(v => v !== '')).map(r => Object.fromEntries(h.map((k, i) => [k, r[i] === undefined ? '' : r[i]])));
+}
 function hasFormula() {
   return Object.values(W.ss.sheets).some(s => s.data.some(r => r.some(v => v && typeof v === 'object' && v.FORMULA)));
 }
 
 console.log('\n[1] ติดตั้งชีต');
 run(W, 'testSetup');
-ok(['Settings', 'Members', 'Transactions', 'Rewards', 'Coupons', 'Staff', 'Promotions'].every(n => sheet(n)), 'สร้างครบ 7 ชีต');
+ok(['Settings', 'Members', 'Transactions', 'Rewards', 'Coupons', 'Staff', 'Promotions', 'Branches'].every(n => sheet(n)), 'สร้างครบ 8 ชีต (รวมสาขา)');
 ok(rowsOf('Settings').length === 22, 'Settings มี 22 ค่า (รวมโฟลเดอร์รูป + หน้าตาร้าน)', rowsOf('Settings').length);
 ok(rowsOf('Rewards').length === 3 && rowsOf('Promotions').length === 1, 'มีรางวัลตัวอย่าง 3 / โปรโมชัน 1');
 run(W, 'testSetup');
@@ -612,6 +616,151 @@ console.log('\n[13.8] หน้าตาร้าน (ชื่อ โลโก�
   ok(r.ok && r.consentVersion === '3' && r.brand.name === '' && r.brand.privacyText === '', 'ล้างกลับเป็นค่าตั้งต้นได้ (ลบนโยบาย = เปลี่ยนนโยบาย → ฉบับที่ 3)', r);
   r = call(W, { action: 'adminUploadImage', idToken: tok('O1'), data: Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0, 16]).toString('base64'), mime: 'image/jpeg', kind: 'logo' });
   ok(r.ok && /^logo-/.test(W.drive.files.slice(-1)[0].name), 'อัปโหลดโลโก้ได้ (ชื่อไฟล์ขึ้นต้น logo-)', r);
+}
+
+console.log('\n[13.9] หลายสาขา (2.6.0)');
+{
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+  const lastTx = () => rowsOf('Transactions').slice(-1)[0];
+  r = call(W, { action: 'staffMe', idToken: tok('S1') });
+  ok(r.ok && r.hasBranches === false && r.branches.length === 0, 'ร้านยังไม่มีสาขา → หน้าพนักงานไม่ต้องเลือกสาขา', r);
+  r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 40, requestId: rid() });
+  ok(r.ok && lastTx().Branch === '', 'ร้านยังไม่มีสาขา → บันทึกยอดซื้อได้เหมือนเดิม (ไม่มีสาขา)', r);
+
+  r = call(W, { action: 'adminBranchSave', idToken: tok('A1'), branch: { name: 'สาขาแอบเพิ่ม' }, requestId: rid() });
+  ok(!r.ok && r.code === 'NO_ROLE', 'ผู้จัดการเพิ่มสาขาไม่ได้ (เจ้าของร้านเท่านั้น)', r);
+  r = call(W, { action: 'adminBranchSave', idToken: tok('O1'), branch: { name: '' }, requestId: rid() });
+  ok(!r.ok && r.code === 'BAD_INPUT', 'ไม่ใส่ชื่อสาขา → ปฏิเสธ', r);
+  const reqB1 = rid();
+  r = call(W, { action: 'adminBranchSave', idToken: tok('O1'), branch: { name: 'สาขาสยาม' }, requestId: reqB1 });
+  ok(r.ok && r.created && r.branch.id === 'B001' && r.items.length === 1, 'เพิ่มสาขาแรก → B001', r);
+  r = call(W, { action: 'adminBranchSave', idToken: tok('O1'), branch: { name: 'สาขาสยาม' }, requestId: reqB1 });
+  ok(r.ok && rowsOf('Branches').length === 1, 'กดบันทึกซ้ำ (requestId เดิม) → ไม่เพิ่มสาขาซ้ำ', r);
+  r = call(W, { action: 'adminBranchSave', idToken: tok('O1'), branch: { name: ' สาขาสยาม ' }, requestId: rid() });
+  ok(!r.ok && r.code === 'DUP_BRANCH', 'ชื่อสาขาซ้ำ → ปฏิเสธ', r);
+  r = call(W, { action: 'adminBranchSave', idToken: tok('O1'), branch: { name: '=สาขาลาดพร้าว' }, requestId: rid() });
+  ok(r.ok && r.branch.id === 'B002' && !hasFormula(), 'เพิ่มสาขาที่สอง (ชื่อขึ้นต้น = ไม่กลายเป็นสูตร)', r);
+  r = call(W, { action: 'adminBranches', idToken: tok('A1') });
+  ok(r.ok && r.items.length === 2 && r.items.every(b => b.status === 'ACTIVE' && b.staff >= 3), 'ผู้จัดการดูรายชื่อสาขาได้ / พนักงานเดิม (ช่องสาขาว่าง) อยู่ได้ทุกสาขา', r);
+  r = call(W, { action: 'adminDashboard', idToken: tok('O1'), from: today, to: today, withMe: true });
+  ok(r.ok && r.branches.length === 2, 'หลังบ้านเปิดครั้งแรกได้รายชื่อสาขามาด้วย', r.branches);
+
+  r = call(W, { action: 'staffMe', idToken: tok('S1') });
+  ok(r.ok && r.hasBranches === true && r.branches.length === 2, 'มีสาขาแล้ว → พนักงานเห็นสาขาที่เลือกได้', r);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('A1'), userId: 'S1', role: 'CASHIER', status: 'ACTIVE', branches: ['B001'] });
+  ok(r.ok && r.staff.branches.join() === 'B001' && rowsOf('Staff').find(x => x.LINE_User_ID === 'S1').Branches === 'B001', 'ผู้จัดการตั้งแคชเชียร์ให้อยู่สาขาสยาม', r);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('O1'), userId: 'S1', role: 'CASHIER', status: 'ACTIVE', branches: ['B999'] });
+  ok(!r.ok && r.code === 'BAD_BRANCH', 'ตั้งสาขาที่ไม่มีจริง → ปฏิเสธ', r);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('O1'), userId: 'S1', role: 'CASHIER', status: 'ACTIVE', branches: [] });
+  ok(!r.ok && r.code === 'BAD_BRANCH', 'ไม่เลือกสาขาเลย → ปฏิเสธ', r);
+  r = call(W, { action: 'staffMe', idToken: tok('S1') });
+  ok(r.ok && r.branches.length === 1 && r.branches[0].id === 'B001', 'แคชเชียร์เห็นเฉพาะสาขาของตัวเอง', r.branches);
+
+  r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 300, requestId: rid() });
+  ok(!r.ok && r.code === 'NO_BRANCH', 'มีสาขาแล้ว ไม่ระบุสาขา → บันทึกไม่ได้', r);
+  r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 300, branchId: 'B002', requestId: rid() });
+  ok(!r.ok && r.code === 'BAD_BRANCH', 'ส่งสาขาที่ตัวเองไม่ได้อยู่ → ปฏิเสธ (ไม่เชื่อหน้าเว็บ)', r);
+  r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 300, branchId: 'B999', requestId: rid() });
+  ok(!r.ok && r.code === 'BAD_BRANCH', 'สาขาที่ไม่มีจริง → ปฏิเสธ', r);
+  r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 300, branchId: 'b001', requestId: rid() });
+  ok(r.ok && lastTx().Branch === 'B001' && lastTx().Amount === 300, 'บันทึกยอดซื้อที่สาขาสยาม → รายการมีรหัสสาขา', lastTx());
+  r = call(W, { action: 'addPurchase', idToken: tok('A1'), memberId: M1, amount: 777, branchId: 'B002', requestId: rid() });
+  ok(r.ok && lastTx().Branch === 'B002', 'ผู้จัดการ (ทุกสาขา) บันทึกที่สาขาลาดพร้าวได้', r);
+  r = call(W, { action: 'adjustPoints', idToken: tok('O1'), memberId: M1, points: 500, reason: 'เติมแต้มทดสอบสาขา', requestId: rid() });
+  ok(r.ok && lastTx().Branch === 'ADMIN', 'ปรับแต้มจากหลังบ้าน (ไม่ส่งสาขา) → บันทึกเป็นหลังบ้าน', lastTx());
+  r = call(W, { action: 'adjustPoints', idToken: tok('A1'), memberId: M1, points: 1, reason: 'ปรับจากหน้าพนักงาน', branchId: 'B002', requestId: rid() });
+  ok(r.ok && lastTx().Branch === 'B002', 'ปรับแต้มจากหน้าพนักงาน → บันทึกสาขาที่เลือก', lastTx());
+
+  r = call(W, { action: 'staffRecent', idToken: tok('S1'), branchId: 'B001' });
+  ok(r.ok && r.items.some(t => t.amount === 300) && !r.items.some(t => t.amount === 777), 'รายการล่าสุดของแคชเชียร์ = เฉพาะสาขาสยาม', r.items.map(t => t.amount));
+  r = call(W, { action: 'staffRecent', idToken: tok('S1'), branchId: 'B002' });
+  ok(!r.ok && r.code === 'BAD_BRANCH', 'แคชเชียร์ขอดูรายการสาขาอื่น → ปฏิเสธ', r);
+
+  // คูปอง: ลูกค้าแลกในแอป → พนักงานสาขาสยามสแกนใช้
+  const rw = call(W, { action: 'bootstrap', idToken: tok('U1') }).rewards.find(x => !x.remaining || x.remaining > 0);
+  r = call(W, { action: 'redeem', idToken: tok('U1'), rewardId: rw.id, requestId: rid() });
+  ok(r.ok, 'ลูกค้าแลกรางวัล (ไม่ต้องเลือกสาขา)', r);
+  const code = r.coupon.code;
+  r = call(W, { action: 'useCoupon', idToken: tok('S1'), code, requestId: rid() });
+  ok(!r.ok && r.code === 'NO_BRANCH', 'ใช้คูปองโดยไม่ระบุสาขา → ปฏิเสธ', r);
+  r = call(W, { action: 'useCoupon', idToken: tok('S1'), code, branchId: 'B001', requestId: rid() });
+  ok(r.ok && rowsOf('Coupons').find(c => c.Coupon_Code === code).Used_Branch === 'B001', 'ใช้คูปองที่สาขาสยาม → บันทึกสาขาที่ใช้', r);
+
+  // ลูกค้าสมัครจาก QR สาขา
+  const SURNAME = { UB1: 'หนึ่ง', UB2: 'สอง', UB3: 'สาม', UB4: 'สี่' };
+  const reg = (id, phone, extra) => call(W, { action: 'register', idToken: tok(id), firstName: 'ลูกค้า', lastName: 'สาขา' + SURNAME[id], phone, birthDate: '1990-01-01', consentPrivacy: true, ...extra });
+  r = reg('UB1', '0861000001', { branch: 'B002' });
+  ok(r.ok && rowsOf('Members').find(m => m.LINE_User_ID === 'UB1').Joined_Branch === 'B002', 'สแกน QR สาขาลาดพร้าวแล้วสมัคร → บันทึกสาขาที่สมัคร', r);
+  r = reg('UB2', '0861000002', { branch: 'ZZZ' });
+  ok(r.ok && rowsOf('Members').find(m => m.LINE_User_ID === 'UB2').Joined_Branch === 'ONLINE', 'รหัสสาขาปลอม → ถือว่าสมัครออนไลน์', r);
+  r = reg('UB3', '0861000003', {});
+  ok(r.ok && rowsOf('Members').find(m => m.LINE_User_ID === 'UB3').Joined_Branch === 'ONLINE', 'สมัครเองไม่ผ่าน QR สาขา → ออนไลน์', r);
+
+  // รายงานในหลังบ้าน
+  r = call(W, { action: 'adminDashboard', idToken: tok('O1'), from: today, to: today });
+  const b1 = r.byBranch.find(b => b.id === 'B001');
+  const b2 = r.byBranch.find(b => b.id === 'B002');
+  const other = r.byBranch.find(b => b.id === 'OTHER');
+  ok(r.ok && b1.sales === 300 && b1.bills === 1 && b1.couponsUsed === 1 && b2.sales === 777 && b2.newMembers === 1, 'ภาพรวม: ตารางเทียบสาขา ยอดซื้อ/บิล/คูปอง/สมาชิกใหม่ แยกถูกสาขา', r.byBranch);
+  ok(other && other.newMembers >= 2 && other.bills >= 1, 'รายการก่อนมีสาขา + สมัครออนไลน์ รวมเป็นแถว "อื่นๆ"', other);
+  r = call(W, { action: 'adminDashboard', idToken: tok('O1'), from: today, to: today, branch: 'B001' });
+  ok(r.ok && r.current.sales === 300 && r.current.bills === 1 && r.current.couponsUsed === 1 && r.byBranch.length === 0 && r.totals.members > r.totals.branchMembers, 'ภาพรวม: เลือกสาขาสยาม → ตัวเลขเฉพาะสาขานั้น', r.current);
+  ok(r.topRewards.length === 1 && r.topRewards[0].used === 1, 'เลือกสาขา → ของรางวัลนับจากคูปองที่ใช้ที่สาขานั้น', r.topRewards);
+  r = call(W, { action: 'adminDashboard', idToken: tok('O1'), from: today, to: today, branch: 'B 1;' });
+  ok(!r.ok && r.code === 'BAD_BRANCH', 'ตัวกรองสาขาผิดรูปแบบ → ปฏิเสธ', r);
+  r = call(W, { action: 'adminTransactions', idToken: tok('O1'), from: today, to: today, branch: 'B002' });
+  ok(r.ok && r.items.length === 2 && r.items.every(t => t.branch === 'B002'), 'รายการแต้ม: กรองสาขาลาดพร้าว', r.items);
+  r = call(W, { action: 'adminCoupons', idToken: tok('O1'), from: today, to: today, branch: 'B001' });
+  ok(r.ok && r.items.length === 1 && r.items[0].usedBranch === 'B001', 'คูปอง: กรองตามสาขาที่ใช้', r.items);
+  r = call(W, { action: 'adminMembers', idToken: tok('O1'), branch: 'B002' });
+  ok(r.ok && r.total === 1 && r.items[0].name === 'ลูกค้า สาขาหนึ่ง', 'สมาชิก: กรองตามสาขาที่สมัคร', r);
+  r = call(W, { action: 'adminMember', idToken: tok('O1'), memberId: M1 });
+  ok(r.ok && r.member.topBranch && r.history.some(t => t.branch === 'B001') && r.coupons.some(c => c.usedBranch === 'B001'), 'สมาชิกรายคน: สาขาที่มาบ่อย + สาขาในประวัติ/คูปอง', r.member);
+  r = call(W, { action: 'adminExport', idToken: tok('O1'), kind: 'transactions', from: today, to: today });
+  ok(r.ok && r.columns.slice(-1)[0] === 'สาขา' && r.rows.some(x => x.slice(-1)[0] === 'สาขาสยาม') && r.rows.some(x => x.slice(-1)[0] === 'หลังบ้าน'), 'ส่งออกรายการแต้มมีคอลัมน์สาขา (ชื่อสาขา)', r.columns);
+  r = call(W, { action: 'adminExport', idToken: tok('O1'), kind: 'members' });
+  ok(r.ok && r.columns.slice(-1)[0] === 'สาขาที่สมัคร' && r.rows.some(x => x.slice(-1)[0] === 'ออนไลน์'), 'ส่งออกสมาชิกมีคอลัมน์สาขาที่สมัคร', r.columns);
+
+  // ปิดสาขา
+  r = call(W, { action: 'adminBranchSave', idToken: tok('O1'), branch: { id: 'B002', name: '=สาขาลาดพร้าว', status: 'INACTIVE' }, requestId: rid() });
+  ok(r.ok && r.items.find(b => b.id === 'B002').status === 'INACTIVE', 'ปิดสาขาลาดพร้าว', r);
+  r = call(W, { action: 'staffMe', idToken: tok('A1') });
+  ok(r.ok && r.branches.length === 1 && r.branches[0].id === 'B001', 'สาขาที่ปิดแล้วไม่ขึ้นให้พนักงานเลือก (เห็นผลทันที)', r.branches);
+  r = call(W, { action: 'addPurchase', idToken: tok('A1'), memberId: M1, amount: 50, branchId: 'B002', requestId: rid() });
+  ok(!r.ok && r.code === 'BAD_BRANCH', 'บันทึกที่สาขาที่ปิดแล้ว → ปฏิเสธ', r);
+  r = reg('UB4', '0861000004', { branch: 'B002' });
+  ok(r.ok && rowsOf('Members').find(m => m.LINE_User_ID === 'UB4').Joined_Branch === 'ONLINE', 'สแกน QR ของสาขาที่ปิดแล้ว → ถือว่าสมัครออนไลน์', r);
+  r = call(W, { action: 'adminDashboard', idToken: tok('O1'), from: today, to: today });
+  ok(r.byBranch.some(b => b.id === 'B002'), 'สาขาที่ปิดแล้วแต่มีข้อมูลในช่วงนี้ ยังอยู่ในตารางเทียบ', r.byBranch.map(b => b.id));
+
+  // ร้านเดิมที่อัปเดตโค้ดแต่ยังไม่ได้กด testSetup: ไม่มีชีต Branches และไม่มีคอลัมน์สาขา
+  const W2 = createWorld();
+  run(W2, 'testSetup'); run(W2, 'enableTestMode');
+  delete W2.ss.sheets.Branches;
+  ['Transactions', 'Coupons', 'Members', 'Staff'].forEach(n => {
+    const sh = W2.ss.getSheetByName(n);
+    ['Branch', 'Used_Branch', 'Joined_Branch', 'Branches'].forEach(col => {
+      const i = sh.data[0].indexOf(col);
+      if (i >= 0) sh.data.forEach(row => row.splice(i, 1));
+    });
+  });
+  const r2 = (b) => call(W2, b);
+  let x = r2({ action: 'register', idToken: tok('V1'), firstName: 'เก่า', lastName: 'ร้านเดิม', phone: '0899990001', birthDate: '1990-01-01', consentPrivacy: true });
+  ok(x.ok, 'ร้านเดิม (ไม่มีชีตสาขา) สมัครสมาชิกได้', x);
+  r2({ action: 'staffMe', idToken: tok('SO', 'เจ้าของเดิม') });
+  { const sh = W2.ss.getSheetByName('Staff'); const h = sh.data[0]; const row = sh.data.find((v, i) => i > 0 && v[0] === 'SO'); row[h.indexOf('Status')] = 'ACTIVE'; row[h.indexOf('Role')] = 'OWNER'; }
+  x = r2({ action: 'staffMe', idToken: tok('SO') });
+  ok(x.ok && x.hasBranches === false, 'ร้านเดิม: หน้าพนักงานไม่ต้องเลือกสาขา', x);
+  x = r2({ action: 'addPurchase', idToken: tok('SO'), memberId: x && rowsOfW(W2, 'Members')[0].Member_ID, amount: 100, requestId: rid() });
+  ok(x.ok, 'ร้านเดิม: บันทึกยอดซื้อได้', x);
+  x = r2({ action: 'adminDashboard', idToken: tok('SO'), from: today, to: today, withMe: true });
+  ok(x.ok && x.byBranch.length === 0 && x.branches.length === 0, 'ร้านเดิม: ภาพรวมไม่มีตารางสาขา', x.byBranch);
+  x = r2({ action: 'adminBranchSave', idToken: tok('SO'), branch: { name: 'สาขาแรก' }, requestId: rid() });
+  ok(x.ok && W2.ss.getSheetByName('Branches') && x.branch.id === 'B001', 'ร้านเดิมเพิ่มสาขาแรก → สร้างชีตสาขาให้เอง', x);
+  x = r2({ action: 'addPurchase', idToken: tok('SO'), memberId: rowsOfW(W2, 'Members')[0].Member_ID, amount: 100, branchId: 'B001', requestId: rid() });
+  ok(x.ok && rowsOfW(W2, 'Transactions').slice(-1)[0].Branch === 'B001', 'รายการแรกที่มีสาขา → เติมคอลัมน์ Branch ให้เองแล้วบันทึกได้', rowsOfW(W2, 'Transactions').slice(-1)[0]);
+  x = r2({ action: 'adminStaffUpdate', idToken: tok('SO'), userId: 'SO', role: 'OWNER', status: 'ACTIVE', branches: ['B001'] });
+  ok(!x.ok && x.code === 'SELF_EDIT', 'ยังแก้สิทธิ์ของตัวเองไม่ได้เหมือนเดิม', x);
 }
 
 console.log('\n[14] LINE token จริง (จำลอง LINE)');

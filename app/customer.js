@@ -23,6 +23,7 @@ async function main() {
   try {
     S.shop = await loadShop();
     applyDevParams(S.shop.id);
+    captureJoinBranch();
     renderBoot();
     S.line = await initLine(cfg().liffId);
     S.api = createApi(S.shop, S.line, {
@@ -54,6 +55,30 @@ async function main() {
 }
 
 const LOADING_TEXT = { register: 'กำลังสมัครสมาชิก...', redeem: 'กำลังแลกของรางวัล...' };
+
+/* ---------- สาขาที่ลูกค้าสแกน QR สมัครสมาชิก (ลิงก์ ...?branch=B001) ----------
+ * จำไว้ในเครื่องจนกว่าจะสมัครเสร็จ: ระหว่างนั้นหน้าอาจโหลดใหม่หลายรอบ (LINE พาไปเข้าสู่ระบบ / เชื่อมต่อใหม่)
+ * หรือลูกค้าสแกนที่ร้านแล้วกลับไปสมัครที่บ้าน — Apps Script ตรวจเองว่าสาขามีจริงและยังเปิดอยู่ */
+const JOIN_BRANCH_DAYS = 30;
+const joinKey = () => 'crm_join_branch:' + S.shop.id;
+
+function captureJoinBranch() {
+  const q = new URLSearchParams(window.location.search);
+  // เปิดผ่าน liff.line.me ครั้งแรก: ค่ายังซ่อนอยู่ใน liff.state (LINE จะพาไปหน้าที่มี ?branch= อีกรอบ)
+  const inner = q.get('liff.state');
+  const v = q.get('branch') || (inner ? new URLSearchParams(inner.replace(/^[^?]*\?/, '')).get('branch') : '');
+  if (!v || !/^[A-Za-z0-9]{1,12}$/.test(v)) return;
+  try { localStorage.setItem(joinKey(), JSON.stringify({ id: v.toUpperCase(), at: Date.now() })); } catch (e) { /* ข้าม */ }
+}
+
+function joinBranch() {
+  try {
+    const d = JSON.parse(localStorage.getItem(joinKey()) || 'null');
+    return d && Date.now() - d.at < JOIN_BRANCH_DAYS * 86400000 ? d.id : '';
+  } catch (e) {
+    return '';
+  }
+}
 
 async function refresh() {
   const d = await S.api.call('bootstrap', { withBrand: true });
@@ -343,8 +368,10 @@ async function onRegister(e) {
       phone,
       birthDate,
       consentPrivacy: true,
-      consentMarketing: f.consentMarketing.checked
+      consentMarketing: f.consentMarketing.checked,
+      branch: joinBranch() // ว่าง = สมัครออนไลน์
     });
+    try { localStorage.removeItem(joinKey()); } catch (e) { /* ข้าม */ }
     await refresh();
     if (r.welcomePoints > 0) {
       openModal(`

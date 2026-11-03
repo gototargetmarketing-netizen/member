@@ -6,7 +6,7 @@ import { loadShop, applyBrand, mergeBrand, THEME_DEFAULTS, textOn, contrast, sha
 import { initLine, IS_LOCAL } from './line.js';
 import { createApi, createRetryKeeper } from './api.js';
 import { applyDevParams, mountDevBar } from './devbar.js';
-import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, setBusy, showLoading, hideLoading, creditHtml, bootHtml } from './ui.js';
+import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, setBusy, showLoading, hideLoading, creditHtml, bootHtml, qrSvg, loadScript } from './ui.js';
 
 const ROLE_LABEL = { OWNER: 'เจ้าของร้าน', ADMIN: 'ผู้จัดการ', CASHIER: 'แคชเชียร์' };
 const TX_LABEL = { EARN: 'ยอดซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกรางวัล', ADJUST: 'ปรับแต้ม' };
@@ -20,6 +20,7 @@ const PAGES = [
   { id: 'rewards', label: 'ของรางวัล', icon: 'gift' },
   { id: 'promos', label: 'โปรโมชัน', icon: 'star' },
   { id: 'staff', label: 'พนักงาน', icon: 'shield' },
+  { id: 'branches', label: 'สาขา', icon: 'pin' },
   { id: 'brand', label: 'หน้าตาร้าน', icon: 'palette' },
   { id: 'settings', label: 'ตั้งค่าร้าน', icon: 'store' }
 ];
@@ -34,14 +35,17 @@ const PRESETS = [
   { id: 'custom', label: 'เลือกวัน' }
 ];
 const RANGE_KEY = 'crm_admin_range';
+const BRANCH_KEY = 'crm_admin_branch';
 // ข้อความในป๊อปอัป "กำลังโหลด" ตามคำสั่ง (คำสั่งอ่านข้อมูลอื่นๆ = "กำลังโหลด...")
-const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave'];
+const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave'];
 const LOADING_TEXT = { adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...' };
 
 const app = document.getElementById('app');
 const S = {
   shop: null, line: null, api: null, me: null, testMode: false,
   range: loadRange(),
+  // หลายสาขา: รายชื่อสาขาทั้งหมด (มาพร้อมคำขอแรก) + สาขาที่เลือกดูอยู่ ('' = ทุกสาขา) ใช้ร่วมกันทุกหน้า
+  branches: [], branch: loadBranchFilter(),
   members: { q: '', sort: 'joined', status: '', page: 1 },
   tx: { type: '', staff: '', q: '', page: 1 },
   coupons: { status: '', page: 1 },
@@ -54,6 +58,16 @@ const withRequestId = createRetryKeeper();
 const cfg = () => S.shop.config;
 const unit = () => (cfg().texts && cfg().texts.pointUnit) || 'แต้ม';
 const isOwner = () => S.me && S.me.role === 'OWNER';
+
+/* แพ็กเกจหลายสาขา: เปิด/ปิดที่ shops/<ร้าน>/config.js → features.branches / features.maxBranches
+ * ตั้งที่ไฟล์บน Vercel เพราะเจ้าของร้านแก้เองไม่ได้ (ชีต Settings อยู่ในบัญชีร้าน แก้ได้)
+ * ปิดแพ็กเกจ = ซ่อนเมนูสาขา (เพิ่ม/แก้สาขาไม่ได้) แต่ข้อมูลสาขาเดิมยังอยู่ ดูรายงานแยกสาขาได้ตามเดิม */
+const branchFeature = () => !!(cfg().features && cfg().features.branches === true);
+const branchLimit = () => {
+  const n = Number(cfg().features && cfg().features.maxBranches);
+  return Number.isInteger(n) && n > 0 ? n : Infinity;
+};
+const visiblePages = () => PAGES.filter(p => p.id !== 'branches' || branchFeature());
 
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
@@ -94,6 +108,10 @@ function onClick(e) {
     case 'member': if (e.target.closest('a')) return; location.hash = '#member/' + encodeURIComponent(id); break;
     case 'coupon-status': S.coupons.status = id || ''; S.coupons.page = 1; route(); break;
     case 'staff-edit': openStaffEdit(id); break;
+    case 'branch-filter': setBranchFilter(id); break;
+    case 'branch-edit': openBranchEdit(id); break;
+    case 'branch-qr': openBranchQr(id); break;
+    case 'branch-qr-save': saveBranchQr(id, el); break;
     case 'export': confirmExport(id); break;
     case 'export-confirm': doExport(id, el); break;
     case 'adjust-confirm': doAdjust(el); break;
@@ -139,6 +157,7 @@ function onSubmit(e) {
       break;
     case 'adjust': onAdjustSubmit(form); break;
     case 'staff-edit': saveStaff(form); break;
+    case 'branch': saveBranch(form); break;
     case 'reward': saveReward(form); break;
     case 'promo': savePromo(form); break;
     case 'member-status': saveMemberStatus(form); break;
@@ -161,6 +180,8 @@ document.addEventListener('input', e => {
 function onChange(e) {
   const file = e.target.closest('input[type="file"][data-upload]');
   if (file) return uploadImage(file);
+  if (e.target.matches('[data-branch-filter]')) return setBranchFilter(e.target.value);
+  if (e.target.matches('[data-branch-all]')) return toggleBranchAll(e.target);
   const form = e.target.closest('form[data-form="members"], form[data-form="tx"]');
   if (form && e.target.tagName === 'SELECT') form.requestSubmit();
 }
@@ -218,6 +239,46 @@ function resetPages() {
   S.coupons.page = 1;
 }
 
+/* =====================================================
+ * สาขา (เฉพาะร้านที่เพิ่มสาขาแล้ว — ร้านสาขาเดียวไม่เห็นอะไรเกี่ยวกับสาขาเลย)
+ * ===================================================== */
+const hasBranches = () => S.branches.length > 0;
+
+function loadBranchFilter() {
+  try { return sessionStorage.getItem(BRANCH_KEY) || ''; } catch (e) { return ''; }
+}
+
+function setBranchFilter(id) {
+  S.branch = id || '';
+  try { sessionStorage.setItem(BRANCH_KEY, S.branch); } catch (e) { /* ข้าม */ }
+  resetPages();
+  S.members.page = 1;
+  route();
+}
+
+// ชื่อที่แสดงแทนรหัสสาขา (รหัสพิเศษ: ONLINE = สมัครเอง / ADMIN = ปรับจากหลังบ้าน / ว่าง = ก่อนเปิดใช้สาขา)
+function branchName(id) {
+  if (!id) return 'ไม่ระบุ';
+  if (id === 'ONLINE') return 'ออนไลน์';
+  if (id === 'ADMIN') return 'หลังบ้าน';
+  const b = S.branches.find(x => x.id === id);
+  return b ? b.name : id;
+}
+
+// ช่องเลือกสาขา (วางในแถบกรองของแต่ละหน้า)
+function branchSelect() {
+  if (!hasBranches()) return '';
+  return `
+    <label class="branch-select ${S.branch ? 'on' : ''}">${icon('pin', 16)}
+      <select data-branch-filter aria-label="สาขา">
+        <option value="">ทุกสาขา</option>
+        ${S.branches.map(b => `<option value="${esc(b.id)}" ${S.branch === b.id ? 'selected' : ''}>${esc(b.name)}${b.status === 'ACTIVE' ? '' : ' (ปิดแล้ว)'}</option>`).join('')}
+      </select></label>`;
+}
+
+const branchData = () => (S.branch ? { branch: S.branch } : {});
+const branchNote = () => (S.branch ? ` · <b>${esc(branchName(S.branch))}</b>` : '');
+
 const rangeData = () => ({ from: S.range.from, to: S.range.to });
 const keyDate = k => new Date((k.length === 7 ? k + '-01' : k) + 'T00:00:00Z');
 const fmtDayShort = new Intl.DateTimeFormat('th-TH', { day: 'numeric', month: 'short', timeZone: 'UTC' });
@@ -234,6 +295,7 @@ function rangeBar() {
   const t = todayKey();
   return `
     <div class="range-bar">
+      ${branchSelect()}
       <div class="chips-scroll">${PRESETS.map(p => `
         <button type="button" class="chip-btn ${r.preset === p.id ? 'active' : ''}" data-act="preset" data-id="${p.id}">${p.label}</button>`).join('')}
       </div>
@@ -293,7 +355,7 @@ function renderShell() {
           ${logoHtml()}
           <div class="grow"><div class="adm-shop">${esc(cfg().name)}</div><div class="adm-sub">หลังบ้าน</div></div>
         </div>
-        <nav class="adm-nav">${PAGES.map(p => `
+        <nav class="adm-nav">${visiblePages().map(p => `
           <a href="#${p.id}" data-page="${p.id}">${icon(p.icon, 18)}<span>${p.label}</span></a>`).join('')}
         </nav>
         ${creditHtml('credit-side')}
@@ -311,7 +373,7 @@ function renderShell() {
 
 function currentPage() {
   const [raw, arg] = (location.hash.slice(1) || 'overview').split('/');
-  return { page: raw === 'member' || PAGES.some(p => p.id === raw) ? raw : 'overview', arg };
+  return { page: raw === 'member' || visiblePages().some(p => p.id === raw) ? raw : 'overview', arg };
 }
 
 function markNav() {
@@ -334,6 +396,7 @@ function route() {
     rewards: loadRewards,
     promos: loadPromos,
     staff: loadStaff,
+    branches: loadBranches,
     brand: loadBrand,
     settings: loadSettings
   }[page];
@@ -353,8 +416,17 @@ async function fetchView(action, data, render) {
     if (first) {
       if (r.brand) await applyBrand(S.shop, r.brand);
       // code.gs รุ่นก่อน 2.4.0 ไม่ส่ง me มา → ถามแยกอีกรอบ (หน้าเว็บใหม่ใช้กับ code.gs เก่าได้)
-      const me = r.me || (await S.api.call('adminMe')).me;
+      let me = r.me;
+      let branches = r.branches;
+      if (!me) {
+        const r2 = await S.api.call('adminMe');
+        me = r2.me;
+        branches = r2.branches;
+      }
       S.me = me;
+      S.branches = branches || [];
+      // สาขาที่เลือกไว้ถูกลบ/ร้านไม่มีสาขาแล้ว → กลับไปดูทุกสาขา
+      if (S.branch && !S.branches.some(b => b.id === S.branch)) S.branch = '';
       S.testMode = !!r.testMode;
       renderShell();
       markNav();
@@ -406,7 +478,7 @@ const memberLink = (id, name) => `<a href="#member/${encodeURIComponent(id)}">${
  * ภาพรวม
  * ===================================================== */
 function loadOverview() {
-  fetchView('adminDashboard', rangeData(), renderOverview);
+  fetchView('adminDashboard', { ...rangeData(), ...branchData() }, renderOverview);
 }
 
 // เทียบกับช่วงก่อนหน้าที่ยาวเท่ากัน — ใช้สีตัวอักษรปกติ เพราะ "เพิ่ม" ไม่ได้แปลว่าดีเสมอ (เช่นแต้มที่ถูกแลก)
@@ -421,18 +493,21 @@ function delta(cur, prev) {
 function renderOverview(d) {
   const c = d.current;
   const p = d.previous;
+  const one = !!d.branch; // ดูสาขาเดียว
   const tiles = [
-    { label: 'สมาชิกทั้งหมด', value: fmtNum(d.totals.members), sub: `${esc(unit())}คงค้างในระบบ ${fmtNum(d.totals.pointsOutstanding)}` },
+    one
+      ? { label: 'สมาชิกที่สมัครสาขานี้', value: fmtNum(d.totals.branchMembers), sub: `ทั้งร้าน ${fmtNum(d.totals.members)} คน` }
+      : { label: 'สมาชิกทั้งหมด', value: fmtNum(d.totals.members), sub: `${esc(unit())}คงค้างในระบบ ${fmtNum(d.totals.pointsOutstanding)}` },
     { label: 'สมาชิกใหม่', value: fmtNum(c.newMembers), sub: delta(c.newMembers, p.newMembers) },
     { label: 'ลูกค้าที่มาซื้อ', value: fmtNum(c.buyers), sub: delta(c.buyers, p.buyers) || 'คน (ไม่นับซ้ำ)' },
     { label: 'ยอดซื้อรวม', value: '฿' + fmtMoney(c.sales), sub: delta(c.sales, p.sales) },
     { label: 'จำนวนบิล', value: fmtNum(c.bills), sub: c.bills ? `เฉลี่ย ฿${fmtMoney(Math.round(c.sales / c.bills))} ต่อบิล` : delta(c.bills, p.bills) },
     { label: `${unit()}ที่แจก`, value: fmtNum(c.pointsIssued), sub: delta(c.pointsIssued, p.pointsIssued) },
     { label: `${unit()}ที่ถูกแลก`, value: fmtNum(c.pointsRedeemed), sub: delta(c.pointsRedeemed, p.pointsRedeemed) },
-    { label: 'คูปองที่ใช้ที่ร้าน', value: fmtNum(c.couponsUsed), sub: delta(c.couponsUsed, p.couponsUsed) || 'พนักงานสแกนแล้ว' }
+    { label: one ? 'คูปองที่ใช้ที่สาขานี้' : 'คูปองที่ใช้ที่ร้าน', value: fmtNum(c.couponsUsed), sub: delta(c.couponsUsed, p.couponsUsed) || 'พนักงานสแกนแล้ว' }
   ];
   document.getElementById('view').innerHTML = `
-    ${pageHead('ภาพรวม', 'ตัวเลขของช่วงที่เลือก เทียบกับช่วงก่อนหน้าที่ยาวเท่ากัน', `<button class="btn btn-sm" data-act="refresh">${icon('refresh', 16)} รีเฟรช</button>`)}
+    ${pageHead('ภาพรวม', 'ตัวเลขของช่วงที่เลือก เทียบกับช่วงก่อนหน้าที่ยาวเท่ากัน' + branchNote(), `<button class="btn btn-sm" data-act="refresh">${icon('refresh', 16)} รีเฟรช</button>`)}
     ${rangeBar()}
     <div class="kpis">${tiles.map(t => `
       <div class="kpi"><div class="kpi-label">${esc(t.label)}</div><div class="kpi-value">${t.value}</div><div class="kpi-sub">${t.sub || ''}</div></div>`).join('')}
@@ -441,13 +516,14 @@ function renderOverview(d) {
       <div class="card-head"><h2>ยอดซื้อ${d.period.bucket === 'month' ? 'รายเดือน' : 'รายวัน'}</h2><span class="muted small">แตะหรือชี้ที่แท่งเพื่อดูตัวเลข</span></div>
       ${chartHtml(d)}
     </section>
+    ${compareHtml(d)}
     <div class="adm-grid3">
       <section class="card adm-card">
-        <div class="card-head"><h2>ของรางวัลยอดนิยม</h2></div>
+        <div class="card-head"><h2>${one ? 'ของรางวัลที่ใช้ที่สาขานี้' : 'ของรางวัลยอดนิยม'}</h2></div>
         <div class="tbl-wrap"><table class="tbl">
-          <thead><tr><th>ของรางวัล</th><th class="num">แลก</th><th class="num">ใช้แล้ว</th></tr></thead>
+          <thead><tr><th>ของรางวัล</th>${one ? '' : '<th class="num">แลก</th>'}<th class="num">ใช้แล้ว</th></tr></thead>
           <tbody>${d.topRewards.length ? d.topRewards.map(r => `
-            <tr><td>${esc(r.name)}</td><td class="num">${fmtNum(r.issued)}</td><td class="num">${fmtNum(r.used)}</td></tr>`).join('') : emptyRow(3, 'ยังไม่มีการแลกในช่วงนี้')}
+            <tr><td>${esc(r.name)}</td>${one ? '' : `<td class="num">${fmtNum(r.issued)}</td>`}<td class="num">${fmtNum(r.used)}</td></tr>`).join('') : emptyRow(3, one ? 'ยังไม่มีคูปองที่ใช้ที่สาขานี้ในช่วงนี้' : 'ยังไม่มีการแลกในช่วงนี้')}
           </tbody></table></div>
       </section>
       <section class="card adm-card">
@@ -468,6 +544,37 @@ function renderOverview(d) {
       </section>
     </div>`;
   setupChart(d);
+}
+
+// ตารางเทียบสาขา (ตอนดูทุกสาขา) — กดแถวเพื่อดูเฉพาะสาขานั้น / แถวท้าย = รายการที่ไม่ผูกกับสาขา
+function compareHtml(d) {
+  const rows = d.byBranch || [];
+  if (!rows.length) return '';
+  const top = Math.max(1, ...rows.map(r => r.sales));
+  const total = rows.reduce((a, r) => a + r.sales, 0);
+  return `
+    <section class="card adm-card flush">
+      <div class="card-head pad"><h2>${icon('pin', 18)} เทียบสาขา</h2><span class="muted small">กดชื่อสาขาเพื่อดูเฉพาะสาขานั้น</span></div>
+      <div class="tbl-wrap"><table class="tbl compare">
+        <thead><tr><th>สาขา</th><th class="num">ยอดซื้อ</th><th class="share-col">สัดส่วน</th><th class="num">บิล</th><th class="num">ลูกค้า</th><th class="num">${esc(unit())}ที่แจก</th><th class="num">คูปองที่ใช้</th><th class="num">สมาชิกใหม่</th></tr></thead>
+        <tbody>${rows.map(r => {
+          const other = r.id === 'OTHER';
+          const pct = total ? Math.round((r.sales / total) * 100) : 0;
+          return `
+          <tr class="${other ? 'muted-row' : 'row-link'}" ${other ? '' : `data-act="branch-filter" data-id="${esc(r.id)}"`}>
+            <td class="strong">${other ? 'ออนไลน์ / หลังบ้าน / ไม่ระบุ' : `<a href="#overview">${esc(r.name)}</a>${r.status === 'ACTIVE' ? '' : ' <span class="chip">ปิดแล้ว</span>'}`}</td>
+            <td class="num">฿${fmtMoney(r.sales)}</td>
+            <td class="share-col"><div class="share"><i style="width:${((r.sales / top) * 100).toFixed(1)}%"></i></div><span class="muted small">${fmtNum(pct)}%</span></td>
+            <td class="num">${fmtNum(r.bills)}</td>
+            <td class="num">${fmtNum(r.buyers)}</td>
+            <td class="num">${fmtNum(r.pointsIssued)}</td>
+            <td class="num">${fmtNum(r.couponsUsed)}</td>
+            <td class="num">${fmtNum(r.newMembers)}</td>
+          </tr>`;
+        }).join('')}
+        </tbody></table></div>
+      ${rows.some(r => r.id === 'OTHER') ? '<p class="muted small pad">แถวสุดท้ายคือรายการก่อนเพิ่มสาขา ลูกค้าที่สมัครเองโดยไม่ได้สแกน QR สาขา และการปรับแต้มจากหลังบ้าน</p>' : ''}
+    </section>`;
 }
 
 // ค่าบนสุดของแกนให้เป็นเลขกลมๆ (1, 2, 5 × 10ⁿ) อ่านง่ายกว่าค่าสูงสุดจริง
@@ -547,7 +654,7 @@ function setupChart(d) {
  * ===================================================== */
 function loadMembers() {
   const m = S.members;
-  fetchView('adminMembers', { q: m.q, sort: m.sort, status: m.status, page: m.page }, renderMembers);
+  fetchView('adminMembers', { q: m.q, sort: m.sort, status: m.status, page: m.page, ...branchData() }, renderMembers);
 }
 
 function renderMembers(r) {
@@ -555,8 +662,9 @@ function renderMembers(r) {
   const opt = (value, label, cur) => `<option value="${value}" ${cur === value ? 'selected' : ''}>${label}</option>`;
   const owner = isOwner();
   document.getElementById('view').innerHTML = `
-    ${pageHead('สมาชิก', `${fmtNum(r.total)} คน${m.q || m.status ? ' (ตามที่ค้นหา)' : ''}`, exportBtn('members'))}
+    ${pageHead('สมาชิก', `${fmtNum(r.total)} คน${m.q || m.status ? ' (ตามที่ค้นหา)' : ''}${S.branch ? ` · สมัครที่${branchNote()}` : ''}`, exportBtn('members'))}
     <form class="filters" data-form="members" autocomplete="off">
+      ${branchSelect()}
       <div class="search-box">${icon('search', 18)}<input name="q" value="${esc(m.q)}" placeholder="${owner ? 'ค้นชื่อ / รหัสสมาชิก / เบอร์โทร' : 'ค้นชื่อ / รหัสสมาชิก / เบอร์โทรเต็ม'}" enterkeyhint="search"></div>
       <select name="sort" aria-label="เรียงตาม">
         ${opt('joined', 'สมัครล่าสุด', m.sort)}${opt('lastVisit', 'มาล่าสุด', m.sort)}${opt('points', `${esc(unit())}มากสุด`, m.sort)}${opt('spend', 'ยอดซื้อมากสุด', m.sort)}${opt('name', 'ชื่อ ก–ฮ', m.sort)}
@@ -569,7 +677,7 @@ function renderMembers(r) {
     ${owner ? '' : '<p class="muted small adm-note">ผู้จัดการเห็นเบอร์โทรแค่ 4 ตัวท้าย (เจ้าของร้านเห็นเต็ม)</p>'}
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>ชื่อ</th><th>รหัสสมาชิก</th><th>เบอร์โทร</th><th class="num">${esc(unit())}</th><th class="num">ยอดซื้อรวม</th><th class="num">ครั้งที่มา</th><th>สมัครเมื่อ</th><th>มาล่าสุด</th><th>สถานะ</th></tr></thead>
+        <thead><tr><th>ชื่อ</th><th>รหัสสมาชิก</th><th>เบอร์โทร</th><th class="num">${esc(unit())}</th><th class="num">ยอดซื้อรวม</th><th class="num">ครั้งที่มา</th><th>สมัครเมื่อ</th>${hasBranches() ? '<th>สมัครที่</th>' : ''}<th>มาล่าสุด</th><th>สถานะ</th></tr></thead>
         <tbody>${r.items.length ? r.items.map(x => `
           <tr class="row-link" data-act="member" data-id="${esc(x.memberId)}">
             <td class="strong">${memberLink(x.memberId, x.name)}</td>
@@ -579,9 +687,10 @@ function renderMembers(r) {
             <td class="num">฿${fmtMoney(x.totalSpend)}</td>
             <td class="num">${fmtNum(x.visitCount)}</td>
             <td class="nowrap">${fmtDate(x.joinedAt)}</td>
+            ${hasBranches() ? `<td class="nowrap">${esc(branchName(x.joinedBranch))}</td>` : ''}
             <td class="nowrap">${x.lastVisitAt ? fmtDate(x.lastVisitAt) : '-'}</td>
             <td>${x.status === 'ACTIVE' ? statusChip('active', 'ใช้งานได้') : statusChip('blocked', 'ถูกระงับ')}</td>
-          </tr>`).join('') : emptyRow(9, m.q ? 'ไม่พบสมาชิกที่ค้นหา' : 'ยังไม่มีสมาชิก')}
+          </tr>`).join('') : emptyRow(10, m.q || S.branch ? 'ไม่พบสมาชิกที่ค้นหา' : 'ยังไม่มีสมาชิก')}
         </tbody></table></div>
     </section>
     ${pager(r, 'members')}`;
@@ -621,6 +730,8 @@ function renderMember(r) {
           <dt>เบอร์โทร</dt><dd>${esc(fmtPhone(m.phone) || m.phoneMasked || '-')}</dd>
           ${owner ? `<dt>วันเกิด</dt><dd>${m.birthDate ? fmtDate(m.birthDate + 'T00:00:00+07:00') : '-'}</dd>` : ''}
           <dt>สมัครเมื่อ</dt><dd>${fmtDateTime(m.joinedAt)}</dd>
+          ${hasBranches() ? `<dt>สมัครที่สาขา</dt><dd>${esc(branchName(m.joinedBranch))}</dd>
+          <dt>มาบ่อยที่สุด</dt><dd>${m.topBranch ? `${esc(branchName(m.topBranch))} <span class="muted small">(${fmtNum(m.topBranchVisits)} บิลล่าสุด)</span>` : '-'}</dd>` : ''}
           <dt>มาล่าสุด</dt><dd>${m.lastVisitAt ? fmtDateTime(m.lastVisitAt) : '-'}</dd>
           <dt>ยอมรับนโยบาย</dt><dd>${m.consentAt ? `ฉบับที่ ${esc(m.consentVersion || '-')} · ${fmtDate(m.consentAt)}` : '-'}</dd>
           <dt>รับข่าวสาร</dt><dd>${m.marketingConsent ? 'ยินยอม' : 'ไม่ยินยอม'}</dd>
@@ -647,7 +758,7 @@ function renderMember(r) {
     <section class="card adm-card flush">
       <div class="card-head pad"><h2>ประวัติ${esc(unit())}</h2><span class="muted small">${fmtNum(r.history.length)} รายการล่าสุด</span></div>
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>วันเวลา</th><th>ประเภท</th><th>รายละเอียด</th><th class="num">ยอดซื้อ</th><th class="num">${esc(unit())}</th><th class="num">คงเหลือ</th><th>พนักงาน</th></tr></thead>
+        <thead><tr><th>วันเวลา</th><th>ประเภท</th><th>รายละเอียด</th><th class="num">ยอดซื้อ</th><th class="num">${esc(unit())}</th><th class="num">คงเหลือ</th><th>พนักงาน</th>${hasBranches() ? '<th>สาขา</th>' : ''}</tr></thead>
         <tbody>${r.history.length ? r.history.map(t => `
           <tr>
             <td class="nowrap">${fmtDateTime(t.date)}</td>
@@ -657,7 +768,8 @@ function renderMember(r) {
             <td class="num tx-points ${ptsClass(t.points)}">${signed(t.points)}</td>
             <td class="num">${fmtNum(t.balance)}</td>
             <td>${esc(t.staff === 'SYSTEM' ? 'ระบบ' : t.staff || '-')}</td>
-          </tr>`).join('') : emptyRow(7, 'ยังไม่มีรายการ')}
+            ${hasBranches() ? `<td class="nowrap">${esc(t.type === 'REDEEM' || t.type === 'WELCOME' ? '-' : branchName(t.branch))}</td>` : ''}
+          </tr>`).join('') : emptyRow(8, 'ยังไม่มีรายการ')}
         </tbody></table></div>
     </section>
     <section class="card adm-card flush">
@@ -671,7 +783,7 @@ function renderMember(r) {
             <td>${statusChip(c.status, COUPON_LABEL[c.status])}</td>
             <td class="nowrap">${fmtDateTime(c.issuedAt)}</td>
             <td class="nowrap">${fmtDate(c.expiresAt)}</td>
-            <td class="nowrap">${c.usedAt ? fmtDateTime(c.usedAt) + (c.usedBy ? ' · ' + esc(c.usedBy) : '') : '-'}</td>
+            <td class="nowrap">${c.usedAt ? fmtDateTime(c.usedAt) + (c.usedBy ? ' · ' + esc(c.usedBy) : '') + (hasBranches() && c.usedBranch ? ' · ' + esc(branchName(c.usedBranch)) : '') : '-'}</td>
           </tr>`).join('') : emptyRow(6, 'ยังไม่เคยแลกรางวัล')}
         </tbody></table></div>
     </section>`;
@@ -1352,7 +1464,7 @@ async function doSaveSettings(btn) {
  * ===================================================== */
 function loadTx() {
   const t = S.tx;
-  fetchView('adminTransactions', { ...rangeData(), type: t.type, staff: t.staff, q: t.q, page: t.page }, renderTx);
+  fetchView('adminTransactions', { ...rangeData(), ...branchData(), type: t.type, staff: t.staff, q: t.q, page: t.page }, renderTx);
 }
 
 function renderTx(r) {
@@ -1362,7 +1474,7 @@ function renderTx(r) {
   const staffList = t.staff && !r.staffNames.includes(t.staff) ? [t.staff, ...r.staffNames] : r.staffNames;
   const s = r.summary;
   document.getElementById('view').innerHTML = `
-    ${pageHead('รายการแต้ม', 'ทุกรายการที่ได้หรือใช้แต้ม เรียงจากใหม่ไปเก่า', exportBtn('transactions'))}
+    ${pageHead('รายการแต้ม', 'ทุกรายการที่ได้หรือใช้แต้ม เรียงจากใหม่ไปเก่า' + branchNote(), exportBtn('transactions'))}
     ${rangeBar()}
     <form class="filters" data-form="tx" autocomplete="off">
       <select name="type" aria-label="ประเภท">
@@ -1382,7 +1494,7 @@ function renderTx(r) {
     </div>
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>วันเวลา</th><th>สมาชิก</th><th>ประเภท</th><th>รายละเอียด</th><th class="num">ยอดซื้อ</th><th class="num">${esc(unit())}</th><th class="num">คงเหลือ</th><th>พนักงาน</th></tr></thead>
+        <thead><tr><th>วันเวลา</th><th>สมาชิก</th><th>ประเภท</th><th>รายละเอียด</th><th class="num">ยอดซื้อ</th><th class="num">${esc(unit())}</th><th class="num">คงเหลือ</th><th>พนักงาน</th>${hasBranches() ? '<th>สาขา</th>' : ''}</tr></thead>
         <tbody>${r.items.length ? r.items.map(x => `
           <tr class="row-link" data-act="member" data-id="${esc(x.memberId)}">
             <td class="nowrap">${fmtDateTime(x.date)}</td>
@@ -1393,7 +1505,8 @@ function renderTx(r) {
             <td class="num tx-points ${ptsClass(x.points)}">${signed(x.points)}</td>
             <td class="num">${fmtNum(x.balance)}</td>
             <td>${esc(x.staff === 'SYSTEM' ? 'ระบบ' : x.staff || '-')}</td>
-          </tr>`).join('') : emptyRow(8, 'ไม่มีรายการในช่วงนี้')}
+            ${hasBranches() ? `<td class="nowrap">${esc(x.type === 'REDEEM' || x.type === 'WELCOME' ? '-' : branchName(x.branch))}</td>` : ''}
+          </tr>`).join('') : emptyRow(9, 'ไม่มีรายการในช่วงนี้')}
         </tbody></table></div>
     </section>
     ${pager(r, 'tx')}`;
@@ -1404,7 +1517,7 @@ function renderTx(r) {
  * ===================================================== */
 function loadCoupons() {
   const c = S.coupons;
-  fetchView('adminCoupons', { ...rangeData(), status: c.status, page: c.page }, renderCoupons);
+  fetchView('adminCoupons', { ...rangeData(), ...branchData(), status: c.status, page: c.page }, renderCoupons);
 }
 
 function renderCoupons(r) {
@@ -1412,14 +1525,14 @@ function renderCoupons(r) {
   const tabs = [['', 'ทั้งหมด', r.all], ['ACTIVE', 'ใช้ได้', r.counts.ACTIVE], ['USED', 'ใช้แล้ว', r.counts.USED], ['EXPIRED', 'หมดอายุ', r.counts.EXPIRED]];
   if (r.counts.CANCELLED) tabs.push(['CANCELLED', 'ยกเลิก', r.counts.CANCELLED]);
   document.getElementById('view').innerHTML = `
-    ${pageHead('คูปอง', 'คูปองที่ลูกค้าแลกในช่วงที่เลือก และสถานะตอนนี้')}
+    ${pageHead('คูปอง', S.branch ? `คูปองที่ถูกใช้ที่${branchNote()} (ลูกค้าแลกในช่วงที่เลือก)` : 'คูปองที่ลูกค้าแลกในช่วงที่เลือก และสถานะตอนนี้')}
     ${rangeBar()}
     <div class="chips-scroll status-tabs">${tabs.map(([id, label, n]) => `
       <button type="button" class="chip-btn ${cur === id ? 'active' : ''}" data-act="coupon-status" data-id="${id}">${label} (${fmtNum(n)})</button>`).join('')}
     </div>
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>แลกเมื่อ</th><th>ของรางวัล</th><th>รหัสคูปอง</th><th>สมาชิก</th><th class="num">ใช้${esc(unit())}</th><th>สถานะ</th><th>ใช้ได้ถึง</th><th>ใช้เมื่อ · โดย</th></tr></thead>
+        <thead><tr><th>แลกเมื่อ</th><th>ของรางวัล</th><th>รหัสคูปอง</th><th>สมาชิก</th><th class="num">ใช้${esc(unit())}</th><th>สถานะ</th><th>ใช้ได้ถึง</th><th>ใช้เมื่อ · โดย</th>${hasBranches() ? '<th>ใช้ที่สาขา</th>' : ''}</tr></thead>
         <tbody>${r.items.length ? r.items.map(c => `
           <tr class="row-link" data-act="member" data-id="${esc(c.memberId)}">
             <td class="nowrap">${fmtDateTime(c.issuedAt)}</td>
@@ -1430,7 +1543,8 @@ function renderCoupons(r) {
             <td>${statusChip(c.status, COUPON_LABEL[c.status])}</td>
             <td class="nowrap">${fmtDate(c.expiresAt)}</td>
             <td class="nowrap">${c.usedAt ? fmtDateTime(c.usedAt) + (c.usedBy ? ' · ' + esc(c.usedBy) : '') : '-'}</td>
-          </tr>`).join('') : emptyRow(8, 'ไม่มีคูปองในช่วงนี้')}
+            ${hasBranches() ? `<td class="nowrap">${c.usedAt ? esc(branchName(c.usedBranch)) : '-'}</td>` : ''}
+          </tr>`).join('') : emptyRow(9, 'ไม่มีคูปองในช่วงนี้')}
         </tbody></table></div>
     </section>
     ${pager(r, 'coupons')}`;
@@ -1446,12 +1560,20 @@ function loadStaff() {
 // เจ้าของร้านแก้ได้ทุกคน / ผู้จัดการแก้ได้เฉพาะแคชเชียร์ / แก้ตัวเองไม่ได้ (Apps Script ตรวจซ้ำ)
 const canEdit = s => !s.isMe && (isOwner() || s.role === 'CASHIER');
 
+// สาขาของพนักงาน: เจ้าของร้านใช้ได้ทุกสาขาเสมอ / ALL = ทุกสาขา
+const allBranches = s => s.role === 'OWNER' || !s.branches || s.branches.includes('ALL');
+const staffBranchText = s => (allBranches(s) ? 'ทุกสาขา' : s.branches.map(branchName).join(', '));
+
 function renderStaff(r) {
   S.staffItems = r.items;
   const link = `https://liff.line.me/${cfg().liffId}/staff`;
   const pending = r.items.filter(s => s.status === 'PENDING').length;
+  // เลือกสาขา → แสดงคนที่ทำงานสาขานั้นได้ (รวมคนที่อยู่ทุกสาขา) / คนรออนุมัติยังไม่มีสาขา จึงแสดงเสมอ
+  const items = S.branch ? r.items.filter(s => s.status === 'PENDING' || allBranches(s) || s.branches.includes(S.branch)) : r.items;
+  const withBranch = hasBranches();
   document.getElementById('view').innerHTML = `
-    ${pageHead('พนักงาน', pending ? `<b>${fmtNum(pending)} คนรออนุมัติ</b>` : `${fmtNum(r.items.length)} คน`)}
+    ${pageHead('พนักงาน', (pending ? `<b>${fmtNum(pending)} คนรออนุมัติ</b>` : `${fmtNum(items.length)} คน`) + branchNote())}
+    ${withBranch ? `<div class="filters">${branchSelect()}</div>` : ''}
     <section class="card adm-card invite">
       <div class="grow">
         <b>เพิ่มพนักงานใหม่</b>
@@ -1462,11 +1584,12 @@ function renderStaff(r) {
     </section>
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>ชื่อ</th><th>บทบาท</th><th>สถานะ</th><th>ขอสิทธิ์เมื่อ</th><th></th></tr></thead>
-        <tbody>${r.items.length ? r.items.map(s => `
+        <thead><tr><th>ชื่อ</th><th>บทบาท</th>${withBranch ? '<th>สาขา</th>' : ''}<th>สถานะ</th><th>ขอสิทธิ์เมื่อ</th><th></th></tr></thead>
+        <tbody>${items.length ? items.map(s => `
           <tr>
             <td class="strong">${esc(s.name || '-')}${s.isMe ? ' <span class="chip">คุณ</span>' : ''}</td>
             <td>${esc(ROLE_LABEL[s.role] || s.role)}</td>
+            ${withBranch ? `<td>${s.status === 'PENDING' ? '-' : esc(staffBranchText(s))}</td>` : ''}
             <td>${statusChip(s.status, STAFF_STATUS_LABEL[s.status])}</td>
             <td class="nowrap">${s.requestedAt ? fmtDateTime(s.requestedAt) : '-'}</td>
             <td class="actions">${canEdit(s)
@@ -1474,7 +1597,7 @@ function renderStaff(r) {
                 ? `<button class="btn btn-sm btn-primary" data-act="staff-edit" data-id="${esc(s.userId)}">${icon('check', 16)} อนุมัติ</button>`
                 : `<button class="btn btn-sm" data-act="staff-edit" data-id="${esc(s.userId)}">${icon('edit', 16)} แก้ไข</button>`)
               : ''}</td>
-          </tr>`).join('') : emptyRow(5, 'ยังไม่มีพนักงาน')}
+          </tr>`).join('') : emptyRow(6, 'ยังไม่มีพนักงาน')}
         </tbody></table></div>
     </section>
     <section class="card adm-card">
@@ -1501,6 +1624,7 @@ function openStaffEdit(userId) {
         <select name="role" class="select">${roles.map(r => `<option value="${r}" ${r === s.role ? 'selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select></label>
       <label class="field"><span>สถานะ</span>
         <select name="status" class="select">${['ACTIVE', 'DISABLED', 'PENDING'].map(v => `<option value="${v}" ${v === status ? 'selected' : ''}>${STAFF_STATUS_LABEL[v]}</option>`).join('')}</select></label>
+      ${hasBranches() ? staffBranchField(s, approving) : ''}
       ${isOwner() ? '' : '<p class="muted small">ผู้จัดการแก้ได้เฉพาะแคชเชียร์ ถ้าต้องการตั้งผู้จัดการ ให้เจ้าของร้านทำ</p>'}
       <div class="modal-actions">
         <button class="btn" type="button" data-act="close">ยกเลิก</button>
@@ -1509,13 +1633,40 @@ function openStaffEdit(userId) {
     </form>`);
 }
 
+// เลือกสาขาที่พนักงานทำงานได้ (ติ๊ก "ทุกสาขา" = ไม่จำกัด รวมสาขาที่เพิ่มในอนาคต)
+// อนุมัติคนใหม่: ยังไม่ติ๊กอะไร ให้เจ้าของร้านเลือกเองว่าคนนี้อยู่สาขาไหน (ไม่ปล่อยเป็นทุกสาขาโดยไม่ตั้งใจ)
+function staffBranchField(s, approving) {
+  const all = !approving && (!s.branches || s.branches.includes('ALL'));
+  const open = S.branches.filter(b => b.status === 'ACTIVE' || (s.branches || []).includes(b.id));
+  return `
+    <fieldset class="field branch-field"><legend>สาขาที่ทำงานได้</legend>
+      <label class="check"><input type="checkbox" name="branchAll" data-branch-all ${all ? 'checked' : ''}><span><b>ทุกสาขา</b> (รวมสาขาที่เพิ่มทีหลัง)</span></label>
+      <div class="branch-checks">${open.map(b => `
+        <label class="check"><input type="checkbox" name="branch" value="${esc(b.id)}" ${!all && !approving && s.branches.includes(b.id) ? 'checked' : ''} ${all ? 'disabled' : ''}><span>${esc(b.name)}${b.status === 'ACTIVE' ? '' : ' (ปิดแล้ว)'}</span></label>`).join('')}
+      </div>
+      <small>เจ้าของร้านใช้ได้ทุกสาขาเสมอ / พนักงานหลายสาขาจะเลือกสาขาตอนเปิดหน้าพนักงาน</small>
+    </fieldset>`;
+}
+
+function toggleBranchAll(box) {
+  box.closest('form').querySelectorAll('input[name="branch"]').forEach(x => { x.disabled = box.checked; });
+}
+
+function staffBranchValue(form) {
+  if (!form.elements.branchAll) return undefined; // ร้านไม่มีสาขา → ไม่ส่ง (Apps Script ไม่แก้ช่องสาขา)
+  if (form.elements.branchAll.checked) return ['ALL'];
+  return [...form.querySelectorAll('input[name="branch"]:checked')].map(x => x.value);
+}
+
 async function saveStaff(form) {
+  const branches = staffBranchValue(form);
+  if (branches && !branches.length) return toast('เลือกอย่างน้อย 1 สาขา หรือติ๊ก "ทุกสาขา"', 'err');
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
   try {
     const r = await S.api.call('adminStaffUpdate', {
       userId: form.dataset.id, name: form.elements.name.value.trim(),
-      role: form.elements.role.value, status: form.elements.status.value
+      role: form.elements.role.value, status: form.elements.status.value, branches
     });
     closeModal();
     toast(`บันทึกแล้ว · ${r.staff.name} เป็น${ROLE_LABEL[r.staff.role]} (${STAFF_STATUS_LABEL[r.staff.status]})`, 'ok');
@@ -1523,6 +1674,187 @@ async function saveStaff(form) {
   } catch (e) {
     setBusy(btn, false);
     toast(e.message, 'err');
+  }
+}
+
+/* =====================================================
+ * สาขา: เพิ่ม / แก้ชื่อ / ปิดสาขา + QR สมัครสมาชิกของแต่ละสาขา (เจ้าของร้านแก้ ผู้จัดการดู)
+ * ===================================================== */
+const QR_JS = 'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js';
+
+function loadBranches() {
+  fetchView('adminBranches', {}, renderBranches);
+}
+
+// ลิงก์สมัครสมาชิกของสาขา: เปิดผ่าน LINE แล้วหน้าลูกค้าจำสาขาไว้จนสมัครเสร็จ
+const branchJoinLink = id => `https://liff.line.me/${cfg().liffId}?branch=${encodeURIComponent(id)}`;
+
+function renderBranches(r) {
+  S.branches = r.items.map(({ id, name, status, sort }) => ({ id, name, status, sort }));
+  S.branchItems = r.items;
+  const owner = isOwner();
+  const open = r.items.filter(b => b.status === 'ACTIVE').length;
+  const limit = branchLimit();
+  const quota = limit === Infinity ? '' : ` · แพ็กเกจของร้านเปิดได้ ${fmtNum(limit)} สาขา`;
+  document.getElementById('view').innerHTML = `
+    ${pageHead('สาขา', (r.items.length ? `เปิดอยู่ ${fmtNum(open)} จาก ${fmtNum(r.items.length)} สาขา` : 'ร้านนี้ยังไม่ได้เพิ่มสาขา') + quota,
+      owner ? `<button class="btn btn-sm btn-primary" data-act="branch-edit" data-id="">+ เพิ่มสาขา</button>` : '')}
+    ${r.items.length ? `
+    <section class="card adm-card flush">
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>สาขา</th><th class="num">พนักงาน</th><th class="num">สมาชิกที่สมัคร</th><th>สถานะ</th><th></th></tr></thead>
+        <tbody>${r.items.map(b => `
+          <tr>
+            <td><b>${esc(b.name)}</b><div class="m-sub mono">${esc(b.id)}</div></td>
+            <td class="num">${fmtNum(b.staff)}</td>
+            <td class="num">${fmtNum(b.members)}</td>
+            <td>${b.status === 'ACTIVE' ? statusChip('active', 'เปิดอยู่') : statusChip('inactive', 'ปิดแล้ว')}</td>
+            <td class="actions">
+              ${b.status === 'ACTIVE' ? `<button class="btn btn-sm" data-act="branch-qr" data-id="${esc(b.id)}">${icon('qr', 16)} QR สมัคร</button>` : ''}
+              ${owner ? `<button class="btn btn-sm" data-act="branch-edit" data-id="${esc(b.id)}">${icon('edit', 16)} แก้ไข</button>` : ''}
+            </td>
+          </tr>`).join('')}
+        </tbody></table></div>
+    </section>
+    <p class="muted small">สมัครออนไลน์ (ไม่ได้สแกน QR ของสาขา) ${fmtNum(r.online)} คน · สาขาที่ไม่ใช้แล้วให้กดแก้ไขแล้วเลือก "ปิดสาขา" (ไม่ลบ เพราะรายการเก่ายังอ้างถึงอยู่)</p>` : `
+    <section class="card adm-card empty-branches">
+      <div class="state-icon">${icon('pin', 36)}</div>
+      <h2>ร้านมีหลายสาขาใช่ไหม</h2>
+      <p class="muted">เพิ่มสาขาแล้วจะดูยอดซื้อ สมาชิกใหม่ และคูปองแยกตามสาขาได้ พนักงานจะเลือกสาขาตอนเปิดหน้าพนักงาน และแต่ละสาขามี QR สมัครสมาชิกของตัวเอง</p>
+      <p class="muted small">ร้านที่มีสาขาเดียวไม่ต้องเพิ่ม ระบบทำงานเหมือนเดิมทุกอย่าง · ${esc(unit())}ใช้ร่วมกันทุกสาขา</p>
+      ${owner ? `<button class="btn btn-primary" data-act="branch-edit" data-id="">+ เพิ่มสาขาแรก</button>` : '<p class="muted small">เจ้าของร้านเป็นคนเพิ่มสาขา</p>'}
+    </section>`}
+    <section class="card adm-card">
+      <div class="card-head"><h2>ระบบรู้ได้อย่างไรว่าเกิดที่สาขาไหน</h2></div>
+      <dl class="kv roles">
+        <dt>ยอดซื้อ / ใช้คูปอง</dt><dd>สาขาที่พนักงานเลือกไว้ในหน้าพนักงาน (ตั้งว่าใครอยู่สาขาไหนได้ที่เมนูพนักงาน)</dd>
+        <dt>สมาชิกใหม่</dt><dd>สาขาของ QR ที่ลูกค้าสแกนสมัคร (สมัครเองโดยไม่สแกน = ออนไลน์)</dd>
+        <dt>${esc(unit())}</dt><dd>ใช้ร่วมกันทุกสาขา สะสมที่สาขาหนึ่ง แลกที่อีกสาขาได้</dd>
+      </dl>
+    </section>`;
+}
+
+// เพดานตามแพ็กเกจนับเฉพาะสาขาที่เปิดอยู่ (ปิดสาขาเก่าแล้วเปิดสาขาใหม่แทนได้)
+function overBranchLimit(adding) {
+  const open = (S.branchItems || []).filter(x => x.status === 'ACTIVE').length;
+  if (!adding || open < branchLimit()) return false;
+  openModal(`
+    <div class="modal-head"><h2>สาขาครบตามแพ็กเกจแล้ว</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <p>แพ็กเกจของร้านเปิดสาขาพร้อมกันได้ <b>${fmtNum(branchLimit())} สาขา</b> (เปิดอยู่ ${fmtNum(open)})</p>
+    <p class="muted">ต้องการเพิ่มสาขา ติดต่อผู้ดูแลระบบเพื่ออัปเกรดแพ็กเกจ หรือปิดสาขาที่ไม่ใช้แล้วก่อน</p>
+    <div class="modal-actions"><button class="btn btn-primary" data-act="close">ตกลง</button></div>`);
+  return true;
+}
+
+function openBranchEdit(id) {
+  if (!isOwner() || !branchFeature()) return;
+  const b = id ? (S.branchItems || []).find(x => x.id === id) : null;
+  if (id && !b) return;
+  if (overBranchLimit(!b)) return;
+  openModal(`
+    <div class="modal-head"><h2>${b ? 'แก้ไขสาขา' : 'เพิ่มสาขา'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <form class="form" data-form="branch" data-id="${esc(b ? b.id : '')}" autocomplete="off">
+      <label class="field"><span>ชื่อสาขา <em>*</em></span><input name="name" value="${esc(b ? b.name : '')}" maxlength="40" placeholder="เช่น สาขาสยาม"></label>
+      <div class="form-grid">
+        <label class="field"><span>ลำดับที่แสดง</span><input name="sort" value="${esc(b ? b.sort : '')}" inputmode="numeric" placeholder="เลขน้อยขึ้นก่อน"></label>
+        <label class="field"><span>สถานะ</span>
+          <select name="status" class="select">
+            <option value="ACTIVE" ${!b || b.status === 'ACTIVE' ? 'selected' : ''}>เปิดอยู่</option>
+            <option value="INACTIVE" ${b && b.status !== 'ACTIVE' ? 'selected' : ''}>ปิดสาขา</option>
+          </select></label>
+      </div>
+      ${b ? '<p class="muted small">ปิดสาขาแล้ว พนักงานจะบันทึกให้สาขานี้ไม่ได้ และ QR สมัครของสาขานี้จะนับเป็นสมัครออนไลน์ (ข้อมูลเก่ายังอยู่ครบ)</p>' : ''}
+      <div class="modal-actions">
+        <button class="btn" type="button" data-act="close">ยกเลิก</button>
+        <button class="btn btn-primary" type="submit">บันทึก</button>
+      </div>
+    </form>`);
+}
+
+async function saveBranch(form) {
+  const branch = formValues(form, ['name', 'sort', 'status']);
+  branch.id = form.dataset.id;
+  if (!branch.name) return toast('กรุณากรอกชื่อสาขา', 'err');
+  // เปิดสาขาที่ปิดไปแล้วกลับมา ก็นับเป็นสาขาที่เปิดเพิ่ม
+  const before = branch.id ? (S.branchItems || []).find(x => x.id === branch.id) : null;
+  if (branch.status === 'ACTIVE' && before && before.status !== 'ACTIVE') {
+    const open = S.branchItems.filter(x => x.status === 'ACTIVE').length;
+    if (open >= branchLimit()) return toast(`แพ็กเกจของร้านเปิดได้ ${fmtNum(branchLimit())} สาขา ปิดสาขาอื่นก่อน หรือติดต่อผู้ดูแลระบบเพื่ออัปเกรด`, 'err');
+  }
+  const btn = form.querySelector('button[type="submit"]');
+  setBusy(btn, true);
+  try {
+    const r = await withRequestId('branch|' + JSON.stringify(branch), rid => S.api.call('adminBranchSave', { branch, requestId: rid }));
+    S.branches = r.items;
+    closeModal();
+    toast(`${r.created ? 'เพิ่ม' : 'บันทึก'} "${r.branch.name}" แล้ว${r.created ? ' · ตั้งสาขาให้พนักงานได้ที่เมนูพนักงาน' : ''}`, 'ok');
+    loadBranches();
+  } catch (e) {
+    setBusy(btn, false);
+    toast(e.message, 'err');
+  }
+}
+
+async function openBranchQr(id) {
+  const b = S.branches.find(x => x.id === id);
+  if (!b) return;
+  const link = branchJoinLink(id);
+  showLoading('กำลังสร้าง QR...');
+  try {
+    await loadScript(QR_JS);
+  } catch (e) {
+    return toast('สร้าง QR ไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วลองใหม่', 'err');
+  } finally {
+    hideLoading();
+  }
+  openModal(`
+    <div class="modal-head"><h2>QR สมัครสมาชิก · ${esc(b.name)}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="qr-box branch-qr">${qrSvg(link)}</div>
+    <p class="muted small center">พิมพ์ติดที่เคาน์เตอร์ของสาขานี้ ลูกค้าที่สแกนแล้วสมัครจะนับเป็นสมาชิกของ${esc(b.name)}</p>
+    <div class="copy-row"><code>${esc(link)}</code><button class="btn btn-sm" data-act="copy" data-text="${esc(link)}">${icon('copy', 16)} คัดลอก</button></div>
+    <div class="modal-actions">
+      <button class="btn" data-act="close">ปิด</button>
+      <button class="btn btn-primary" data-act="branch-qr-save" data-id="${esc(id)}">${icon('download', 16)} บันทึกเป็นรูป</button>
+    </div>`);
+}
+
+// รูปสำหรับพิมพ์: ชื่อร้าน + ชื่อสาขา + QR + คำอธิบาย (วาดลง canvas เอง ตัวหนังสือไม่เพี้ยนตามขนาดจอ)
+async function saveBranchQr(id, btn) {
+  const b = S.branches.find(x => x.id === id);
+  if (!b) return;
+  setBusy(btn, true, 'กำลังสร้างรูป...');
+  try {
+    const svg = qrSvg(branchJoinLink(id)).replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
+    const img = new Image();
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
+    await img.decode();
+    const W = 1000, H = 1300;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const x = c.getContext('2d');
+    const font = getComputedStyle(document.body).fontFamily;
+    x.fillStyle = '#ffffff'; x.fillRect(0, 0, W, H);
+    x.fillStyle = '#111111'; x.textAlign = 'center';
+    x.font = `800 60px ${font}`; x.fillText(cfg().name || '', W / 2, 120, W - 80);
+    x.font = `700 46px ${font}`; x.fillText(b.name, W / 2, 196, W - 80);
+    x.imageSmoothingEnabled = false; // QR ต้องคม ไม่ให้ขอบเบลอจนสแกนยาก
+    x.drawImage(img, 120, 250, 760, 760);
+    x.font = `700 44px ${font}`; x.fillText('สแกนเพื่อสมัครสมาชิก', W / 2, 1100, W - 80);
+    x.fillStyle = '#666666'; x.font = `400 32px ${font}`; x.fillText(`สะสม${unit()}ทุกครั้งที่ซื้อ`, W / 2, 1160, W - 80);
+    const blob = await new Promise(res => c.toBlob(res, 'image/png'));
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `QR-สมัครสมาชิก-${b.name}.png`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    toast('บันทึกรูป QR แล้ว', 'ok');
+  } catch (e) {
+    toast('บันทึกรูปไม่สำเร็จ ลองแคปหน้าจอ QR แทนได้', 'err');
+  } finally {
+    setBusy(btn, false);
   }
 }
 
