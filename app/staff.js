@@ -1,0 +1,632 @@
+// หน้าพนักงาน: สแกน QR ลูกค้า → บันทึกยอดซื้อ / ใช้คูปอง / ปรับแต้ม (ผู้จัดการ)
+// สิทธิ์ตรวจที่ Apps Script ทุกคำสั่ง (ชีต Staff) — หน้านี้แค่ซ่อน/แสดงปุ่มให้ตรงบทบาท
+import { loadShop, applyBrand } from './shop.js';
+import { initLine, IS_LOCAL } from './line.js';
+import { createApi, createRetryKeeper } from './api.js';
+import { applyDevParams, mountDevBar } from './devbar.js';
+import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, setBusy, loadScript, creditHtml, bootHtml } from './ui.js';
+
+const SCANNER_JS = 'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js';
+const ROLE_LABEL = { OWNER: 'เจ้าของร้าน', ADMIN: 'ผู้จัดการ', CASHIER: 'แคชเชียร์' };
+const TX_LABEL = { EARN: 'ยอดซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกรางวัล', ADJUST: 'ปรับแต้ม' };
+
+const app = document.getElementById('app');
+const S = {
+  shop: null, line: null, api: null, me: null, settings: null, view: null, flash: null, scanner: null, ready: false, testMode: false,
+  // หลายสาขา: hasBranches = ร้านมีสาขาที่เปิดอยู่ / branches = สาขาที่คนนี้เลือกได้ / branch = สาขาที่ทำงานอยู่ตอนนี้
+  hasBranches: false, branches: [], branch: null
+};
+// ข้อความในป๊อปอัป "กำลังโหลด" — null = ทำเบื้องหลัง (รายการล่าสุดโหลดเองหลังบันทึก ไม่ต้องบังจอ)
+const LOADING_TEXT = { staffLookup: 'กำลังค้นหา...', addPurchase: 'กำลังบันทึก...', useCoupon: 'กำลังบันทึก...', adjustPoints: 'กำลังบันทึก...', staffRecent: null };
+const withRequestId = createRetryKeeper();
+
+const cfg = () => S.shop.config;
+const unit = () => (cfg().texts && cfg().texts.pointUnit) || 'แต้ม';
+const isManager = () => S.me && (S.me.role === 'OWNER' || S.me.role === 'ADMIN');
+
+document.addEventListener('click', onClick);
+main();
+
+async function main() {
+  try {
+    S.shop = await loadShop();
+    applyDevParams(S.shop.id);
+    // หน้าโหลดสีกลางเหมือนหน้าลูกค้า (ไม่โชว์ชื่อ/สีร้าน กันสีกะพริบ — เหตุผลอยู่ที่ bootHtml ใน ui.js)
+    app.innerHTML = bootHtml('กำลังเปิดหน้าพนักงาน...');
+    S.line = await initLine(cfg().liffId);
+    S.api = createApi(S.shop, S.line, {
+      beforeRelogin: saveStaffDraft,
+      onRelogin: () => {
+        closeModal();
+        app.innerHTML = bootHtml('กำลังเชื่อมต่อ LINE ใหม่...');
+      },
+      loadingText: (action) => (!S.ready ? null : action in LOADING_TEXT ? LOADING_TEXT[action] : 'กำลังโหลด...')
+    });
+    if (IS_LOCAL) mountDevBar(S.shop, S.api, { openNow: !S.api.overridden });
+    const r = await S.api.call('staffMe', { withBrand: true });
+    if (r.brand) await applyBrand(S.shop, r.brand);
+    S.me = r.staff;
+    S.settings = r.settings || null;
+    S.testMode = !!r.testMode;
+    S.ready = true;
+    if (S.me.status !== 'ACTIVE') return renderPending(r.testMode);
+    S.hasBranches = !!r.hasBranches;
+    S.branches = r.branches || [];
+    if (S.hasBranches) {
+      if (!S.branches.length) return renderNoBranch();
+      // สาขาที่เลือกไว้ครั้งก่อนในเครื่องนี้ / อยู่สาขาเดียวก็เลือกให้เลย / หลายสาขาให้เลือกก่อนเริ่มงาน
+      S.branch = savedBranch() || (S.branches.length === 1 ? S.branches[0] : null);
+      if (!S.branch) return renderBranchPicker(true);
+    }
+    startMain();
+  } catch (e) {
+    renderFatal(e);
+  }
+}
+
+function startMain() {
+  renderMain(S.testMode);
+  loadRecent();
+  restoreStaffDraft();
+}
+
+function onClick(e) {
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  const id = el.dataset.id;
+  switch (el.dataset.act) {
+    case 'scan': scan(); break;
+    case 'clear': S.view = null; S.flash = null; renderResult(); focusSearch(); break;
+    case 'use-coupon': confirmUseCoupon(id); break;
+    case 'use-coupon-confirm': doUseCoupon(id, el); break;
+    case 'purchase-confirm': doPurchase(el); break;
+    case 'adjust-confirm': doAdjust(el); break;
+    case 'recent': loadRecent(); break;
+    case 'copy-id': copyText(S.me.userId); break;
+    case 'close': closeModal(); break;
+    case 'branch-pick': if (S.branches.length > 1) renderBranchPicker(false); break;
+    case 'branch-set': setBranch(id); break;
+    case 'reload': window.location.reload(); break;
+    case 'relogin': if (S.line) S.line.relogin(); break;
+  }
+}
+
+/* =====================================================
+ * หน้ารออนุมัติ / ผิดพลาด
+ * ===================================================== */
+function renderFatal(e) {
+  app.innerHTML = `
+    <div class="state-page">
+      <div class="state-icon">${icon('alert', 40)}</div>
+      <h1>เปิดหน้าพนักงานไม่สำเร็จ</h1>
+      <p>${esc((e && e.message) || 'เกิดข้อผิดพลาด')}</p>
+      ${IS_LOCAL && e && e.debug ? `<pre class="debug">${esc(e.debug)}</pre>` : ''}
+      <div class="stack">
+        ${e && (e.code === 'TOKEN_INVALID' || e.code === 'NO_TOKEN') ? '<button class="btn btn-primary" data-act="relogin">เข้าสู่ระบบใหม่</button>' : ''}
+        <button class="btn" data-act="reload">ลองใหม่</button>
+      </div>
+    </div>`;
+  if (IS_LOCAL && S.shop && !document.getElementById('devbar')) {
+    mountDevBar(S.shop, S.api || { url: '', overridden: false }, { openNow: true });
+  }
+}
+
+function renderPending(testMode) {
+  const disabled = S.me.status === 'DISABLED';
+  app.innerHTML = (testMode ? '<div class="test-banner">โหมดทดสอบ</div>' : '') + `
+    <div class="state-page">
+      <div class="state-icon">${icon(disabled ? 'shield' : 'clock', 40)}</div>
+      <h1>${disabled ? 'บัญชีนี้ถูกปิดสิทธิ์พนักงาน' : 'ส่งคำขอสิทธิ์พนักงานแล้ว'}</h1>
+      ${disabled ? '<p>ติดต่อเจ้าของร้านหากต้องการใช้งาน</p>' : `
+        <p>แจ้งเจ้าของร้านหรือผู้จัดการให้กดอนุมัติในหลังบ้าน (เมนูพนักงาน)</p>
+        <p>ชื่อที่ขึ้นในรายการรออนุมัติ: <b>${esc(S.me.name || '-')}</b></p>
+        <p class="muted small">อนุมัติแล้วกด "ตรวจสอบอีกครั้ง" ด้านล่าง</p>
+        <p class="muted small">รหัสผู้ใช้ของคุณ: <code>${esc(S.me.userId)}</code>
+          <button class="link" data-act="copy-id">${icon('copy', 14)} คัดลอก</button></p>`}
+      <button class="btn btn-primary" data-act="reload">${icon('refresh', 18)} ตรวจสอบอีกครั้ง</button>
+      ${creditHtml('credit-page')}
+    </div>`;
+}
+
+/* =====================================================
+ * สาขา (เฉพาะร้านที่มีหลายสาขา)
+ * ทุกรายการที่บันทึกจะติดสาขาที่เลือกไว้ — Apps Script ตรวจซ้ำว่าคนนี้อยู่สาขานั้นจริง
+ * ===================================================== */
+const branchKey = () => `crm_staff_branch:${S.shop.id}:${S.me.userId}`;
+
+// จำสาขาไว้ในเครื่อง: พนักงานที่ประจำเครื่องหน้าร้านไม่ต้องเลือกใหม่ทุกครั้งที่เปิด
+function savedBranch() {
+  try {
+    const id = localStorage.getItem(branchKey());
+    return S.branches.find(b => b.id === id) || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function setBranch(id) {
+  const b = S.branches.find(x => x.id === id);
+  if (!b) return;
+  const first = !S.branch || !document.getElementById('lookup');
+  S.branch = b;
+  try { localStorage.setItem(branchKey(), b.id); } catch (e) { /* เครื่องไม่ให้จำ ก็เลือกใหม่ครั้งหน้า */ }
+  closeModal();
+  if (first) return startMain();
+  const badge = document.getElementById('branch-badge');
+  if (badge) badge.outerHTML = branchBadge();
+  const title = document.getElementById('recent-title');
+  if (title) title.textContent = recentTitle();
+  toast(`เปลี่ยนเป็น${b.name}แล้ว`, 'ok');
+  loadRecent();
+}
+
+// ส่งไปกับทุกคำสั่งที่บันทึกข้อมูล (ร้านไม่มีสาขา = ไม่ส่ง)
+const branchData = () => (S.branch ? { branchId: S.branch.id } : {});
+
+function branchListHtml() {
+  return `<div class="branch-list">${S.branches.map(b => `
+    <button type="button" class="branch-option ${S.branch && S.branch.id === b.id ? 'active' : ''}" data-act="branch-set" data-id="${esc(b.id)}">
+      ${icon('pin', 20)}<span class="grow">${esc(b.name)}</span>${S.branch && S.branch.id === b.id ? icon('check', 18) : icon('right', 18)}
+    </button>`).join('')}</div>`;
+}
+
+// startup = ก่อนเริ่มงาน (เต็มหน้า) / ไม่ใช่ = เปลี่ยนสาขาระหว่างวัน (ป๊อปอัป)
+function renderBranchPicker(startup) {
+  if (startup) {
+    app.innerHTML = (S.testMode ? '<div class="test-banner">โหมดทดสอบ — ข้อมูลไม่ใช่ของจริง</div>' : '') + `
+      <div class="state-page branch-page">
+        <div class="state-icon">${icon('pin', 40)}</div>
+        <h1>วันนี้ทำงานสาขาไหน</h1>
+        <p class="muted">${esc(S.me.name)} · เลือกครั้งเดียว เครื่องนี้จะจำไว้ให้</p>
+        ${branchListHtml()}
+        ${creditHtml('credit-page')}
+      </div>`;
+    return;
+  }
+  openModal(`
+    <div class="modal-head"><h2>เปลี่ยนสาขา</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <p class="muted">รายการที่บันทึกหลังจากนี้จะเป็นของสาขาที่เลือก</p>
+    ${branchListHtml()}`);
+}
+
+function renderNoBranch() {
+  app.innerHTML = `
+    <div class="state-page">
+      <div class="state-icon">${icon('pin', 40)}</div>
+      <h1>ยังไม่มีสาขาที่คุณใช้งานได้</h1>
+      <p>สาขาของคุณอาจปิดไปแล้ว แจ้งเจ้าของร้านหรือผู้จัดการให้ตั้งสาขาในหลังบ้าน (เมนูพนักงาน)</p>
+      <button class="btn btn-primary" data-act="reload">${icon('refresh', 18)} ตรวจสอบอีกครั้ง</button>
+      ${creditHtml('credit-page')}
+    </div>`;
+}
+
+// ชื่อสาขาแสดงตัวใหญ่ที่หัวหน้าเสมอ กันลืมว่าบันทึกให้สาขาไหน (หลายสาขากดเปลี่ยนได้)
+function branchBadge() {
+  if (!S.branch) return '';
+  const many = S.branches.length > 1;
+  return `<button type="button" id="branch-badge" class="branch-badge" data-act="branch-pick" ${many ? '' : 'disabled'} aria-label="สาขา ${esc(S.branch.name)}${many ? ' (กดเพื่อเปลี่ยน)' : ''}">
+    ${icon('pin', 16)}<span>${esc(S.branch.name)}</span>${many ? `<small>เปลี่ยน</small>` : ''}</button>`;
+}
+
+const recentTitle = () => (S.branch ? `รายการล่าสุด · ${S.branch.name}` : 'รายการล่าสุดของร้าน');
+
+// สาขาที่เลือกไว้ใช้ไม่ได้แล้ว (ถูกปิด / ถูกย้ายสาขา) → ล้างที่จำไว้ แล้วให้เลือกใหม่
+function onBranchError(e) {
+  if (e.code !== 'BAD_BRANCH' && e.code !== 'NO_BRANCH') return false;
+  try { localStorage.removeItem(branchKey()); } catch (x) { /* ข้าม */ }
+  toast(e.message, 'err');
+  setTimeout(() => window.location.reload(), 1800); // โหลดรายชื่อสาขาล่าสุดจากหลังบ้าน
+  return true;
+}
+
+/* =====================================================
+ * หน้าหลักของพนักงาน
+ * ===================================================== */
+function renderMain(testMode) {
+  app.innerHTML = (testMode ? '<div class="test-banner">โหมดทดสอบ — ข้อมูลไม่ใช่ของจริง</div>' : '') + `
+    <header class="staff-head">
+      <div>
+        <div class="staff-shop">${esc(cfg().name)}</div>
+        <div class="staff-sub">หน้าพนักงาน · ทุก ${fmtMoney(S.settings.pointRate)} บาท = 1 ${esc(unit())}</div>
+        ${branchBadge()}
+      </div>
+      <div class="staff-me"><span>${esc(S.me.name)}</span><span class="chip">${esc(ROLE_LABEL[S.me.role] || S.me.role)}</span></div>
+    </header>
+    <main class="staff-main">
+      <section class="card">
+        <button class="btn btn-primary btn-xl btn-block" data-act="scan">${icon('scan', 26)} สแกน QR ลูกค้า</button>
+        <form id="lookup" class="lookup-row" autocomplete="off">
+          <input name="q" placeholder="หรือพิมพ์ รหัสสมาชิก / เบอร์โทร / รหัสคูปอง" autocapitalize="characters" enterkeyhint="search">
+          <button class="btn" type="submit" aria-label="ค้นหา">${icon('search', 20)}</button>
+        </form>
+      </section>
+      <div id="result"></div>
+      <section class="card">
+        <div class="card-head"><h2 id="recent-title">${esc(recentTitle())}</h2><button class="link" data-act="recent">${icon('refresh', 14)} รีเฟรช</button></div>
+        <div id="recent"><div class="muted small">กำลังโหลด...</div></div>
+      </section>
+      ${creditHtml('credit-page')}
+    </main>`;
+  document.getElementById('lookup').addEventListener('submit', e => {
+    e.preventDefault();
+    const q = e.target.q.value.trim();
+    if (q) lookup(q);
+  });
+}
+
+function focusSearch() {
+  const input = document.querySelector('#lookup input');
+  if (input) { input.value = ''; input.focus(); }
+}
+
+async function lookup(query) {
+  S.flash = null;
+  const box = document.getElementById('result');
+  box.innerHTML = `<section class="card"><div class="muted">${icon('search', 18)} กำลังค้นหา...</div></section>`;
+  try {
+    S.view = await S.api.call('staffLookup', { query });
+    renderResult();
+    const input = document.querySelector('#lookup input');
+    if (input) input.value = '';
+  } catch (e) {
+    S.view = null;
+    box.innerHTML = `<section class="card notice notice-err">${icon('alert', 20)} ${esc(e.message)}</section>`;
+  }
+  box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+/* =====================================================
+ * ผลการค้นหา: สมาชิก หรือ คูปอง
+ * ===================================================== */
+function renderResult() {
+  const box = document.getElementById('result');
+  if (!box) return;
+  const v = S.view;
+  if (!v) { box.innerHTML = ''; return; }
+  box.innerHTML = v.kind === 'coupon' ? couponView(v) : memberView(v);
+  const form = document.getElementById('purchase');
+  if (form) {
+    const amount = form.amount;
+    const update = () => {
+      const a = parseAmount(amount.value);
+      const pts = a > 0 ? Math.floor(a / S.settings.pointRate + 1e-9) : 0;
+      document.getElementById('preview').innerHTML = a > 0
+        ? `ลูกค้าจะได้ <b>+${fmtNum(pts)}</b> ${esc(unit())}${pts === 0 ? ' (ยอดไม่ถึงเกณฑ์ แต่จะบันทึกยอดซื้อ)' : ''}`
+        : `ทุก ${fmtMoney(S.settings.pointRate)} บาท = 1 ${esc(unit())}`;
+    };
+    amount.addEventListener('input', update);
+    form.addEventListener('submit', onPurchaseSubmit);
+    update();
+    if (!S.flash) amount.focus();
+  }
+  const adj = document.getElementById('adjust');
+  if (adj) adj.addEventListener('submit', onAdjustSubmit);
+}
+
+function flashHtml() {
+  const f = S.flash;
+  if (!f) return '';
+  return `<div class="flash ${f.kind}">${icon(f.kind === 'ok' ? 'check' : 'alert', 22)}<div>${f.html}</div></div>`;
+}
+
+function memberView(v) {
+  const m = v.member;
+  const blocked = m.status !== 'ACTIVE';
+  return `
+    <section class="card result">
+      ${flashHtml()}
+      <div class="member-row">
+        <div class="avatar sm">${icon('user', 22)}</div>
+        <div class="grow">
+          <div class="m-name">${esc(m.name)}</div>
+          <div class="m-sub">${esc(m.memberId)}${m.phoneMasked ? ' · ' + esc(m.phoneMasked) : ''}</div>
+        </div>
+        <button class="icon-btn" data-act="clear" aria-label="ลูกค้าคนถัดไป">${icon('x')}</button>
+      </div>
+      <div class="stats">
+        <div><b>${fmtNum(m.points)}</b><span>${esc(unit())}คงเหลือ</span></div>
+        <div><b>${fmtNum(m.visitCount)}</b><span>ครั้งที่มา</span></div>
+        <div><b>฿${fmtMoney(m.totalSpend)}</b><span>ยอดซื้อรวม</span></div>
+      </div>
+      ${blocked ? `<div class="notice notice-err">${icon('shield', 18)} สมาชิกนี้ถูกระงับ บันทึกแต้มไม่ได้</div>` : `
+      <form id="purchase" class="purchase" autocomplete="off">
+        <label class="field"><span>ยอดซื้อ (บาท)</span>
+          <input name="amount" class="input-xl" inputmode="decimal" placeholder="0" enterkeyhint="done"></label>
+        <div class="preview" id="preview"></div>
+        <label class="field"><span>หมายเหตุ <small>(ไม่บังคับ เช่น เลขที่บิล)</small></span>
+          <input name="note" maxlength="100"></label>
+        <button class="btn btn-success btn-block btn-lg" type="submit">${icon('receipt', 20)} บันทึกยอดซื้อ</button>
+      </form>`}
+      ${v.coupons && v.coupons.length && !blocked ? `
+        <div class="sub-head">คูปองที่ใช้ได้ (${v.coupons.length})</div>
+        <div class="coupon-list">${v.coupons.map(c => `
+          <div class="coupon-mini">
+            <div class="grow"><b>${esc(c.name)}</b><div class="m-sub">${esc(c.code)} · ถึง ${fmtDate(c.expiresAt)}</div></div>
+            <button class="btn btn-sm" data-act="use-coupon" data-id="${esc(c.code)}">ใช้คูปอง</button>
+          </div>`).join('')}</div>` : ''}
+      ${isManager() ? `
+        <details class="adjust">
+          <summary>${icon('coins', 18)} ปรับแต้ม (ผู้จัดการ)</summary>
+          <form id="adjust" autocomplete="off">
+            <div class="adjust-row">
+              <label class="field"><span>จำนวน (+ เพิ่ม / − ลด)</span><input name="points" inputmode="numeric" placeholder="เช่น 50 หรือ -20"></label>
+            </div>
+            <label class="field"><span>เหตุผล <em>*</em></span><input name="reason" maxlength="150" placeholder="เช่น แก้ยอดที่บันทึกผิด"></label>
+            <button class="btn btn-block" type="submit">ปรับแต้ม</button>
+          </form>
+        </details>` : ''}
+    </section>`;
+}
+
+function couponView(v) {
+  const c = v.coupon;
+  const label = { ACTIVE: 'ใช้ได้', USED: 'ใช้แล้ว', EXPIRED: 'หมดอายุ', CANCELLED: 'ยกเลิก' }[c.status] || c.status;
+  return `
+    <section class="card result">
+      ${flashHtml()}
+      <div class="member-row">
+        <div class="avatar sm">${icon('ticket', 22)}</div>
+        <div class="grow"><div class="m-name">${esc(c.name)}</div><div class="m-sub">${esc(c.code)}</div></div>
+        <button class="icon-btn" data-act="clear" aria-label="ปิด">${icon('x')}</button>
+      </div>
+      <dl class="kv">
+        <dt>สถานะ</dt><dd><span class="status status-${esc(c.status.toLowerCase())}">${esc(label)}</span></dd>
+        <dt>เจ้าของ</dt><dd>${v.member ? esc(v.member.name) + ' · ' + esc(v.member.memberId) : '-'}</dd>
+        <dt>ใช้ได้ถึง</dt><dd>${fmtDate(c.expiresAt)}</dd>
+        ${c.usedAt ? `<dt>ใช้เมื่อ</dt><dd>${fmtDateTime(c.usedAt)}</dd>` : ''}
+      </dl>
+      ${c.status === 'ACTIVE'
+        ? `<button class="btn btn-success btn-block btn-lg" data-act="use-coupon" data-id="${esc(c.code)}">${icon('check', 20)} ยืนยันใช้คูปอง</button>`
+        : ''}
+    </section>`;
+}
+
+/* =====================================================
+ * บันทึกยอดซื้อ
+ * ===================================================== */
+function parseAmount(s) {
+  const n = Number(String(s || '').replace(/[,\s฿]/g, ''));
+  return isFinite(n) ? Math.round(n * 100) / 100 : NaN;
+}
+
+function onPurchaseSubmit(e) {
+  e.preventDefault();
+  const f = e.target;
+  const amount = parseAmount(f.amount.value);
+  if (!(amount > 0)) return toast('กรุณาใส่ยอดซื้อ', 'err');
+  if (amount > S.settings.maxPurchase) return toast(`ยอดเกิน ${fmtNum(S.settings.maxPurchase)} บาทต่อบิล`, 'err');
+  const pts = Math.floor(amount / S.settings.pointRate + 1e-9);
+  const m = S.view.member;
+  S.pendingPurchase = { memberId: m.memberId, amount, note: f.note.value.trim() };
+
+  // ยอดสูงกว่าปกติ → ให้ยืนยันอีกครั้ง (กันพิมพ์เลขเกิน เช่น 5000 แทน 500)
+  if (amount >= S.settings.confirmOver) {
+    openModal(`
+      <div class="modal-head"><h2>ตรวจสอบยอดอีกครั้ง</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+      <div class="confirm-cost"><b>฿${fmtMoney(amount)}</b><span>ยอดซื้อของ ${esc(m.name)}</span>
+        <div class="muted">ได้ +${fmtNum(pts)} ${esc(unit())}</div></div>
+      <p class="notice">ยอดนี้สูงกว่าปกติ กรุณาตรวจตัวเลขให้ถูกต้องก่อนบันทึก</p>
+      <div class="modal-actions">
+        <button class="btn" data-act="close">แก้ไข</button>
+        <button class="btn btn-success" data-act="purchase-confirm">ถูกต้อง บันทึก</button>
+      </div>`);
+    return;
+  }
+  doPurchase(f.querySelector('button[type="submit"]'));
+}
+
+async function doPurchase(btn) {
+  const p = S.pendingPurchase;
+  if (!p) return;
+  setBusy(btn, true);
+  try {
+    const key = ['purchase', p.memberId, p.amount, p.note, S.branch ? S.branch.id : ''].join('|');
+    const r = await withRequestId(key, rid => S.api.call('addPurchase', { ...p, ...branchData(), requestId: rid }));
+    closeModal();
+    S.pendingPurchase = null;
+    if (r.member) S.view.member = r.member;
+    S.flash = r.duplicate
+      ? { kind: 'warn', html: 'รายการนี้บันทึกไปแล้ว (ระบบไม่บันทึกซ้ำ)' }
+      : { kind: 'ok', html: `บันทึก ฿${fmtMoney(r.amount)} → <b>+${fmtNum(r.pointsAdded)} ${esc(unit())}</b> · คงเหลือ ${fmtNum(r.balance)}` };
+    renderResult();
+    toast('บันทึกแล้ว', 'ok');
+    loadRecent();
+  } catch (e) {
+    setBusy(btn, false);
+    if (onBranchError(e)) return;
+    toast(e.code === 'NETWORK' ? e.message + ' (กดบันทึกอีกครั้งได้ ระบบจะไม่บันทึกซ้ำ)' : e.message, 'err');
+  }
+}
+
+/* =====================================================
+ * ใช้คูปอง
+ * ===================================================== */
+function findCoupon(code) {
+  const v = S.view;
+  if (!v) return null;
+  if (v.kind === 'coupon') return v.coupon.code === code ? v.coupon : null;
+  return (v.coupons || []).find(c => c.code === code) || null;
+}
+
+function confirmUseCoupon(code) {
+  const c = findCoupon(code);
+  if (!c) return;
+  openModal(`
+    <div class="modal-head"><h2>ยืนยันใช้คูปอง</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="confirm-title">${esc(c.name)}</div>
+    <p class="muted">${esc(c.code)} · ใช้แล้วจะนำกลับมาใช้อีกไม่ได้</p>
+    <div class="modal-actions">
+      <button class="btn" data-act="close">ยกเลิก</button>
+      <button class="btn btn-success" data-act="use-coupon-confirm" data-id="${esc(c.code)}">ยืนยันใช้คูปอง</button>
+    </div>`);
+}
+
+async function doUseCoupon(code, btn) {
+  setBusy(btn, true, 'กำลังบันทึก...');
+  try {
+    const r = await withRequestId('coupon|' + code, rid => S.api.call('useCoupon', { code, ...branchData(), requestId: rid }));
+    closeModal();
+    if (S.view.kind === 'coupon') {
+      S.view.coupon = r.coupon;
+    } else {
+      S.view.coupons = (S.view.coupons || []).filter(c => c.code !== code);
+    }
+    S.flash = { kind: 'ok', html: `ใช้คูปอง <b>${esc(r.coupon.name)}</b> แล้ว — มอบของ/ส่วนลดให้ลูกค้าได้เลย` };
+    renderResult();
+    toast('ใช้คูปองแล้ว', 'ok');
+  } catch (e) {
+    setBusy(btn, false);
+    closeModal();
+    if (onBranchError(e)) return;
+    toast(e.message, 'err');
+  }
+}
+
+/* =====================================================
+ * ปรับแต้ม (OWNER / ADMIN — Apps Script ตรวจสิทธิ์ซ้ำอีกชั้น)
+ * ===================================================== */
+function onAdjustSubmit(e) {
+  e.preventDefault();
+  const f = e.target;
+  const points = Number(String(f.points.value).replace(/[,\s]/g, '').replace('−', '-'));
+  const reason = f.reason.value.trim();
+  if (!Number.isInteger(points) || points === 0) return toast('ใส่จำนวนแต้มเป็นจำนวนเต็ม เช่น 50 หรือ -20', 'err');
+  if (reason.length < 3) return toast('กรุณาใส่เหตุผล', 'err');
+  const m = S.view.member;
+  S.pendingAdjust = { memberId: m.memberId, points, reason };
+  openModal(`
+    <div class="modal-head"><h2>ยืนยันปรับแต้ม</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="confirm-cost"><b>${points > 0 ? '+' : ''}${fmtNum(points)}</b><span>${esc(unit())} · ${esc(m.name)}</span>
+      <div class="muted">คงเหลือ ${fmtNum(m.points)} → ${fmtNum(m.points + points)}</div></div>
+    <p class="muted">เหตุผล: ${esc(reason)}</p>
+    <div class="modal-actions">
+      <button class="btn" data-act="close">ยกเลิก</button>
+      <button class="btn btn-primary" data-act="adjust-confirm">ยืนยัน</button>
+    </div>`);
+}
+
+async function doAdjust(btn) {
+  const p = S.pendingAdjust;
+  if (!p) return;
+  setBusy(btn, true);
+  try {
+    const key = ['adjust', p.memberId, p.points, p.reason, S.branch ? S.branch.id : ''].join('|');
+    const r = await withRequestId(key, rid => S.api.call('adjustPoints', { ...p, ...branchData(), requestId: rid }));
+    closeModal();
+    S.pendingAdjust = null;
+    if (r.member) S.view.member = r.member;
+    S.flash = { kind: 'ok', html: `ปรับ ${r.pointsAdded > 0 ? '+' : ''}${fmtNum(r.pointsAdded)} ${esc(unit())} · คงเหลือ ${fmtNum(r.balance)}` };
+    renderResult();
+    loadRecent();
+  } catch (e) {
+    setBusy(btn, false);
+    if (onBranchError(e)) return;
+    toast(e.message, 'err');
+  }
+}
+
+/* =====================================================
+ * รายการล่าสุด
+ * ===================================================== */
+async function loadRecent() {
+  const box = document.getElementById('recent');
+  if (!box) return;
+  try {
+    const r = await S.api.call('staffRecent', branchData());
+    box.innerHTML = r.items.length ? `<div class="recent">${r.items.map(t => `
+      <div class="recent-row">
+        <div class="grow">
+          <b>${esc(t.memberName || t.memberId)}</b>
+          <div class="m-sub">${esc(TX_LABEL[t.type] || t.type)}${t.type === 'EARN' ? ' ฿' + fmtMoney(t.amount) : ''} · ${fmtDateTime(t.date)}${t.staff ? ' · ' + esc(t.staff) : ''}</div>
+        </div>
+        <div class="tx-points ${t.points > 0 ? 'plus' : t.points < 0 ? 'minus' : ''}">${t.points > 0 ? '+' : ''}${fmtNum(t.points)}</div>
+      </div>`).join('')}</div>` : '<div class="muted small">ยังไม่มีรายการ</div>';
+  } catch (e) {
+    box.innerHTML = `<div class="muted small">${esc(e.message)}</div>`;
+  }
+}
+
+/* =====================================================
+ * สแกน QR: กล้องของแอป LINE ก่อน → ไม่ได้ก็ใช้กล้องผ่านเว็บ (html5-qrcode แบบเดียวกับหน้าสแกนคอนเสิร์ต)
+ * ===================================================== */
+async function scan() {
+  if (S.line.scanCode) {
+    try {
+      const value = await S.line.scanCode();
+      if (value) lookup(value);
+      return;
+    } catch (e) {
+      console.warn('LINE scan ใช้ไม่ได้ ใช้กล้องผ่านเว็บแทน', e);
+    }
+  }
+  openCamera();
+}
+
+async function openCamera() {
+  const box = openModal(`
+    <div class="modal-head"><h2>สแกน QR ลูกค้า</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div id="reader" class="reader"><div class="muted center">กำลังเปิดกล้อง...</div></div>
+    <p class="muted center small">ส่อง QR สมาชิกหรือ QR คูปองให้อยู่ในกรอบ</p>`, { onClose: stopCamera });
+  try {
+    await loadScript(SCANNER_JS);
+    if (!document.getElementById('reader')) return; // ปิดป๊อปอัปไปก่อนกล้องเปิด
+    S.scanner = new window.Html5Qrcode('reader');
+    await S.scanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: (w, h) => { const s = Math.floor(Math.min(w, h) * 0.75); return { width: s, height: s }; } },
+      text => { closeModal(); lookup(text); },
+      () => {}
+    );
+  } catch (e) {
+    const reader = box.querySelector('#reader');
+    if (reader) reader.innerHTML = `<div class="notice notice-err">เปิดกล้องไม่ได้ — อนุญาตการใช้กล้อง หรือพิมพ์รหัสในช่องค้นหาแทน<br><small>${esc(e && e.message ? e.message : e)}</small></div>`;
+  }
+}
+
+function stopCamera() {
+  const s = S.scanner;
+  S.scanner = null;
+  if (s && s.isScanning) s.stop().catch(() => {});
+}
+
+/* =====================================================
+ * งานค้างตอนต้องเชื่อมต่อ LINE ใหม่ (หน้าเว็บโหลดใหม่): จำลูกค้าที่เปิดอยู่ + ยอดที่พิมพ์ไว้
+ * หลังโหลดใหม่ค้นลูกค้าคนเดิมและเติมยอดให้ พนักงานแค่ตรวจแล้วกดบันทึกอีกครั้ง
+ * (คำขอที่ถูกปฏิเสธเพราะรหัส LINE ยังไม่ได้บันทึกอะไร จึงไม่มีทางบันทึกซ้ำ)
+ * ===================================================== */
+const STAFF_DRAFT_KEY = 'crm_staff_draft';
+
+function saveStaffDraft() {
+  const v = S.view;
+  if (!v) return;
+  const f = document.getElementById('purchase');
+  sessionStorage.setItem(STAFF_DRAFT_KEY, JSON.stringify({
+    query: v.kind === 'coupon' ? v.coupon.code : v.member.memberId,
+    amount: f ? f.amount.value : '',
+    note: f ? f.note.value : ''
+  }));
+}
+
+async function restoreStaffDraft() {
+  let draft = null;
+  try {
+    draft = JSON.parse(sessionStorage.getItem(STAFF_DRAFT_KEY) || 'null');
+    sessionStorage.removeItem(STAFF_DRAFT_KEY);
+  } catch (e) { /* ไม่มีหรืออ่านไม่ได้ */ }
+  if (!draft || !draft.query) return;
+  await lookup(draft.query);
+  if (!S.view) return;
+  S.flash = { kind: 'warn', html: 'เชื่อมต่อ LINE ใหม่แล้ว รายการยังไม่ได้บันทึก — ตรวจยอดแล้วกดอีกครั้ง' };
+  renderResult();
+  const f = document.getElementById('purchase');
+  if (f && draft.amount) {
+    f.amount.value = draft.amount;
+    f.note.value = draft.note || '';
+    f.amount.dispatchEvent(new Event('input'));
+  }
+}
+
+function copyText(text) {
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast('คัดลอกแล้ว', 'ok'), () => toast(text));
+  else toast(text);
+}
