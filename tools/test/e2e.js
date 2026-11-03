@@ -1,0 +1,217 @@
+// ทดสอบหน้าเว็บจริงใน Chrome: ลูกค้าสมัคร → พนักงานเพิ่มแต้ม → ลูกค้าแลก → พนักงานใช้คูปอง
+// ต้องเปิด 2 อย่างก่อน: python3 tools/dev-server.py 8002  และ  node tools/test/gas-server.js
+// ภาพหน้าจอจะอยู่ใน tools/test/shots/
+const { launch, sleep } = require('./cdp');
+const path = require('path');
+const OUT = path.join(__dirname, 'shots');
+require('fs').mkdirSync(OUT, { recursive: true });
+
+const WEB = 'http://localhost:8002';
+const API = 'http://localhost:8102';
+let pass = 0, fail = 0;
+const ok = (c, m, x) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ ' + m + (x !== undefined ? '  → ' + JSON.stringify(x).slice(0, 300) : '')); } };
+const adminOp = (op) => fetch(API + '/__admin', { method: 'POST', body: JSON.stringify(op) }).then(r => r.json());
+
+(async () => {
+  const b = await launch({ profile: path.join(require('os').tmpdir(), 'line-crm-e2e-chrome') });
+  try {
+    console.log('\n[ลูกค้า] สมัครสมาชิก');
+    await b.nav(`${WEB}/khamwan?api=${encodeURIComponent(API)}&user=U_TEST_1&name=${encodeURIComponent('สมชาย ใจดี')}`);
+    await b.waitFor(`document.querySelector('#reg')`, 10000, 'ฟอร์มสมัคร');
+    ok((await b.eval('location.search')) === '', 'ค่าทดสอบใน URL ถูกเก็บแล้วลบออกจากลิงก์');
+    ok(/โหมดทดสอบ/.test(await b.text()), 'แสดงแถบโหมดทดสอบ');
+    ok(/รับทันที 20 พอยท์/.test(await b.text()), 'แสดงแต้มต้อนรับจากชีต Settings + หน่วย "พอยท์" จาก config');
+    await b.shot(path.join(OUT, '01-register.png'));
+    await b.click('#reg button[type=submit]');
+    ok(/กรุณากรอกชื่อ/.test(await b.text('#reg-error')), 'ไม่กรอกชื่อ → แจ้งเตือน');
+    await b.type('#reg input[name=firstName]', 'สมชาย');
+    await b.click('#reg button[type=submit]');
+    ok(/นามสกุล/.test(await b.text('#reg-error')), 'ไม่กรอกนามสกุล → แจ้งเตือน');
+    await b.type('#reg input[name=lastName]', 'ใจดี');
+    await b.click('#reg button[type=submit]');
+    ok(/วันเกิด/.test(await b.text('#reg-error')), 'ไม่เลือกวันเกิด → แจ้งเตือน');
+    ok((await b.eval(`document.querySelector('#reg select[name=bdYear] option:nth-child(2)').value`)) === String(new Date().getFullYear() + 542), 'ปีเกิดเป็น พ.ศ.');
+    await b.eval(`(() => { const f = document.querySelector('#reg'); f.bdDay.value = '31'; f.bdMonth.value = '4'; f.bdYear.value = '2538'; return true; })()`);
+    await b.click('#reg button[type=submit]');
+    ok(/วันเกิดไม่ถูกต้อง/.test(await b.text('#reg-error')), 'เลือก 31 เมษายน → แจ้งว่าวันที่ไม่มีจริง');
+    await b.eval(`(() => { const f = document.querySelector('#reg'); f.bdDay.value = '18'; f.bdMonth.value = '2'; f.bdYear.value = '2538'; return true; })()`);
+    await b.click('#reg button[type=submit]');
+    ok(/เบอร์โทร/.test(await b.text('#reg-error')), 'ไม่กรอกเบอร์ → แจ้งเตือน');
+    await b.type('#reg input[name=phone]', '081-234-5678');
+    await b.click('#reg button[type=submit]');
+    ok(/นโยบาย/.test(await b.text('#reg-error')), 'ไม่ติ๊กยอมรับ → แจ้งเตือน');
+    await b.click('[data-act=privacy]');
+    await b.waitFor(`document.querySelector('.modal .prose')`);
+    ok(/ร้านเก็บชื่อ/.test(await b.text('.modal')), 'กดลิงก์นโยบาย → แสดงข้อความนโยบายของร้าน');
+    await b.click('.modal [data-act=close]');
+    await b.eval(`document.querySelector('#reg input[name=consentPrivacy]').click()`);
+    await b.click('#reg button[type=submit]');
+    await b.waitFor(`document.querySelector('.member-card')`, 10000, 'บัตรสมาชิก');
+    await b.waitFor(`document.querySelector('.modal')`, 3000, 'ป๊อปอัปต้อนรับ');
+    ok(/20 พอยท์/.test(await b.text('.modal')), 'ป๊อปอัปต้อนรับแต้ม 20');
+    await b.shot(path.join(OUT, '02-welcome.png'));
+    await b.click('.modal [data-act=close]');
+    const memberId = await b.eval(`document.querySelector('.mc-bottom b').innerText`);
+    ok(/^KW-[A-Z2-9]{6}$/.test(memberId), 'บัตรแสดงรหัสสมาชิก ' + memberId);
+    ok((await b.text('.mc-points')).startsWith('20'), 'บัตรแสดง 20 พอยท์');
+    await b.shot(path.join(OUT, '03-home.png'), { full: true });
+    await b.click('[data-act=qr]');
+    await b.waitFor(`document.querySelector('.modal .qr-svg')`, 5000, 'QR สมาชิก');
+    ok(true, 'QR สมาชิกสร้างในเครื่อง (svg)');
+    await b.shot(path.join(OUT, '04-member-qr.png'));
+    await b.click('.modal [data-act=close]');
+
+    console.log('\n[ลูกค้า] เปิดครั้งถัดไป เห็นบัตรจากครั้งก่อนทันที');
+    const cachedRaw = await b.eval(`Object.keys(localStorage).filter(k => k.startsWith('crm_last:khamwan:')).map(k => localStorage.getItem(k)).join('')`);
+    ok(cachedRaw.includes(memberId) && !cachedRaw.includes('0812345678') && !cachedRaw.includes('1995-02-18'), 'จำบัตรสมาชิกไว้ในเครื่อง โดยไม่เก็บเบอร์โทรและวันเกิด');
+    // หน่วงคำขอ 3 วินาที เหมือน Apps Script จริง แล้วเปิดหน้าใหม่
+    const slow = await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => { const f = window.fetch; window.fetch = async (...a) => { await new Promise(r => setTimeout(r, 3000)); return f(...a); }; })()` });
+    await b.nav(`${WEB}/khamwan`);
+    await b.waitFor(`document.querySelector('.member-card')`, 1500, 'บัตรสมาชิกจากครั้งก่อน (ภายใน 1.5 วินาที)');
+    ok(true, 'เปิดหน้าใหม่ เห็นบัตรสมาชิกทันที ไม่ต้องรอ Apps Script 3 วินาที');
+    ok(!(await b.eval(`!!document.querySelector('#loading-pop.show')`)), 'ระหว่างอัปเดตเบื้องหลังไม่ขึ้นป๊อปอัปบังจอ');
+    await b.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: slow.identifier });
+    await sleep(3500);
+
+    console.log('\n[พนักงาน] ขอสิทธิ์ → อนุมัติ → บันทึกยอดซื้อ');
+    const slowBoot = await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => { const f = window.fetch; window.fetch = async (...a) => { await new Promise(r => setTimeout(r, 1500)); return f(...a); }; })()` }); // หน่วงคำขอ ให้ทันเห็นหน้าโหลด
+    await b.nav(`${WEB}/khamwan/staff?user=U_TEST_STAFF&name=${encodeURIComponent('น้องบีม')}`);
+    await b.waitFor(`document.querySelector('.boot-screen .boot-ring') && /กำลังเปิดหน้าพนักงาน/.test(document.querySelector('.boot-screen .boot-msg').innerText) && /Design by GoToTarget/.test(document.querySelector('.boot-screen .credit').innerText) && !document.querySelector('.boot-name')`, 3000, 'หน้าโหลดสีกลางของหน้าพนักงาน');
+    ok(true, 'หน้าพนักงานเปิดด้วยหน้าโหลดสีกลาง (ไม่มีชื่อ/สีร้าน) + เครดิต GoToTarget');
+    await b.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: slowBoot.identifier });
+    await b.waitFor(`/ส่งคำขอสิทธิ์/.test(document.body.innerText)`, 10000, 'หน้ารออนุมัติ');
+    ok(/U_TEST_STAFF/.test(await b.text()), 'หน้ารออนุมัติแสดงรหัส LINE');
+    ok(/Design by GoToTarget/.test(await b.text('.state-page .credit')), 'หน้ารออนุมัติมีเครดิต GoToTarget');
+    await b.shot(path.join(OUT, '05-staff-pending.png'));
+    await adminOp({ userId: 'U_TEST_STAFF', status: 'ACTIVE', role: 'OWNER' });
+    await b.click('[data-act=reload]');
+    await b.waitFor(`document.querySelector('#lookup')`, 10000, 'หน้าพนักงาน');
+    ok(/เจ้าของร้าน/.test(await b.text('.staff-head')), 'อนุมัติแล้ว เห็นบทบาท เจ้าของร้าน');
+    ok(/Design by GoToTarget/.test(await b.text('.staff-main > .credit:last-child')), 'หน้าพนักงานมีเครดิตท้ายหน้า');
+    await b.type('#lookup input', '0812345678');
+    await b.eval(`document.querySelector('#lookup').requestSubmit()`);
+    await b.waitFor(`document.querySelector('#purchase')`, 8000, 'ฟอร์มยอดซื้อ');
+    ok(/xxx-xxx-5678/.test(await b.text('#result')), 'ค้นด้วยเบอร์ เห็นเบอร์แค่ 4 ตัวท้าย');
+    await b.type('#purchase input[name=amount]', '1,250');
+    ok(/\+62/.test(await b.text('#preview')), 'พิมพ์ 1,250 → แสดงตัวอย่าง +62 พอยท์');
+    await b.shot(path.join(OUT, '06-staff-member.png'), { full: true });
+    await b.eval(`document.querySelector('#purchase').requestSubmit()`);
+    await b.waitFor(`document.querySelector('.flash.ok')`, 8000, 'บันทึกสำเร็จ');
+    ok(/\+62/.test(await b.text('.flash')) && (await b.text('.stats b')) === '82', 'บันทึกแล้ว +62 คงเหลือ 82');
+    await b.waitFor(`/1,250/.test(document.querySelector('#recent').innerText)`, 5000, 'รายการล่าสุด');
+    ok(/น้องบีม/.test(await b.text('#recent')), 'รายการล่าสุดแสดงชื่อพนักงาน');
+    await b.shot(path.join(OUT, '07-staff-saved.png'), { full: true });
+    await b.type('#purchase input[name=amount]', '5000');
+    await b.eval(`document.querySelector('#purchase').requestSubmit()`);
+    await b.waitFor(`document.querySelector('.modal [data-act=purchase-confirm]')`, 3000, 'ยืนยันยอดสูง');
+    ok(true, 'ยอด 5,000 (เกิน 3,000) → ให้ยืนยันซ้ำก่อนบันทึก');
+    await b.shot(path.join(OUT, '08-staff-confirm.png'));
+    await b.click('.modal [data-act=purchase-confirm]');
+    await b.waitFor(`document.querySelector('.stats b').innerText === '332'`, 8000, 'ยอดใหม่');
+    ok(true, 'ยืนยันแล้ว +250 → 332');
+
+    console.log('\n[ลูกค้า] แลกของรางวัล → แสดง QR คูปอง');
+    await b.eval(`localStorage.setItem('crm_test_user', JSON.stringify({id:'U_TEST_1', name:'สมชาย ใจดี'}))`);
+    await b.nav(`${WEB}/khamwan#rewards`);
+    await b.waitFor(`document.querySelector('.rewards-grid')`, 10000, 'หน้ารางวัล');
+    ok(/332/.test(await b.text('.page-head')), 'หน้ารางวัลแสดงแต้มคงเหลือ 332');
+    await b.shot(path.join(OUT, '09-rewards.png'), { full: true });
+    await b.click('[data-act=redeem][data-id=R001]');
+    await b.waitFor(`document.querySelector('[data-act=redeem-confirm]')`);
+    ok(/332 → 252/.test(await b.text('.modal')), 'ยืนยันการแลก แสดงแต้มก่อน/หลัง');
+    await b.click('[data-act=redeem-confirm]');
+    await b.waitFor(`/แลกสำเร็จ/.test(document.querySelector('.modal')?.innerText || '')`, 8000, 'แลกสำเร็จ');
+    await b.shot(path.join(OUT, '10-redeemed.png'));
+    await b.click('.modal [data-act=coupon-qr]');
+    await b.waitFor(`document.querySelector('.modal .qr-svg')`);
+    const couponCode = await b.eval(`document.querySelector('.modal .qr-code-text').innerText`);
+    ok(/^CP-[A-Z2-9]{8}$/.test(couponCode), 'QR คูปอง ' + couponCode);
+    await b.shot(path.join(OUT, '11-coupon-qr.png'));
+    await b.click('.modal [data-act=close]');
+    await b.nav(`${WEB}/khamwan#coupons`);
+    await b.waitFor(`document.querySelector('.coupon')`, 8000, 'หน้าคูปอง');
+    ok(/ใช้ได้ \(1\)/.test(await b.text('.tabs')) && /1/.test(await b.text('.badge')), 'หน้าคูปอง: ใช้ได้ 1 ใบ + ตัวเลขบนเมนู');
+    await b.shot(path.join(OUT, '12-coupons.png'));
+
+    console.log('\n[พนักงาน] สแกนคูปอง → ใช้คูปอง');
+    await b.eval(`localStorage.setItem('crm_test_user', JSON.stringify({id:'U_TEST_STAFF', name:'น้องบีม'}))`);
+    await b.nav(`${WEB}/khamwan/staff`);
+    await b.waitFor(`document.querySelector('#lookup')`, 10000);
+    await b.type('#lookup input', couponCode.toLowerCase());
+    await b.eval(`document.querySelector('#lookup').requestSubmit()`);
+    await b.waitFor(`document.querySelector('[data-act=use-coupon]')`, 8000, 'หน้าคูปอง (พนักงาน)');
+    ok(/สมชาย/.test(await b.text('#result')), 'เห็นเจ้าของคูปอง');
+    await b.shot(path.join(OUT, '13-staff-coupon.png'));
+    await b.click('[data-act=use-coupon]');
+    await b.click('.modal [data-act=use-coupon-confirm]');
+    await b.waitFor(`document.querySelector('.flash.ok')`, 8000, 'ใช้คูปองแล้ว');
+    ok(/ใช้แล้ว/.test(await b.text('.kv')), 'สถานะคูปองเป็น ใช้แล้ว');
+    await b.shot(path.join(OUT, '14-staff-coupon-used.png'));
+    await b.type('#lookup input', couponCode);
+    await b.eval(`document.querySelector('#lookup').requestSubmit()`);
+    await b.waitFor(`document.querySelector('.kv')`, 8000);
+    ok(!(await b.eval(`!!document.querySelector('[data-act=use-coupon]')`)), 'สแกนคูปองที่ใช้แล้ว → ไม่มีปุ่มใช้ซ้ำ');
+
+    console.log('\n[พนักงาน] ปรับแต้ม (เจ้าของร้าน)');
+    await b.type('#lookup input', memberId);
+    await b.eval(`document.querySelector('#lookup').requestSubmit()`);
+    await b.waitFor(`document.querySelector('#adjust')`, 8000, 'ฟอร์มปรับแต้ม');
+    await b.eval(`document.querySelector('details.adjust').open = true`);
+    await b.type('#adjust input[name=points]', '-2');
+    await b.type('#adjust input[name=reason]', 'ทดสอบลดแต้ม');
+    await b.eval(`document.querySelector('#adjust').requestSubmit()`);
+    await b.click('.modal [data-act=adjust-confirm]');
+    await b.waitFor(`document.querySelector('.stats b').innerText === '250'`, 8000, 'ปรับแล้ว 250');
+    ok(true, 'ปรับ -2 → 250');
+
+    console.log('\n[ลูกค้า] ประวัติ');
+    await b.eval(`localStorage.setItem('crm_test_user', JSON.stringify({id:'U_TEST_1', name:'สมชาย ใจดี'}))`);
+    await b.nav(`${WEB}/khamwan#history`);
+    await b.waitFor(`document.querySelector('.tx-list')`, 10000);
+    ok((await b.eval(`document.querySelectorAll('.tx').length`)) === 5, 'ประวัติ 5 รายการ (ต้อนรับ, ซื้อ×2, แลก, ปรับ)');
+    await b.shot(path.join(OUT, '15-history.png'), { full: true });
+    await b.click('[data-act=hist][data-filter=use]');
+    ok((await b.eval(`document.querySelectorAll('.tx').length`)) === 2, 'กรอง "ใช้ไป" เหลือ 2 รายการ (บั๊กเดิมของ v1 แก้แล้ว)');
+    await b.nav(`${WEB}/khamwan#collect`);
+    await b.waitFor(`document.querySelector('.collect-rate')`, 10000);
+    ok(/20 บาท = 1 พอยท์/.test(await b.text('.collect-rate')), 'หน้าวิธีสะสมใช้อัตราจากชีต');
+    await b.shot(path.join(OUT, '16-collect.png'), { full: true });
+
+    console.log('\n[ร้านตัวอย่าง] ธีม minimal — โค้ดชุดเดียวกัน เปลี่ยนแค่ config');
+    await b.eval(`localStorage.setItem('crm_test_user', JSON.stringify({id:'U_TEST_2', name:'มานี'}))`);
+    await b.nav(`${WEB}/demo?api=${encodeURIComponent(API)}`);
+    await b.waitFor(`document.querySelector('#reg')`, 10000);
+    ok(/Demo Café/.test(await b.text()), 'ชื่อร้านจาก config ของร้านตัวอย่าง');
+    ok((await b.eval(`document.documentElement.dataset.theme`)) === 'minimal', 'ใช้ธีม minimal');
+    await b.type('#reg input[name=firstName]', 'มานี');
+    await b.type('#reg input[name=lastName]', 'มีนา');
+    await b.eval(`(() => { const f = document.querySelector('#reg'); f.bdDay.value = '5'; f.bdMonth.value = '11'; f.bdYear.value = '2540'; return true; })()`);
+    await b.type('#reg input[name=phone]', '0899999999');
+    await b.eval(`document.querySelector('#reg input[name=consentPrivacy]').click()`);
+    await b.click('#reg button[type=submit]');
+    await b.waitFor(`document.querySelector('.member-card')`, 10000);
+    await b.click('.modal [data-act=close]').catch(() => {});
+    await b.shot(path.join(OUT, '17-demo-home.png'), { full: true });
+    await b.nav(`${WEB}/demo#rewards`);
+    await b.waitFor(`document.querySelector('.rewards-grid')`, 10000);
+    await b.shot(path.join(OUT, '18-demo-rewards.png'));
+
+    console.log('\n[อื่นๆ] ลิงก์ร้านที่ไม่มี');
+    await b.nav(`${WEB}/nope`);
+    await b.waitFor(`/ไม่พบร้าน/.test(document.body.innerText)`, 8000);
+    ok(true, 'ลิงก์ร้านที่ไม่มี → "ไม่พบร้าน"');
+
+    const errors = b.logs.filter(l => /EXCEPTION|console\.error|log\.error/.test(l) && !/favicon/.test(l));
+    ok(errors.length === 0, 'ไม่มี error ใน console', errors);
+    if (b.logs.length) console.log('\nconsole:\n' + b.logs.slice(-15).join('\n'));
+  } catch (e) {
+    fail++;
+    console.log('  ✗ หยุดกลางทาง: ' + e.message);
+    try { await b.shot(path.join(OUT, 'zz-error.png')); console.log('  (ภาพตอนพัง: shots/zz-error.png)'); console.log(await b.text()); } catch (x) {}
+    console.log(b.logs.slice(-20).join('\n'));
+  } finally {
+    await b.close();
+    console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
+    process.exit(fail ? 1 : 0);
+  }
+})();

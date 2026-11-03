@@ -1,0 +1,8 @@
+# ไฟล์ที่ไม่ต้องขึ้นเว็บ Vercel (เว็บใช้แค่ index.html staff.html app/ themes/ shops/)
+backups/
+CRM สะสมแต้ม/
+tools/
+code.gs
+*.command
+*.md
+.DS_Store

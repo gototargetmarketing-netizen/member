@@ -1,0 +1,674 @@
+// ทดสอบ code.gs ทุกขั้นตอนด้วยชีตจำลอง (ไม่ต้องใช้ Google จริง)
+// รัน: node tools/test/gas-test.js
+const { createWorld, call, run, callFn } = require('./gas-stub');
+const crypto = require('crypto');
+
+let pass = 0, fail = 0;
+function ok(cond, msg, extra) {
+  if (cond) { pass++; console.log('  ✓ ' + msg); }
+  else { fail++; console.log('  ✗ ' + msg + (extra !== undefined ? '  → ' + JSON.stringify(extra).slice(0, 400) : '')); }
+}
+const rid = () => crypto.randomUUID();
+const tok = (id, name = 'ทดสอบ') => `TEST:${id}:${name}`;
+
+const W = createWorld();
+const sheet = n => W.ss.getSheetByName(n);
+function rowsOf(name) {
+  const s = sheet(name); const h = s.data[0];
+  return s.data.slice(1).filter(r => r.some(v => v !== '')).map(r => Object.fromEntries(h.map((k, i) => [k, r[i] === undefined ? '' : r[i]])));
+}
+function setCell(name, matchCol, matchVal, col, val) {
+  const s = sheet(name); const h = s.data[0];
+  const ri = s.data.findIndex((r, i) => i > 0 && r[h.indexOf(matchCol)] === matchVal);
+  if (ri < 0) throw new Error('setCell: not found ' + matchVal);
+  s.data[ri][h.indexOf(col)] = val;
+  W.cache.delete('rows:' + name); // เหมือนรอให้ค่าที่จำไว้หมดอายุ (แก้ในชีตเองเห็นผลภายใน 5 นาที)
+}
+function hasFormula() {
+  return Object.values(W.ss.sheets).some(s => s.data.some(r => r.some(v => v && typeof v === 'object' && v.FORMULA)));
+}
+
+console.log('\n[1] ติดตั้งชีต');
+run(W, 'testSetup');
+ok(['Settings', 'Members', 'Transactions', 'Rewards', 'Coupons', 'Staff', 'Promotions'].every(n => sheet(n)), 'สร้างครบ 7 ชีต');
+ok(rowsOf('Settings').length === 22, 'Settings มี 22 ค่า (รวมโฟลเดอร์รูป + หน้าตาร้าน)', rowsOf('Settings').length);
+ok(rowsOf('Rewards').length === 3 && rowsOf('Promotions').length === 1, 'มีรางวัลตัวอย่าง 3 / โปรโมชัน 1');
+run(W, 'testSetup');
+ok(rowsOf('Settings').length === 22 && rowsOf('Rewards').length === 3, 'รัน testSetup ซ้ำ ไม่เพิ่มข้อมูลซ้ำ');
+ok(W.logs.some(l => l.includes('ชีตพร้อมใช้งาน')), 'testSetup พิมพ์ผลใน Log');
+
+console.log('\n[2] โหมดทดสอบ / ตรวจตัวตน');
+let r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+ok(!r.ok && r.code === 'TEST_DISABLED', 'token ทดสอบใช้ไม่ได้เมื่อปิดโหมดทดสอบ', r);
+run(W, 'enableTestMode');
+r = call(W, { action: 'bootstrap' });
+ok(!r.ok && r.code === 'NO_TOKEN', 'ไม่มี token → ปฏิเสธ', r);
+r = call(W, '{bad json');
+ok(!r.ok && r.code === 'BAD_REQUEST', 'JSON เสีย → ปฏิเสธ', r);
+r = call(W, { action: 'hack', idToken: tok('U1') });
+ok(!r.ok && r.code === 'UNKNOWN_ACTION', 'คำสั่งที่ไม่รู้จัก → ปฏิเสธ', r);
+r = call(W, { action: 'constructor', idToken: tok('U1') });
+ok(!r.ok && r.code === 'UNKNOWN_ACTION', 'ชื่อคำสั่งแปลก (constructor) → ปฏิเสธ', r);
+
+console.log('\n[3] ลูกค้าสมัครสมาชิก');
+r = call(W, { action: 'bootstrap', idToken: tok('U1', 'สมชาย') });
+ok(r.ok && r.member === null && r.rewards.length === 3 && r.promos.length === 1 && r.testMode === true, 'bootstrap ก่อนสมัคร: member=null มีรางวัล/โปร', r);
+const REG = { firstName: 'สมชาย', lastName: 'ใจดี', phone: '081-234-5678', birthDate: '1995-02-18', consentPrivacy: true };
+r = call(W, { action: 'register', idToken: tok('U1'), ...REG, consentPrivacy: false });
+ok(!r.ok && r.code === 'NO_CONSENT', 'ไม่ยอมรับ PDPA → สมัครไม่ได้', r);
+r = call(W, { action: 'register', idToken: tok('U1'), ...REG, phone: '12345' });
+ok(!r.ok && r.code === 'BAD_PHONE', 'เบอร์ผิด → ปฏิเสธ', r);
+r = call(W, { action: 'register', idToken: tok('U1'), ...REG, birthDate: '2030-01-01' });
+ok(!r.ok && r.code === 'BAD_BIRTHDATE', 'วันเกิดในอนาคต → ปฏิเสธ', r);
+r = call(W, { action: 'register', idToken: tok('U1'), ...REG, birthDate: '' });
+ok(!r.ok && r.code === 'BAD_BIRTHDATE', 'ไม่เลือกวันเกิด → ปฏิเสธ (บังคับ)', r);
+r = call(W, { action: 'register', idToken: tok('U1'), ...REG, birthDate: '1995-02-30' });
+ok(!r.ok && r.code === 'BAD_BIRTHDATE', 'วันที่ไม่มีจริง (30 ก.พ.) → ปฏิเสธ', r);
+r = call(W, { action: 'register', idToken: tok('U1', 'ชื่อในไลน์'), ...REG, firstName: '' });
+ok(!r.ok && r.code === 'BAD_NAME', 'ไม่กรอกชื่อ → ปฏิเสธ (ไม่ใช้ชื่อ LINE แทนแล้ว)', r);
+r = call(W, { action: 'register', idToken: tok('U1'), ...REG, lastName: '  ' });
+ok(!r.ok && r.code === 'BAD_NAME' && /นามสกุล/.test(r.error), 'ไม่กรอกนามสกุล → ปฏิเสธ', r);
+r = call(W, { action: 'register', idToken: tok('U1'), ...REG, lastName: '0812345678' });
+ok(!r.ok && r.code === 'BAD_NAME', 'นามสกุลเป็นตัวเลข (พิมพ์ผิดช่อง) → ปฏิเสธ', r);
+r = call(W, { action: 'register', idToken: tok('U1'), name: 'สมชาย ใจดี', phone: '0812345678', birthDate: '1995-02-18', consentPrivacy: true });
+ok(!r.ok && r.code === 'BAD_NAME', 'หน้าเว็บรุ่นเก่า (ส่งแค่ name) → ปฏิเสธ ต้องแยกชื่อ/นามสกุล', r);
+// ชีตของร้านเดิมยังไม่มีคอลัมน์ใหม่ → ต้องไม่ล่ม และเติมคอลัมน์ให้เองตอนสมัคร
+{
+  const ms = sheet('Members'); const h = ms.data[0];
+  ['First_Name', 'Last_Name'].forEach(c => { const i = h.indexOf(c); if (i >= 0) h[i] = ''; });
+}
+r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+ok(r.ok, 'ชีตเดิมยังไม่มีคอลัมน์ชื่อ/นามสกุล → ระบบยังทำงานได้ (ไม่ต้องรัน testSetup ก่อน)', r);
+setCell('Settings', 'Key', 'MEMBER_PREFIX', 'Value', 'KW');
+setCell('Settings', 'Key', 'WELCOME_POINTS', 'Value', '10');
+r = call(W, { action: 'register', idToken: tok('U1'), ...REG, firstName: '=HYPERLINK("http://evil")', phone: '+66 81 234 5678', consentMarketing: true });
+ok(r.ok && /^KW-[A-Z2-9]{6}$/.test(r.member.memberId) && r.member.points === 10 && r.welcomePoints === 10, 'สมัครสำเร็จ รหัส KW-xxxxxx + แต้มต้อนรับ 10', r);
+const M1 = r.member.memberId;
+const mrow = rowsOf('Members')[0];
+ok(mrow.Phone === '0812345678' && typeof mrow.Phone === 'string', 'เบอร์เก็บเป็นข้อความ เลข 0 ไม่หาย (+66 แปลงเป็น 0)', mrow.Phone);
+ok(mrow.First_Name === '=HYPERLINK("http://evil")' && mrow.Last_Name === 'ใจดี' && mrow.Name === '=HYPERLINK("http://evil") ใจดี' && !hasFormula(), 'เก็บชื่อ/นามสกุลแยก + ชื่อเต็มใน Name / ขึ้นต้นด้วย = ไม่กลายเป็นสูตร', mrow);
+ok(sheet('Members').data[0].filter(x => x === 'First_Name').length === 1, 'เติมคอลัมน์ First_Name / Last_Name ให้เองครั้งเดียว');
+ok(mrow.Birth_Date === '1995-02-18', 'บันทึกวันเกิด');
+ok(mrow.Marketing_Consent === 'YES' && mrow.Consent_Version === '1' && mrow.Consent_At instanceof Date, 'บันทึกการยินยอม PDPA');
+ok(rowsOf('Transactions').length === 1 && rowsOf('Transactions')[0].Type === 'WELCOME', 'มีรายการแต้มต้อนรับ');
+r = call(W, { action: 'register', idToken: tok('U1'), ...REG, firstName: 'ซ้ำ', phone: '0899999999' });
+ok(r.ok && r.already === true && rowsOf('Members').length === 1, 'สมัครซ้ำ → คืนสมาชิกเดิม ไม่สร้างใหม่', r);
+r = call(W, { action: 'register', idToken: tok('U2'), ...REG, firstName: 'คนอื่น', phone: '0812345678' });
+ok(!r.ok && r.code === 'PHONE_TAKEN', 'เบอร์ซ้ำกับคนอื่น → ปฏิเสธ', r);
+r = call(W, { action: 'register', idToken: tok('U2', 'ไลน์มานี'), firstName: ' มานี ', lastName: 'รักเรียน', phone: '0899999999', birthDate: '2000-12-31', consentPrivacy: true });
+ok(r.ok && r.member.name === 'มานี รักเรียน', 'ชื่อในระบบมาจากที่กรอก ไม่ใช่ชื่อ LINE (ตัดช่องว่างหัวท้าย)', r);
+const M2 = r.member.memberId;
+
+console.log('\n[4] พนักงานขอสิทธิ์ / อนุมัติ');
+r = call(W, { action: 'staffMe', idToken: tok('S1', 'น้องแคชเชียร์') });
+ok(r.ok && r.staff.status === 'PENDING' && rowsOf('Staff').length === 1, 'เปิดหน้าพนักงานครั้งแรก → PENDING', r);
+r = call(W, { action: 'staffMe', idToken: tok('S1') });
+ok(r.ok && rowsOf('Staff').length === 1 && !r.settings, 'เปิดซ้ำ ไม่เพิ่มแถวซ้ำ และยังไม่ได้ค่าตั้งค่า');
+r = call(W, { action: 'staffLookup', idToken: tok('S1'), query: M1 });
+ok(!r.ok && r.code === 'NOT_STAFF', 'ยังไม่อนุมัติ → ค้นสมาชิกไม่ได้', r);
+r = call(W, { action: 'addPurchase', idToken: tok('U1'), memberId: M1, amount: 99999, requestId: rid() });
+ok(!r.ok && r.code === 'NOT_STAFF', 'ลูกค้าเรียกคำสั่งเพิ่มแต้มเอง → ปฏิเสธ (ช่องโหว่เดิมปิดแล้ว)', r);
+setCell('Staff', 'LINE_User_ID', 'S1', 'Status', 'ACTIVE');
+r = call(W, { action: 'staffMe', idToken: tok('S1') });
+ok(r.ok && r.staff.status === 'ACTIVE' && r.staff.role === 'CASHIER' && r.settings.pointRate === 20, 'อนุมัติแล้ว → ACTIVE ได้ค่าตั้งค่า', r);
+
+console.log('\n[5] ค้นหาสมาชิก');
+r = call(W, { action: 'staffLookup', idToken: tok('S1'), query: '081-234-5678' });
+ok(r.ok && r.kind === 'member' && r.member.memberId === M1 && r.member.phoneMasked === 'xxx-xxx-5678', 'ค้นด้วยเบอร์ → เจอ และเห็นเบอร์แค่ 4 ตัวท้าย', r);
+ok(!('phone' in r.member) && !('lineUserId' in r.member), 'พนักงานไม่เห็นเบอร์เต็ม/LINE ID');
+r = call(W, { action: 'staffLookup', idToken: tok('S1'), query: M1.toLowerCase() });
+ok(r.ok && r.member.memberId === M1, 'ค้นด้วยรหัสสมาชิก (ตัวเล็กก็ได้)', r);
+r = call(W, { action: 'staffLookup', idToken: tok('S1'), query: 'KW-NOPE99' });
+ok(!r.ok && r.code === 'NOT_FOUND', 'รหัสไม่มีจริง → ไม่พบ', r);
+
+console.log('\n[6] บันทึกยอดซื้อ');
+const req1 = rid();
+r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 105, requestId: req1 });
+ok(r.ok && r.pointsAdded === 5 && r.balance === 15 && r.member.totalSpend === 105 && r.member.visitCount === 1, '105 บาท → +5 แต้ม (20 บาท/แต้ม)', r);
+r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 105, requestId: req1 });
+ok(r.ok && r.balance === 15 && rowsOf('Transactions').filter(t => t.Type === 'EARN').length === 1, 'ส่งซ้ำ requestId เดิม → ไม่บันทึกซ้ำ', r);
+W.cache.clear();
+r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 105, requestId: req1 });
+ok(r.ok && r.duplicate === true && r.balance === 15 && rowsOf('Transactions').filter(t => t.Type === 'EARN').length === 1, 'แคชหาย ก็ยังกันซ้ำได้จากคอลัมน์ Request_ID', r);
+r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 15, requestId: rid() });
+ok(r.ok && r.pointsAdded === 0 && r.member.totalSpend === 120 && r.member.visitCount === 2, 'ยอด 15 บาท → 0 แต้ม แต่บันทึกยอดซื้อและจำนวนครั้ง', r);
+ok(rowsOf('Transactions').slice(-1)[0].Detail.includes('ไม่ถึงเกณฑ์'), 'รายการระบุว่าไม่ถึงเกณฑ์');
+r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 50000, requestId: rid() });
+ok(!r.ok && r.code === 'OVER_MAX', 'ยอดเกิน MAX_PURCHASE → ปฏิเสธ', r);
+r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: -5, requestId: rid() });
+ok(!r.ok && r.code === 'BAD_AMOUNT', 'ยอดติดลบ → ปฏิเสธ', r);
+r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 100, requestId: 'x' });
+ok(!r.ok && r.code === 'BAD_REQUEST_ID', 'ไม่มี requestId ที่ถูกต้อง → ปฏิเสธ', r);
+r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 2000, note: '+cmd|calc', requestId: rid() });
+ok(r.ok && r.pointsAdded === 100 && r.balance === 115, '2,000 บาท → +100 แต้ม', r);
+ok(!hasFormula() && rowsOf('Transactions').slice(-1)[0].Detail === '+cmd|calc', 'หมายเหตุขึ้นต้นด้วย + ไม่กลายเป็นสูตร');
+ok(rowsOf('Transactions').slice(-1)[0].Staff === 'น้องแคชเชียร์', 'บันทึกชื่อพนักงานที่เพิ่มแต้ม');
+
+console.log('\n[7] ลูกค้าแลกรางวัล');
+r = call(W, { action: 'redeem', idToken: tok('U1'), rewardId: 'R001', requestId: rid() });
+ok(r.ok && r.points === 35 && /^CP-[A-Z2-9]{8}$/.test(r.coupon.code) && r.coupon.status === 'ACTIVE', 'แลก R001 (80) → เหลือ 35 ได้คูปอง', r);
+const C1 = r.coupon.code;
+ok(rowsOf('Rewards').find(x => x.Reward_ID === 'R001').Issued === 1, 'นับจำนวนที่แลกแล้วในรางวัล');
+const cp1 = rowsOf('Coupons')[0];
+const days = (cp1.Expires_At - cp1.Issued_At) / 86400000;
+ok(days > 29 && days < 31, 'คูปองหมดอายุใน ~30 วัน', days);
+r = call(W, { action: 'redeem', idToken: tok('U1'), rewardId: 'R002', requestId: rid() });
+ok(!r.ok && r.code === 'NOT_ENOUGH', 'แต้มไม่พอ → ปฏิเสธ', r);
+r = call(W, { action: 'redeem', idToken: tok('U1'), rewardId: 'R999', requestId: rid() });
+ok(!r.ok && r.code === 'REWARD_UNAVAILABLE', 'รางวัลไม่มีจริง → ปฏิเสธ', r);
+r = call(W, { action: 'redeem', idToken: tok('U9'), rewardId: 'R001', requestId: rid() });
+ok(!r.ok && r.code === 'NOT_MEMBER', 'ยังไม่สมัคร → แลกไม่ได้', r);
+
+console.log('\n[8] สิทธิ์ปรับแต้ม (เฉพาะผู้จัดการ)');
+r = call(W, { action: 'adjustPoints', idToken: tok('S1'), memberId: M1, points: 500, reason: 'ชดเชย', requestId: rid() });
+ok(!r.ok && r.code === 'NO_ROLE', 'แคชเชียร์ปรับแต้มไม่ได้', r);
+setCell('Staff', 'LINE_User_ID', 'S1', 'Role', 'ADMIN');
+r = call(W, { action: 'adjustPoints', idToken: tok('S1'), memberId: M1, points: 500, reason: '', requestId: rid() });
+ok(!r.ok && r.code === 'NO_REASON', 'ไม่มีเหตุผล → ปฏิเสธ', r);
+r = call(W, { action: 'adjustPoints', idToken: tok('S1'), memberId: M1, points: 1.5, reason: 'ทดสอบ', requestId: rid() });
+ok(!r.ok && r.code === 'BAD_POINTS', 'แต้มไม่เป็นจำนวนเต็ม → ปฏิเสธ', r);
+r = call(W, { action: 'adjustPoints', idToken: tok('S1'), memberId: M1, points: 500, reason: 'ชดเชยระบบล่ม', requestId: rid() });
+ok(r.ok && r.balance === 535, 'ADMIN ปรับ +500 → 535', r);
+r = call(W, { action: 'adjustPoints', idToken: tok('S1'), memberId: M1, points: -1000, reason: 'แก้ไข', requestId: rid() });
+ok(!r.ok && r.code === 'NEGATIVE', 'ปรับจนติดลบไม่ได้', r);
+
+console.log('\n[9] โควตา / จำกัดต่อคน');
+setCell('Rewards', 'Reward_ID', 'R002', 'Quota', 1);
+r = call(W, { action: 'redeem', idToken: tok('U1'), rewardId: 'R002', requestId: rid() });
+ok(r.ok && r.points === 415, 'แลก R002 ชิ้นสุดท้าย', r);
+r = call(W, { action: 'redeem', idToken: tok('U1'), rewardId: 'R002', requestId: rid() });
+ok(!r.ok && r.code === 'SOLD_OUT', 'โควตาเต็ม → ปฏิเสธ', r);
+setCell('Rewards', 'Reward_ID', 'R001', 'Limit_Per_Member', 1);
+r = call(W, { action: 'redeem', idToken: tok('U1'), rewardId: 'R001', requestId: rid() });
+ok(!r.ok && r.code === 'LIMIT_REACHED', 'แลกเกินจำนวนต่อคน → ปฏิเสธ', r);
+r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+ok(r.ok && r.rewards.find(x => x.id === 'R002').remaining === 0, 'bootstrap บอกจำนวนคงเหลือ', r.rewards);
+setCell('Rewards', 'Reward_ID', 'R003', 'End_Date', new Date('2020-01-01T00:00:00+07:00'));
+r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+ok(r.ok && !r.rewards.find(x => x.id === 'R003'), 'รางวัลที่หมดช่วงเวลาไม่แสดง');
+
+console.log('\n[10] ใช้คูปอง');
+r = call(W, { action: 'staffLookup', idToken: tok('S1'), query: C1.toLowerCase() });
+ok(r.ok && r.kind === 'coupon' && r.coupon.code === C1 && r.member.memberId === M1, 'สแกนรหัสคูปอง → เห็นคูปองและเจ้าของ', r);
+r = call(W, { action: 'staffLookup', idToken: tok('S1'), query: M1 });
+ok(r.ok && r.coupons.length === 2, 'ค้นสมาชิก → เห็นคูปองที่ใช้ได้ 2 ใบ', r.coupons);
+const useReq = rid();
+r = call(W, { action: 'useCoupon', idToken: tok('S1'), code: C1, requestId: useReq });
+ok(r.ok && r.coupon.status === 'USED', 'ใช้คูปองสำเร็จ', r);
+r = call(W, { action: 'useCoupon', idToken: tok('S1'), code: C1, requestId: useReq });
+ok(r.ok && r.coupon.status === 'USED', 'กดซ้ำ (requestId เดิม) → ได้ผลสำเร็จเดิม ไม่ error', r);
+r = call(W, { action: 'useCoupon', idToken: tok('S1'), code: C1, requestId: rid() });
+ok(!r.ok && r.code === 'USED', 'ใช้ซ้ำ → ปฏิเสธ', r);
+r = call(W, { action: 'useCoupon', idToken: tok('U1'), code: rowsOf('Coupons')[1].Coupon_Code, requestId: rid() });
+ok(!r.ok && r.code === 'NOT_STAFF', 'ลูกค้ากดใช้คูปองเองไม่ได้', r);
+setCell('Coupons', 'Coupon_Code', rowsOf('Coupons')[1].Coupon_Code, 'Expires_At', new Date(Date.now() - 1000));
+r = call(W, { action: 'useCoupon', idToken: tok('S1'), code: rowsOf('Coupons')[1].Coupon_Code, requestId: rid() });
+ok(!r.ok && r.code === 'EXPIRED', 'คูปองหมดอายุ → ใช้ไม่ได้', r);
+
+console.log('\n[11] หน้าลูกค้าหลังมีรายการ');
+r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+ok(r.ok && r.member.points === 415 && r.member.totalSpend === 2120 && r.member.visitCount === 3, 'ยอดแต้ม/ยอดซื้อ/จำนวนครั้งถูกต้อง', r.member);
+ok(r.history.length === 7 && r.history[0].type === 'REDEEM' && r.history[r.history.length - 1].type === 'WELCOME', 'ประวัติเรียงใหม่→เก่า', r.history.map(h => h.type));
+ok(r.coupons.map(c => c.status).sort().join(',') === 'EXPIRED,USED', 'สถานะคูปอง USED / EXPIRED', r.coupons);
+ok(!('LINE_User_ID' in r.member) && !('_row' in r.member), 'ไม่ส่งข้อมูลภายในออกไป');
+r = call(W, { action: 'staffRecent', idToken: tok('S1') });
+ok(r.ok && r.items.length === 8 && r.items[0].memberName && r.items[0].staff !== undefined, 'รายการล่าสุดของร้าน มีชื่อสมาชิก', r.items[0]);
+
+console.log('\n[12] ระงับสมาชิก');
+setCell('Members', 'Member_ID', M2, 'Status', 'BLOCKED');
+r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M2, amount: 100, requestId: rid() });
+ok(!r.ok && r.code === 'MEMBER_BLOCKED', 'สมาชิกถูกระงับ → เพิ่มแต้มไม่ได้', r);
+r = call(W, { action: 'redeem', idToken: tok('U2'), rewardId: 'R001', requestId: rid() });
+ok(!r.ok && r.code === 'MEMBER_BLOCKED', 'สมาชิกถูกระงับ → แลกไม่ได้', r);
+setCell('Staff', 'LINE_User_ID', 'S1', 'Status', 'DISABLED');
+r = call(W, { action: 'staffLookup', idToken: tok('S1'), query: M1 });
+ok(!r.ok && r.code === 'NOT_STAFF', 'พนักงานถูกปิดสิทธิ์ → ใช้ไม่ได้ทันที', r);
+setCell('Staff', 'LINE_User_ID', 'S1', 'Status', 'ACTIVE');
+
+console.log('\n[13] ชีตเต็ม 1,000 แถว');
+sheet('Transactions').maxRows = sheet('Transactions').getLastRow();
+r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 40, requestId: rid() });
+ok(r.ok && sheet('Transactions').inserted === 500, 'เขียนเกินขนาดชีต → เพิ่มแถวเองแล้วบันทึกได้', r);
+
+console.log('\n[13.5] หลังบ้าน (หน้าแอดมิน)');
+{
+  const bkk = d => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(d);
+  const today = bkk(new Date());
+  const shift = (k, n) => { const d = new Date(k + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const yesterday = shift(today, -1);
+
+  setCell('Staff', 'LINE_User_ID', 'S1', 'Role', 'CASHIER'); // ส่วน [8] ตั้ง S1 เป็น ADMIN ไว้ → กลับเป็นแคชเชียร์
+  r = call(W, { action: 'adminDashboard', idToken: tok('S1'), from: today, to: today });
+  ok(!r.ok && r.code === 'NO_ROLE', 'แคชเชียร์เปิดหลังบ้านไม่ได้', r);
+  r = call(W, { action: 'adminMe', idToken: tok('U1') });
+  ok(!r.ok && r.code === 'NOT_STAFF', 'ลูกค้าเปิดหลังบ้านไม่ได้', r);
+  call(W, { action: 'staffMe', idToken: tok('O1', 'เจ้าของ') });
+  setCell('Staff', 'LINE_User_ID', 'O1', 'Status', 'ACTIVE'); setCell('Staff', 'LINE_User_ID', 'O1', 'Role', 'OWNER');
+  call(W, { action: 'staffMe', idToken: tok('A1', 'ผู้จัดการ') });
+  setCell('Staff', 'LINE_User_ID', 'A1', 'Status', 'ACTIVE'); setCell('Staff', 'LINE_User_ID', 'A1', 'Role', 'ADMIN');
+  r = call(W, { action: 'adminMe', idToken: tok('O1') });
+  ok(r.ok && r.me.role === 'OWNER' && r.settings.shopName, 'เจ้าของร้านเปิดหลังบ้านได้', r);
+
+  // ย้ายรายการแต้มต้อนรับของ M1 ไปเมื่อวาน (ทดสอบการแบ่งช่วงเวลา + ช่วงก่อนหน้า)
+  const txSheet = sheet('Transactions'); const th = txSheet.data[0];
+  const welcomeRow = txSheet.data.findIndex((row, i) => i > 0 && row[th.indexOf('Type')] === 'WELCOME' && row[th.indexOf('Member_ID')] === M1);
+  txSheet.data[welcomeRow][th.indexOf('Date')] = new Date(yesterday + 'T12:00:00+07:00');
+  const todayTx = rowsOf('Transactions').filter(t => bkk(t.Date) === today);
+  const earn = todayTx.filter(t => t.Type === 'EARN');
+  const sales = Math.round(earn.reduce((s, t) => s + Number(t.Amount), 0) * 100) / 100;
+  const redeemed = -todayTx.filter(t => t.Type === 'REDEEM').reduce((s, t) => s + Number(t.Points), 0);
+
+  r = call(W, { action: 'adminDashboard', idToken: tok('O1'), from: today, to: today });
+  ok(r.ok && r.current.bills === earn.length && r.current.sales === sales, `ยอดซื้อวันนี้ ${sales} บาท ${earn.length} บิล`, r.current);
+  ok(r.current.buyers === new Set(earn.map(t => t.Member_ID)).size && r.current.pointsRedeemed === redeemed && redeemed > 0, 'ลูกค้าที่มาซื้อ / แต้มที่ถูกแลก', r.current);
+  ok(r.current.newMembers === 2 && r.totals.members === 2 && r.totals.activeMembers === 1, 'สมาชิกใหม่ 2 / ทั้งหมด 2 / ใช้งานได้ 1 (อีกคนถูกระงับ)', r.totals);
+  ok(r.current.couponsUsed === 1, 'คูปองที่ใช้ที่ร้าน 1 ใบ', r.current);
+  ok(r.previous.pointsIssued === 10 && r.previous.bills === 0, 'ช่วงก่อนหน้า (เมื่อวาน) มีแต้มต้อนรับ 10', r.previous);
+  ok(r.series.length === 1 && r.series[0].key === today && r.series[0].sales === sales, 'กราฟรายวัน 1 แท่ง', r.series);
+  ok(r.topMembers[0].memberId === M1 && r.topMembers[0].name, 'ลูกค้าซื้อมากสุดอันดับ 1 = M1', r.topMembers);
+  ok(r.byStaff.some(s => s.staff === 'น้องแคชเชียร์' && s.couponsUsed === 1 && s.bills > 0), 'ยอดตามพนักงาน + คูปองที่พนักงานสแกน', r.byStaff);
+  ok(r.topRewards.length >= 1 && r.topRewards[0].issued >= 1, 'ของรางวัลยอดนิยม', r.topRewards);
+  r = call(W, { action: 'adminDashboard', idToken: tok('O1'), from: shift(today, -6), to: today });
+  ok(r.ok && r.series.length === 7 && r.period.bucket === 'day' && r.previous.bills === 0, '7 วัน → 7 แท่งรายวัน', r.period);
+  r = call(W, { action: 'adminDashboard', idToken: tok('A1'), from: shift(today, -99), to: today });
+  ok(r.ok && r.period.bucket === 'month' && r.series.length >= 4 && r.series.length <= 5, '100 วัน → รวมเป็นรายเดือน (ผู้จัดการเปิดได้)', r.series.map(s => s.key));
+  r = call(W, { action: 'adminDashboard', idToken: tok('O1'), from: today, to: yesterday });
+  ok(!r.ok && r.code === 'BAD_DATE', 'วันเริ่มหลังวันจบ → ปฏิเสธ', r);
+  r = call(W, { action: 'adminDashboard', idToken: tok('O1'), from: '2026-02-30', to: '2026-03-01' });
+  ok(!r.ok && r.code === 'BAD_DATE', 'วันที่ไม่มีจริง (30 ก.พ.) → ปฏิเสธ', r);
+  r = call(W, { action: 'adminDashboard', idToken: tok('O1'), from: shift(today, -400), to: today });
+  ok(!r.ok && r.code === 'BAD_DATE', 'ช่วงยาวเกิน 366 วัน → ปฏิเสธ', r);
+
+  r = call(W, { action: 'adminMembers', idToken: tok('O1') });
+  ok(r.ok && r.total === 2 && r.items.find(m => m.memberId === M1).phone === '0812345678', 'เจ้าของร้านเห็นเบอร์เต็ม', r.items);
+  ok(r.items.every(m => !('lineUserId' in m) && !('LINE_User_ID' in m)), 'ไม่ส่งรหัส LINE ของลูกค้าออกไป');
+  r = call(W, { action: 'adminMembers', idToken: tok('A1') });
+  ok(r.ok && r.items.every(m => !('phone' in m) && /^xxx-xxx-\d{4}$/.test(m.phoneMasked)), 'ผู้จัดการเห็นเบอร์แค่ 4 ตัวท้าย', r.items);
+  r = call(W, { action: 'adminMembers', idToken: tok('O1'), q: '5678' });
+  ok(r.ok && r.total === 1 && r.items[0].memberId === M1, 'เจ้าของร้านค้นเบอร์บางส่วนได้', r);
+  r = call(W, { action: 'adminMembers', idToken: tok('A1'), q: '5678' });
+  ok(r.ok && r.total === 0, 'ผู้จัดการค้นเบอร์บางส่วนไม่ได้ (กันไล่เดาเบอร์)', r);
+  r = call(W, { action: 'adminMembers', idToken: tok('A1'), q: '081-234-5678' });
+  ok(r.ok && r.total === 1, 'ผู้จัดการค้นด้วยเบอร์เต็มได้', r);
+  r = call(W, { action: 'adminMembers', idToken: tok('O1'), q: 'มานี' });
+  ok(r.ok && r.total === 1 && r.items[0].memberId === M2, 'ค้นด้วยชื่อ', r);
+  r = call(W, { action: 'adminMembers', idToken: tok('O1'), status: 'BLOCKED' });
+  ok(r.ok && r.total === 1 && r.items[0].status === 'BLOCKED', 'กรองเฉพาะที่ถูกระงับ', r);
+  r = call(W, { action: 'adminMembers', idToken: tok('O1'), sort: 'points' });
+  ok(r.ok && r.items[0].points >= r.items[1].points, 'เรียงตามแต้ม', r.items.map(m => m.points));
+
+  r = call(W, { action: 'adminMember', idToken: tok('O1'), memberId: M1 });
+  const m1tx = rowsOf('Transactions').filter(t => t.Member_ID === M1).length;
+  ok(r.ok && r.history.length === m1tx && r.coupons.length === 2 && r.member.birthDate === '1995-02-18' && r.member.lineLinked === true, 'สมาชิกรายคน: ประวัติครบ คูปอง 2 วันเกิด', { h: r.history && r.history.length, m1tx, m: r.member });
+  ok(r.member.marketingConsent === true && r.member.consentAt && !('LINE_User_ID' in r.member), 'แสดงการยินยอม PDPA ไม่ส่งรหัส LINE');
+  r = call(W, { action: 'adminMember', idToken: tok('A1'), memberId: M1 });
+  ok(r.ok && r.member.birthDate === '' && !('phone' in r.member), 'ผู้จัดการไม่เห็นวันเกิด/เบอร์เต็ม', r.member);
+  r = call(W, { action: 'adminMember', idToken: tok('O1'), memberId: '<x>' });
+  ok(!r.ok && r.code === 'BAD_MEMBER_ID', 'รหัสสมาชิกผิดรูปแบบ → ปฏิเสธ', r);
+
+  r = call(W, { action: 'adminTransactions', idToken: tok('O1'), from: today, to: today });
+  ok(r.ok && r.total === todayTx.length && r.summary.sales === sales && r.items[0].memberName, `รายการวันนี้ ${todayTx.length} รายการ มีชื่อสมาชิก`, r.summary);
+  ok(r.items.every((t, i, a) => i === 0 || a[i - 1].date >= t.date), 'เรียงใหม่ → เก่า');
+  ok(r.staffNames.includes('น้องแคชเชียร์'), 'มีรายชื่อพนักงานไว้กรอง', r.staffNames);
+  r = call(W, { action: 'adminTransactions', idToken: tok('O1'), from: today, to: today, type: 'EARN' });
+  ok(r.ok && r.total === earn.length && r.items.every(t => t.type === 'EARN'), 'กรองเฉพาะยอดซื้อ', r.total);
+  r = call(W, { action: 'adminTransactions', idToken: tok('O1'), from: today, to: today, staff: 'ไม่มีคนนี้' });
+  ok(r.ok && r.total === 0, 'กรองตามพนักงาน');
+  r = call(W, { action: 'adminTransactions', idToken: tok('O1'), from: yesterday, to: today, q: 'สมชาย' });
+  ok(r.ok && r.total === 0, 'ค้นชื่อที่ไม่มี → 0 (ชื่อ M1 เป็นข้อความ =HYPERLINK)', r.total);
+  r = call(W, { action: 'adminTransactions', idToken: tok('O1'), from: yesterday, to: today, q: M1.toLowerCase() });
+  ok(r.ok && r.total === m1tx, 'ค้นด้วยรหัสสมาชิก (รวมเมื่อวาน)', r.total);
+
+  r = call(W, { action: 'adminCoupons', idToken: tok('O1'), from: today, to: today });
+  ok(r.ok && r.all === 2 && r.counts.USED === 1 && r.counts.EXPIRED === 1, 'คูปอง: ใช้แล้ว 1 หมดอายุ 1', r.counts);
+  r = call(W, { action: 'adminCoupons', idToken: tok('O1'), from: today, to: today, status: 'USED' });
+  ok(r.ok && r.total === 1 && r.items[0].usedBy === 'น้องแคชเชียร์' && r.items[0].memberName, 'กรองคูปองที่ใช้แล้ว เห็นคนสแกน', r.items);
+
+  r = call(W, { action: 'adminStaff', idToken: tok('A1') });
+  ok(r.ok && r.items.length === 3 && r.items.find(s => s.userId === 'A1').isMe, 'รายชื่อพนักงาน 3 คน', r.items);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('A1'), userId: 'S1', role: 'ADMIN', status: 'ACTIVE' });
+  ok(!r.ok && r.code === 'NO_ROLE', 'ผู้จัดการตั้งคนอื่นเป็นผู้จัดการไม่ได้', r);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('A1'), userId: 'O1', role: 'OWNER', status: 'DISABLED' });
+  ok(!r.ok && r.code === 'NO_ROLE', 'ผู้จัดการปิดสิทธิ์เจ้าของร้านไม่ได้', r);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('A1'), userId: 'A1', role: 'OWNER', status: 'ACTIVE' });
+  ok(!r.ok && r.code === 'SELF_EDIT', 'เลื่อนสิทธิ์ตัวเองไม่ได้', r);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('O1'), userId: 'O1', role: 'OWNER', status: 'DISABLED' });
+  ok(!r.ok && r.code === 'SELF_EDIT', 'เจ้าของร้านปิดสิทธิ์ตัวเองไม่ได้ (กันล็อกตัวเองออก)', r);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('A1'), userId: 'S1', role: 'CASHIER', status: 'DISABLED' });
+  ok(r.ok && r.staff.status === 'DISABLED', 'ผู้จัดการปิดสิทธิ์แคชเชียร์ได้', r);
+  r = call(W, { action: 'staffLookup', idToken: tok('S1'), query: M1 });
+  ok(!r.ok && r.code === 'NOT_STAFF', 'ปิดสิทธิ์จากหลังบ้าน → ใช้หน้าพนักงานไม่ได้ทันที', r);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('O1'), userId: 'S1', role: 'CASHIER', status: 'BOSS' });
+  ok(!r.ok && r.code === 'BAD_STATUS', 'สถานะแปลก → ปฏิเสธ', r);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('O1'), userId: 'S1', role: 'CASHIER', status: 'ACTIVE', name: '=IMPORTXML("http://evil")' });
+  ok(r.ok && r.staff.status === 'ACTIVE' && !hasFormula(), 'เจ้าของร้านเปิดสิทธิ์คืน + ชื่อที่ขึ้นต้นด้วย = ไม่กลายเป็นสูตร', r);
+  call(W, { action: 'adminStaffUpdate', idToken: tok('O1'), userId: 'S1', role: 'CASHIER', status: 'ACTIVE', name: 'น้องแคชเชียร์' });
+  call(W, { action: 'staffMe', idToken: tok('P1', 'พนักงานใหม่') });
+  r = call(W, { action: 'adminStaff', idToken: tok('O1') });
+  ok(r.items[0].userId === 'P1' && r.items[0].status === 'PENDING', 'คนรออนุมัติขึ้นบนสุด', r.items[0]);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('O1'), userId: 'P1', role: 'ADMIN', status: 'ACTIVE' });
+  ok(r.ok && r.staff.role === 'ADMIN', 'เจ้าของร้านอนุมัติเป็นผู้จัดการได้', r);
+  r = call(W, { action: 'staffLookup', idToken: tok('P1'), query: M1 });
+  ok(r.ok, 'อนุมัติจากหลังบ้านแล้วใช้หน้าพนักงานได้ทันที', r);
+  r = call(W, { action: 'adminStaffUpdate', idToken: tok('O1'), userId: 'NOPE', role: 'CASHIER', status: 'ACTIVE' });
+  ok(!r.ok && r.code === 'NOT_FOUND', 'พนักงานที่ไม่มีจริง → ไม่พบ', r);
+
+  r = call(W, { action: 'adminExport', idToken: tok('A1'), kind: 'members' });
+  ok(!r.ok && r.code === 'NO_ROLE', 'ผู้จัดการส่งออกไฟล์ไม่ได้', r);
+  r = call(W, { action: 'adminExport', idToken: tok('O1'), kind: 'members' });
+  ok(r.ok && r.columns.length === 12 && r.columns[2] === 'นามสกุล' && r.rows.length === 2 && r.rows.some(x => x[2] === 'ใจดี' && x[3] === '081-234-5678'), 'เจ้าของร้านส่งออกสมาชิกได้ แยกนามสกุล เบอร์มีขีด (Excel ไม่ตัด 0)', r.rows && r.rows[0]);
+  r = call(W, { action: 'adminExport', idToken: tok('O1'), kind: 'transactions', from: today, to: today });
+  ok(r.ok && r.rows.length === todayTx.length, 'ส่งออกรายการตามช่วงวันที่', r.rows && r.rows.length);
+  r = call(W, { action: 'adminExport', idToken: tok('O1'), kind: 'secrets' });
+  ok(!r.ok && r.code === 'BAD_EXPORT', 'ส่งออกข้อมูลอื่น → ปฏิเสธ', r);
+  ok(W.logs.some(l => l.startsWith('ส่งออก members')), 'บันทึกใน Log ว่าใครส่งออก');
+}
+
+console.log('\n[13.6] จัดการร้านจากหลังบ้าน (รางวัล / โปรโมชัน / ระงับสมาชิก / ตั้งค่า)');
+{
+  const bkk = d => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(d);
+  const today = bkk(new Date());
+  const shift = (k, n) => { const d = new Date(k + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const DRIVE_ID = '1AbCdEfGhIjKlMnOpQrStUvWxYz012345';
+
+  r = call(W, { action: 'adminRewards', idToken: tok('S1') });
+  ok(!r.ok && r.code === 'NO_ROLE', 'แคชเชียร์ดู/แก้ของรางวัลไม่ได้', r);
+  r = call(W, { action: 'adminRewards', idToken: tok('A1') });
+  ok(r.ok && r.items.length === 3 && r.items[0].id === 'R001' && r.items[0].issued >= 1 && r.couponDays === 30, 'รายการของรางวัล 3 รายการ + จำนวนที่แลกไปแล้ว', r.items && r.items[0]);
+
+  const base = { name: 'เค้กส้มฟรี 1 ชิ้น', description: 'เค้กส้มสูตรร้าน', points: '150', image: `https://drive.google.com/file/d/${DRIVE_ID}/view?usp=sharing`,
+    validDays: '', quota: '20', limitPerMember: '1', startDate: '', endDate: '', sort: '', status: 'ACTIVE' };
+  r = call(W, { action: 'adminRewardSave', idToken: tok('A1'), reward: base });
+  ok(!r.ok && r.code === 'BAD_REQUEST_ID', 'ไม่มี requestId → ปฏิเสธ (กันบันทึกซ้ำ)', r);
+  const req = rid();
+  r = call(W, { action: 'adminRewardSave', idToken: tok('A1'), reward: base, requestId: req });
+  ok(r.ok && r.created && r.reward.id === 'R004' && r.reward.state === 'ACTIVE', 'เพิ่มของรางวัลใหม่ → รหัส R004', r);
+  ok(r.reward.image === `https://drive.google.com/thumbnail?id=${DRIVE_ID}&sz=w1000`, 'ลิงก์แชร์ Google Drive ถูกแปลงเป็นลิงก์รูป', r.reward.image);
+  call(W, { action: 'adminRewardSave', idToken: tok('A1'), reward: base, requestId: req });
+  ok(rowsOf('Rewards').length === 4, 'ส่งซ้ำด้วย requestId เดิม → ไม่เพิ่มซ้ำ');
+  r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+  ok(r.ok && r.rewards.some(x => x.id === 'R004' && x.points === 150 && x.remaining === 20 && /thumbnail/.test(x.image)), 'ลูกค้าเห็นของรางวัลใหม่ทันที', r.rewards && r.rewards.map(x => x.id));
+
+  const bad = (patch, code, msg) => {
+    const x = call(W, { action: 'adminRewardSave', idToken: tok('O1'), reward: { ...base, ...patch }, requestId: rid() });
+    ok(!x.ok && x.code === code, msg, x);
+  };
+  bad({ name: '  ' }, 'BAD_INPUT', 'ไม่มีชื่อ → ปฏิเสธ');
+  bad({ points: '0' }, 'BAD_INPUT', 'แต้ม 0 → ปฏิเสธ');
+  bad({ points: '12.5' }, 'BAD_INPUT', 'แต้มมีทศนิยม → ปฏิเสธ');
+  bad({ image: 'javascript:alert(1)' }, 'BAD_IMAGE', 'ลิงก์รูปอันตราย → ปฏิเสธ');
+  bad({ image: 'http://example.com/a.jpg' }, 'BAD_IMAGE', 'ลิงก์รูป http (ไม่ใช่ https) → ปฏิเสธ');
+  bad({ startDate: today, endDate: shift(today, -1) }, 'BAD_DATE', 'วันสิ้นสุดก่อนวันเริ่ม → ปฏิเสธ');
+  bad({ startDate: '2026-13-01' }, 'BAD_DATE', 'วันที่ไม่มีจริง → ปฏิเสธ');
+  bad({ status: 'DELETED' }, 'BAD_STATUS', 'สถานะแปลก → ปฏิเสธ');
+  bad({ id: 'R999' }, 'NOT_FOUND', 'แก้รหัสที่ไม่มี → ไม่พบ');
+  setCell('Rewards', 'Reward_ID', 'R004', 'Issued', 3); // สมมุติว่ามีคนแลกไปแล้ว 3 ใบ
+  bad({ id: 'R004', quota: '2' }, 'BAD_QUOTA', 'ตั้งจำนวนทั้งหมดน้อยกว่าที่แลกไปแล้ว → ปฏิเสธ');
+
+  r = call(W, { action: 'adminRewardSave', idToken: tok('O1'), reward: { ...base, id: 'R004', name: '=เค้กส้ม', status: 'INACTIVE' }, requestId: rid() });
+  ok(r.ok && r.reward.state === 'INACTIVE' && !hasFormula(), 'ปิดของรางวัล + ชื่อขึ้นต้น = ไม่กลายเป็นสูตร', r);
+  ok(rowsOf('Rewards').find(x => x.Reward_ID === 'R004').Issued === 3, 'แก้ของรางวัลแล้วจำนวนที่แลกไปแล้วไม่ถูกเขียนทับ');
+  r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+  ok(!r.rewards.some(x => x.id === 'R004'), 'ปิดแล้วลูกค้าไม่เห็น');
+  r = call(W, { action: 'adminRewardSave', idToken: tok('O1'), reward: { ...base, id: 'R004', startDate: shift(today, 3) }, requestId: rid() });
+  ok(r.ok && r.reward.state === 'SCHEDULED' && r.reward.startDate === shift(today, 3), 'ตั้งวันเริ่มล่วงหน้า → "ยังไม่เริ่ม"', r.reward);
+  r = call(W, { action: 'redeem', idToken: tok('U1'), rewardId: 'R004', requestId: rid() });
+  ok(!r.ok && r.code === 'REWARD_UNAVAILABLE', 'ยังไม่ถึงวันเริ่ม → ลูกค้าแลกไม่ได้', r);
+  r = call(W, { action: 'adminRewardSave', idToken: tok('O1'), reward: { ...base, id: 'R004', startDate: shift(today, -10), endDate: shift(today, -1) }, requestId: rid() });
+  ok(r.ok && r.reward.state === 'ENDED', 'เลยวันสิ้นสุด → "หมดเขต"', r.reward);
+
+  // รูปในชีตที่เจ้าของร้านวางลิงก์ Drive เอง ก็แสดงได้
+  setCell('Rewards', 'Reward_ID', 'R001', 'Image', `https://drive.google.com/open?id=${DRIVE_ID}`);
+  r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+  ok(r.rewards.find(x => x.id === 'R001').image === `https://drive.google.com/thumbnail?id=${DRIVE_ID}&sz=w1000`, 'ลิงก์ Drive ที่พิมพ์ในชีตเองก็แปลงให้ตอนแสดง');
+
+  r = call(W, { action: 'adminPromos', idToken: tok('A1') });
+  ok(r.ok && r.items.length === 1 && r.items[0].id === 'P001', 'รายการโปรโมชัน', r);
+  const promo = { title: 'แต้ม x2 วันเสาร์', subtitle: 'ทุกเมนู', tag: 'โปรใหม่', image: '', link: 'https://line.me/R/ti/p/@khamwan', startDate: '', endDate: '', sort: '0', status: 'ACTIVE' };
+  r = call(W, { action: 'adminPromoSave', idToken: tok('A1'), promo, requestId: rid() });
+  ok(r.ok && r.created && r.promo.id === 'P002', 'เพิ่มโปรโมชัน P002', r);
+  r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+  ok(r.promos[0].id === 'P002' && r.promos[0].link === promo.link, 'ลูกค้าเห็นโปรใหม่ (ลำดับ 0 ขึ้นก่อน)', r.promos);
+  r = call(W, { action: 'adminPromoSave', idToken: tok('A1'), promo: { ...promo, link: 'javascript:alert(1)' }, requestId: rid() });
+  ok(!r.ok && r.code === 'BAD_LINK', 'ลิงก์โปรโมชันอันตราย → ปฏิเสธ', r);
+  r = call(W, { action: 'adminPromoSave', idToken: tok('A1'), promo: { ...promo, id: 'P002', status: 'INACTIVE' }, requestId: rid() });
+  ok(r.ok && r.promo.state === 'INACTIVE' && rowsOf('Promotions').length === 2, 'ปิดโปรโมชัน (ไม่เพิ่มแถว)', r);
+
+  r = call(W, { action: 'adminMemberStatus', idToken: tok('S1'), memberId: M1, status: 'BLOCKED', reason: 'ทดสอบ' });
+  ok(!r.ok && r.code === 'NO_ROLE', 'แคชเชียร์ระงับสมาชิกไม่ได้', r);
+  r = call(W, { action: 'adminMemberStatus', idToken: tok('A1'), memberId: M1, status: 'BLOCKED', reason: '' });
+  ok(!r.ok && r.code === 'NO_REASON', 'ระงับโดยไม่ใส่เหตุผล → ปฏิเสธ', r);
+  r = call(W, { action: 'adminMemberStatus', idToken: tok('A1'), memberId: M1, status: 'BLOCKED', reason: 'ใช้บัญชีผิดวิธี' });
+  ok(r.ok && r.member.status === 'BLOCKED' && /ระงับ .* โดย ผู้จัดการ: ใช้บัญชีผิดวิธี/.test(rowsOf('Members').find(x => x.Member_ID === M1).Note), 'ระงับสมาชิก + บันทึกใคร/เหตุผลในช่อง Note', rowsOf('Members').find(x => x.Member_ID === M1).Note);
+  r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 100, requestId: rid() });
+  ok(!r.ok && r.code === 'MEMBER_BLOCKED', 'ระงับแล้วหน้าพนักงานบันทึกแต้มไม่ได้', r);
+  r = call(W, { action: 'adminMemberStatus', idToken: tok('O1'), memberId: M1, status: 'ACTIVE' });
+  ok(r.ok && r.member.status === 'ACTIVE' && /เปิดใช้อีกครั้ง/.test(rowsOf('Members').find(x => x.Member_ID === M1).Note), 'เปิดใช้อีกครั้งได้', r.member);
+
+  r = call(W, { action: 'adminSettings', idToken: tok('A1') });
+  ok(r.ok && r.items.length === 22 && r.items.find(x => x.key === 'LIFF_ID').editable === false && r.items.find(x => x.key === 'POINT_RATE_BAHT').editable === true, 'ผู้จัดการดูค่าตั้งร้านได้ (LIFF_ID แก้ไม่ได้)', r.items && r.items.map(x => x.key));
+  r = call(W, { action: 'adminSettingsSave', idToken: tok('A1'), values: { POINT_RATE_BAHT: '10' } });
+  ok(!r.ok && r.code === 'NO_ROLE', 'ผู้จัดการแก้ค่าตั้งร้านไม่ได้', r);
+  r = call(W, { action: 'adminSettingsSave', idToken: tok('O1'), values: { POINT_RATE_BAHT: '0' } });
+  ok(!r.ok && r.code === 'BAD_INPUT', 'อัตราแต้ม 0 → ปฏิเสธ', r);
+  r = call(W, { action: 'adminSettingsSave', idToken: tok('O1'), values: { WELCOME_POINTS: '5.5' } });
+  ok(!r.ok && r.code === 'BAD_INPUT', 'แต้มต้อนรับมีทศนิยม → ปฏิเสธ', r);
+  r = call(W, { action: 'adminSettingsSave', idToken: tok('O1'), values: { LIFF_ID: 'hack' } });
+  ok(!r.ok && r.code === 'BAD_INPUT' && rowsOf('Settings').find(x => x.Key === 'LIFF_ID').Value === '', 'แก้ LIFF_ID ผ่านหลังบ้านไม่ได้', r);
+  r = call(W, { action: 'adminSettingsSave', idToken: tok('O1'), values: { SHOP_NAME: '=คำหวาน' } });
+  ok(!r.ok && r.code === 'BAD_INPUT', 'ชื่อร้านแก้ผ่านหลังบ้านไม่ได้ (ชื่อที่ลูกค้าเห็นอยู่ใน config)', r);
+  r = call(W, { action: 'adminSettingsSave', idToken: tok('O1'), values: { POINT_RATE_BAHT: '25', COUPON_DAYS: '14', WELCOME_POINTS: '10' } });
+  ok(r.ok && r.changed === 2, 'เจ้าของร้านส่ง 3 ค่า → บันทึกเฉพาะ 2 ค่าที่เปลี่ยนจริง', r);
+  ok(W.logs.some(l => l.includes('แก้ตั้งค่าร้าน โดย เจ้าของ') && l.includes('POINT_RATE_BAHT: 20 → 25')), 'บันทึกใน Log ว่าใครเปลี่ยนอะไร');
+  r = call(W, { action: 'staffMe', idToken: tok('S1') });
+  ok(r.settings.pointRate === 25, 'หน้าพนักงานใช้อัตราใหม่ทันที (25 บาท/แต้ม)', r.settings);
+  r = call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount: 100, requestId: rid() });
+  ok(r.ok && r.pointsAdded === 4, 'ซื้อ 100 บาท → +4 แต้ม ตามอัตราใหม่', r);
+  call(W, { action: 'adminSettingsSave', idToken: tok('O1'), values: { POINT_RATE_BAHT: '20', COUPON_DAYS: '30' } });
+}
+
+console.log('\n[13.7] อัปโหลดรูป / จำข้อมูลชั่วคราว / หลังบ้านเปิดรอบเดียว');
+{
+  const JPG = Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0, 16, 74, 70, 73, 70, 0, 1]).toString('base64');
+  const PNG = Buffer.from([0x89, 0x50, 0x4E, 0x47, 13, 10, 26, 10, 0, 0, 0, 13]).toString('base64');
+  const up = (who, data, mime, extra = {}) => call(W, { action: 'adminUploadImage', idToken: tok(who), data, mime, kind: 'reward', ...extra });
+
+  r = up('S1', JPG, 'image/jpeg');
+  ok(!r.ok && r.code === 'NO_ROLE', 'แคชเชียร์อัปโหลดรูปไม่ได้', r);
+  r = up('A1', JPG, 'image/jpeg');
+  ok(r.ok && /^https:\/\/drive\.google\.com\/thumbnail\?id=FILE\d+&sz=w1000$/.test(r.url), 'ไม่ได้ตั้งโฟลเดอร์ → สร้างโฟลเดอร์ให้เอง แล้วได้ลิงก์รูป', r);
+  const auto = Object.entries(W.drive.folders).find(([, f]) => f.name === 'LINE CRM - รูปร้าน');
+  ok(!!auto && W.props.get('AUTO_IMAGE_FOLDER_ID') === auto[0], 'จำโฟลเดอร์ที่สร้างไว้ใน Script Properties');
+  ok(W.drive.files[0].sharing === 'ANYONE_WITH_LINK:VIEW' && W.drive.files[0].folder === auto[0] && /^reward-\d{4}-\d{2}-\d{2}-[A-Z2-9]{6}\.jpg$/.test(W.drive.files[0].name), 'แชร์แบบทุกคนที่มีลิงก์ดูได้ ชื่อไฟล์เป็นระเบียบ', W.drive.files[0]);
+  up('A1', JPG, 'image/jpeg');
+  ok(Object.values(W.drive.folders).filter(f => f.name === 'LINE CRM - รูปร้าน').length === 1, 'อัปรูปที่ 2 ใช้โฟลเดอร์เดิม ไม่สร้างซ้ำ');
+
+  // โฟลเดอร์ที่ผู้ใช้กำหนดในชีต Settings (วางลิงก์ทั้งลิงก์)
+  const MYFOLDER = '1W6GK-NklFhLRRrw3Uheeci1EbRyeAkXg';
+  W.drive.folders[MYFOLDER] = { name: 'รูปทดสอบ', canEdit: true };
+  setCell('Settings', 'Key', 'IMAGE_FOLDER_ID', 'Value', `https://drive.google.com/drive/folders/${MYFOLDER}?usp=sharing`);
+  r = up('O1', PNG, 'image/png', { kind: 'promo' });
+  ok(r.ok && W.drive.files.slice(-1)[0].folder === MYFOLDER && /^promo-.*\.png$/.test(W.drive.files.slice(-1)[0].name), 'ตั้ง IMAGE_FOLDER_ID เป็นลิงก์โฟลเดอร์ → รูปไปอยู่โฟลเดอร์นั้น', W.drive.files.slice(-1)[0]);
+  r = up('O1', JPG, 'image/png');
+  ok(!r.ok && r.code === 'BAD_IMAGE', 'บอกว่าเป็น PNG แต่หัวไฟล์เป็น JPG → ปฏิเสธ', r);
+  r = up('O1', Buffer.from('<script>alert(1)</script>').toString('base64'), 'image/jpeg');
+  ok(!r.ok && r.code === 'BAD_IMAGE', 'ไฟล์ที่ไม่ใช่รูป → ปฏิเสธ', r);
+  r = up('O1', JPG, 'image/gif');
+  ok(!r.ok && r.code === 'BAD_IMAGE', 'ชนิดไฟล์ที่ไม่รองรับ (GIF) → ปฏิเสธ', r);
+  r = up('O1', Buffer.alloc(2 * 1024 * 1024 + 10, 0xFF).toString('base64'), 'image/jpeg');
+  ok(!r.ok && r.code === 'BAD_IMAGE', 'ใหญ่เกิน 2MB → ปฏิเสธ', r);
+  r = up('O1', 'not base64!!', 'image/jpeg');
+  ok(!r.ok && r.code === 'BAD_IMAGE', 'ข้อมูลไม่ใช่ base64 → ปฏิเสธ', r);
+  W.drive.folders[MYFOLDER].canEdit = false;
+  r = up('O1', JPG, 'image/jpeg');
+  ok(!r.ok && r.code === 'DRIVE_ERROR' && !/Drive|Google|ชีต/.test(r.error) && W.logs.some(l => l.includes('ผู้แก้ไขโฟลเดอร์')), 'โฟลเดอร์ที่ดูได้อย่างเดียว → แจ้งผู้ใช้กลางๆ (ไม่บอกว่าเก็บที่ไหน) วิธีแก้อยู่ใน Log', r);
+  W.drive.folders[MYFOLDER].canEdit = true;
+  W.drive.blockSharing = true;
+  const before = W.drive.files.length;
+  r = up('O1', JPG, 'image/jpeg');
+  ok(!r.ok && r.code === 'SHARE_BLOCKED' && !/Drive|Google/.test(r.error) && W.logs.some(l => l.includes('ทุกคนที่มีลิงก์')) && W.drive.files.length === before + 1 && W.drive.files.slice(-1)[0].trashed, 'สคริปต์ตั้งแชร์เองไม่ได้ + โฟลเดอร์ไม่ได้แชร์ → บอกวิธีแชร์โฟลเดอร์ และย้ายไฟล์ไปถังขยะ', r);
+  W.drive.folders[MYFOLDER].sharing = 'ANYONE_WITH_LINK'; // เจ้าของร้านตั้งแชร์โฟลเดอร์ด้วยลิงก์
+  r = up('O1', JPG, 'image/jpeg');
+  ok(r.ok && /thumbnail\?id=FILE/.test(r.url) && !W.drive.files.slice(-1)[0].trashed, 'สคริปต์ตั้งแชร์เองไม่ได้ แต่โฟลเดอร์แชร์ด้วยลิงก์แล้ว → อัปโหลดสำเร็จ (รูปเปิดได้ตามโฟลเดอร์)', r);
+  W.drive.folders[MYFOLDER].sharing = null;
+  W.drive.blockSharing = false;
+  setCell('Settings', 'Key', 'IMAGE_FOLDER_ID', 'Value', 'https://example.com/not-a-folder');
+  r = up('O1', JPG, 'image/jpeg');
+  ok(!r.ok && r.code === 'NO_FOLDER', 'IMAGE_FOLDER_ID ผิดรูปแบบ → บอกให้แก้', r);
+  setCell('Settings', 'Key', 'IMAGE_FOLDER_ID', 'Value', MYFOLDER);
+  W.drive.noPermission = true;
+  r = up('O1', JPG, 'image/jpeg');
+  ok(!r.ok && r.code === 'NO_FOLDER' && !/testSetup|Drive/.test(r.error) && W.logs.some(l => l.includes('Run testSetup')), 'ยังไม่ได้อนุญาตสิทธิ์ Drive → ผู้ใช้เห็นข้อความกลางๆ วิธีแก้อยู่ใน Log', r);
+  W.drive.noPermission = false;
+  r = call(W, { action: 'adminSettings', idToken: tok('O1') });
+  ok(r.items.find(x => x.key === 'IMAGE_FOLDER_ID').value === MYFOLDER && !r.items.find(x => x.key === 'IMAGE_FOLDER_ID').editable, 'หลังบ้านเห็นโฟลเดอร์เก็บรูป (แก้ในหลังบ้านไม่ได้)');
+
+  // หลังบ้านเปิดรอบเดียว: ขอข้อมูลผู้ใช้มาพร้อมหน้าแรก
+  r = call(W, { action: 'adminRewards', idToken: tok('A1'), withMe: true });
+  ok(r.ok && r.me && r.me.role === 'ADMIN' && r.items.length >= 3, 'withMe → ได้ทั้งข้อมูลผู้ใช้และข้อมูลหน้า (เรียกครั้งเดียว)', r.me);
+  r = call(W, { action: 'adminRewards', idToken: tok('S1'), withMe: true });
+  ok(!r.ok && r.code === 'NO_ROLE' && !r.me, 'withMe ไม่ข้ามการตรวจสิทธิ์', r);
+
+  // จำข้อมูลชั่วคราว: แก้ในชีตเองยังไม่เห็นทันที / แก้ผ่านหลังบ้านเห็นทันที
+  call(W, { action: 'bootstrap', idToken: tok('U2') });
+  const rw = sheet('Rewards'); const rh = rw.data[0];
+  const r2 = rw.data.find((row, i) => i > 0 && row[0] === 'R002');
+  r2[rh.indexOf('Name')] = 'ชื่อที่แก้ในชีตตรงๆ';
+  r = call(W, { action: 'bootstrap', idToken: tok('U2') });
+  ok(r.rewards.find(x => x.id === 'R002').name !== 'ชื่อที่แก้ในชีตตรงๆ', 'แก้ในชีตเอง → ลูกค้ายังเห็นค่าที่จำไว้ (สูงสุด 5 นาที)');
+  const cur = call(W, { action: 'adminRewards', idToken: tok('O1') }).items.find(x => x.id === 'R002');
+  ok(cur.name === 'ชื่อที่แก้ในชีตตรงๆ', 'หลังบ้านอ่านชีตตรงๆ เห็นค่าล่าสุดเสมอ');
+  call(W, { action: 'adminRewardSave', idToken: tok('O1'), reward: { ...cur, name: 'ขนมหวานฟรี 1 ที่', quota: String(cur.quota), validDays: String(cur.validDays), limitPerMember: String(cur.limitPerMember), sort: String(cur.sort) }, requestId: rid() });
+  r = call(W, { action: 'bootstrap', idToken: tok('U2') });
+  ok(r.rewards.find(x => x.id === 'R002').name === 'ขนมหวานฟรี 1 ที่', 'แก้ผ่านหลังบ้าน → ลูกค้าเห็นทันที (ล้างค่าที่จำไว้)', r.rewards.find(x => x.id === 'R002'));
+  ok(r.rewards.every(x => typeof x.endDate === 'string') && W.cache.has('rows:Rewards'), 'ข้อมูลที่จำไว้แปลงวันที่กลับถูกต้อง');
+  r2[rh.indexOf('Name')] = 'พิมพ์แก้ในชีต';
+  callFn(W, 'onEdit', { range: { getSheet: () => ({ getName: () => 'Rewards' }) } });
+  r = call(W, { action: 'bootstrap', idToken: tok('U2') });
+  ok(r.rewards.find(x => x.id === 'R002').name === 'พิมพ์แก้ในชีต', 'พิมพ์แก้ในชีตเอง (onEdit) → ลูกค้าเห็นทันที');
+  r2[rh.indexOf('Name')] = 'ขนมหวานฟรี 1 ที่';
+  callFn(W, 'clearCache');
+  ok(!W.cache.has('rows:Rewards') && !W.cache.has('rows:Settings'), 'กด Run clearCache → ล้างค่าที่จำไว้ทั้งหมด');
+
+  const issuedBefore = call(W, { action: 'bootstrap', idToken: tok('U2') }).rewards.find(x => x.id === 'R004');
+  setCell('Members', 'Member_ID', M2, 'Status', 'ACTIVE');
+  call(W, { action: 'adjustPoints', idToken: tok('O1'), memberId: M2, points: 500, reason: 'ทดสอบแลก', requestId: rid() });
+  call(W, { action: 'adminRewardSave', idToken: tok('O1'), reward: { id: 'R004', name: 'เค้กส้มฟรี 1 ชิ้น', points: '150', quota: '20', status: 'ACTIVE', startDate: '', endDate: '' }, requestId: rid() });
+  const left1 = call(W, { action: 'bootstrap', idToken: tok('U2') }).rewards.find(x => x.id === 'R004').remaining;
+  r = call(W, { action: 'redeem', idToken: tok('U2'), rewardId: 'R004', requestId: rid() });
+  const left2 = call(W, { action: 'bootstrap', idToken: tok('U2') }).rewards.find(x => x.id === 'R004').remaining;
+  ok(r.ok && left2 === left1 - 1, `แลกแล้วจำนวนคงเหลือที่ลูกค้าเห็นลดทันที (${left1} → ${left2})`, r);
+}
+
+console.log('\n[13.8] หน้าตาร้าน (ชื่อ โลโก้ สี ข้อความ นโยบาย)');
+{
+  const DRIVE_ID = '1LogoLogoLogoLogoLogoLogoLogoLogo';
+  r = call(W, { action: 'bootstrap', idToken: tok('U2'), withBrand: true });
+  ok(r.ok && r.brand && r.brand.name === '' && r.brand.colors.primary === '' && r.brand.consentVersion === '1', 'ยังไม่ได้ตั้ง → ทุกช่องว่าง (หน้าเว็บใช้ค่าในไฟล์ตั้งค่าร้าน)', r.brand);
+  setCell('Settings', 'Key', 'SHOP_NAME', 'Value', 'ร้านของฉัน');
+  r = call(W, { action: 'bootstrap', idToken: tok('U2'), withBrand: true });
+  ok(r.brand.name === '', 'ชื่อร้านค่าตั้งต้นเดิม "ร้านของฉัน" ไม่เอาไปโชว์ลูกค้า', r.brand.name);
+  r = call(W, { action: 'bootstrap', idToken: tok('U2') });
+  ok(r.ok && !('brand' in r), 'ไม่ขอ withBrand → ไม่ส่งหน้าตาร้านมา');
+
+  r = call(W, { action: 'adminBrand', idToken: tok('S1') });
+  ok(!r.ok && r.code === 'NO_ROLE', 'แคชเชียร์ดูหน้าตาร้านไม่ได้', r);
+  r = call(W, { action: 'adminBrand', idToken: tok('A1') });
+  ok(r.ok && r.values.SHOP_NAME === '' && 'PRIVACY_TEXT' in r.values && r.consentVersion === '1', 'ผู้จัดการดูหน้าตาร้านได้', r);
+  r = call(W, { action: 'adminBrandSave', idToken: tok('A1'), values: { SHOP_NAME: 'แอบแก้' } });
+  ok(!r.ok && r.code === 'NO_ROLE', 'ผู้จัดการแก้หน้าตาร้านไม่ได้ (เจ้าของร้านเท่านั้น)', r);
+
+  const bad = (values, msg) => { const x = call(W, { action: 'adminBrandSave', idToken: tok('O1'), values }); ok(!x.ok && x.code === 'BAD_INPUT' || x.code === 'BAD_IMAGE', msg, x); };
+  bad({ COLOR_PRIMARY: 'red' }, 'สีไม่ใช่ #RRGGBB → ปฏิเสธ');
+  bad({ COLOR_BUTTON: '#12345' }, 'รหัสสีสั้นเกิน → ปฏิเสธ');
+  bad({ THEME: 'neon' }, 'สไตล์ที่ไม่มี → ปฏิเสธ');
+  bad({ LOGO_URL: 'javascript:alert(1)' }, 'ลิงก์โลโก้อันตราย → ปฏิเสธ');
+  bad({ PRIVACY_TEXT: 'ก'.repeat(3001) }, 'นโยบายยาวเกิน 3,000 ตัวอักษร → ปฏิเสธ');
+
+  const privacy = 'ข้อ 1 ร้านเก็บชื่อ-นามสกุล\r\n\r\n\r\n\r\nข้อ 2 <script>ลบได้</script>';
+  r = call(W, { action: 'adminBrandSave', idToken: tok('O1'), values: {
+    SHOP_NAME: '=คำหวานสาขาใหม่', LOGO_URL: `https://drive.google.com/file/d/${DRIVE_ID}/view`, THEME: 'minimal',
+    COLOR_PRIMARY: '#0f766e', COLOR_BUTTON: '#0F766E', COLOR_ACCENT: '', COLOR_CARD: '#134E4A',
+    TEXT_POINT_UNIT: 'ดาว', TEXT_GREETING: 'ยินดีต้อนรับ', TEXT_REGISTER_TITLE: '', TEXT_REGISTER_SUBTITLE: '', PRIVACY_TEXT: privacy } });
+  ok(r.ok && r.changed === 9 && r.consentVersion === '2', 'เจ้าของร้านบันทึก 9 ค่า + แก้นโยบาย → ฉบับที่ 2 อัตโนมัติ', r);
+  ok(r.brand.name === '=คำหวานสาขาใหม่' && r.brand.colors.primary === '#0F766E' && r.brand.theme === 'minimal' && r.brand.consentVersion === '2', 'ส่งหน้าตาร้านใหม่กลับมาให้หน้าหลังบ้านใช้ทันที', r.brand);
+  ok(!hasFormula(), 'ชื่อร้านขึ้นต้นด้วย = ไม่กลายเป็นสูตร');
+  ok(r.brand.privacyText === 'ข้อ 1 ร้านเก็บชื่อ-นามสกุล\n\nข้อ 2 script ลบได้ /script', 'นโยบาย: เก็บการขึ้นบรรทัดใหม่ ตัด < > และบรรทัดว่างเกิน', r.brand.privacyText);
+  ok(r.brand.logo === `https://drive.google.com/thumbnail?id=${DRIVE_ID}&sz=w1000`, 'ลิงก์โลโก้จาก Drive แปลงเป็นลิงก์รูป');
+  ok(W.logs.some(l => l.includes('แก้หน้าตาร้าน โดย เจ้าของ') && l.includes('ฉบับที่ 2')), 'บันทึกใน Log ว่าใครแก้ และนโยบายเป็นฉบับไหน');
+  r = call(W, { action: 'bootstrap', idToken: tok('U2'), withBrand: true });
+  ok(r.brand.name === '=คำหวานสาขาใหม่' && r.brand.texts.pointUnit === 'ดาว' && r.brand.colors.card === '#134E4A' && r.settings.consentVersion === '2', 'ลูกค้าได้หน้าตาร้านใหม่ทันที (ล้างค่าที่จำไว้)', r.brand);
+  r = call(W, { action: 'adminBrandSave', idToken: tok('O1'), values: { PRIVACY_TEXT: privacy, SHOP_NAME: '=คำหวานสาขาใหม่' } });
+  ok(r.ok && r.changed === 0 && r.consentVersion === '2', 'บันทึกค่าเดิมซ้ำ → เลขฉบับนโยบายไม่เพิ่ม', r);
+  r = call(W, { action: 'register', idToken: tok('U9', 'ลูกค้าใหม่'), firstName: 'ใหม่', lastName: 'หลังแก้นโยบาย', phone: '0877777777', birthDate: '1999-09-09', consentPrivacy: true });
+  ok(r.ok && rowsOf('Members').find(m => m.LINE_User_ID === 'U9').Consent_Version === '2', 'สมัครหลังแก้นโยบาย → บันทึกว่ายอมรับฉบับที่ 2');
+  ok(rowsOf('Members').find(m => m.Member_ID === M1).Consent_Version === '1', 'สมาชิกเก่ายังเป็นฉบับที่ 1 (รู้ว่าใครยอมรับฉบับไหน)');
+  setCell('Settings', 'Key', 'COLOR_ACCENT', 'Value', 'ไม่ใช่สี');
+  r = call(W, { action: 'bootstrap', idToken: tok('U2'), withBrand: true });
+  ok(r.brand.colors.accent === '', 'พิมพ์สีผิดรูปแบบในชีตเอง → ไม่ส่งไปหน้าเว็บ (ใช้ค่าตั้งต้นแทน)', r.brand.colors);
+  // คืนค่าว่างทั้งหมด ไม่ให้กระทบส่วนอื่นของชุดทดสอบ
+  const blank = {}; ['SHOP_NAME', 'LOGO_URL', 'THEME', 'COLOR_PRIMARY', 'COLOR_BUTTON', 'COLOR_ACCENT', 'COLOR_CARD', 'TEXT_POINT_UNIT', 'TEXT_GREETING', 'PRIVACY_TEXT'].forEach(k => { blank[k] = ''; });
+  r = call(W, { action: 'adminBrandSave', idToken: tok('O1'), values: blank });
+  ok(r.ok && r.consentVersion === '3' && r.brand.name === '' && r.brand.privacyText === '', 'ล้างกลับเป็นค่าตั้งต้นได้ (ลบนโยบาย = เปลี่ยนนโยบาย → ฉบับที่ 3)', r);
+  r = call(W, { action: 'adminUploadImage', idToken: tok('O1'), data: Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0, 16]).toString('base64'), mime: 'image/jpeg', kind: 'logo' });
+  ok(r.ok && /^logo-/.test(W.drive.files.slice(-1)[0].name), 'อัปโหลดโลโก้ได้ (ชื่อไฟล์ขึ้นต้น logo-)', r);
+}
+
+console.log('\n[14] LINE token จริง (จำลอง LINE)');
+run(W, 'disableTestMode');
+r = call(W, { action: 'bootstrap', idToken: 'real-token-1' });
+ok(!r.ok && r.code === 'NO_LIFF', 'ยังไม่ใส่ LIFF_ID → บอกให้ตั้งค่า', r);
+// กรอก LIFF_ID ในชีตตรงๆ หลังระบบจำค่าเดิม (ว่าง) ไว้แล้ว — ไม่ล้าง cache เอง เพื่อตรวจว่าระบบอ่านใหม่ให้
+{ const st = sheet('Settings'); const h = st.data[0]; st.data.find((x, i) => i > 0 && x[0] === 'LIFF_ID')[h.indexOf('Value')] = '2011913909-NcxFMTsN'; }
+ok(W.cache.has('rows:Settings'), 'ระบบจำค่า Settings เดิม (LIFF_ID ว่าง) ไว้อยู่');
+let lastPayload = null;
+W.fetchImpl = (url, opts) => {
+  lastPayload = opts.payload;
+  if (opts.payload.id_token === 'real-token-1') return { code: 200, body: JSON.stringify({ sub: 'Ureal', name: 'ลูกค้าจริง', picture: 'https://profile.line-scdn.net/abc', exp: Math.floor(Date.now() / 1000) + 3600 }) };
+  return { code: 400, body: '{"error":"invalid_request","error_description":"IdToken expired."}' };
+};
+W.fetchCalls = 0;
+r = call(W, { action: 'bootstrap', idToken: 'real-token-1' });
+ok(r.ok && r.profile.name === 'ลูกค้าจริง' && !r.testMode, 'token จริงผ่าน → เข้าระบบได้', r);
+ok(lastPayload.client_id === '2011913909', 'ส่ง Channel ID (ส่วนหน้าของ LIFF ID) ไปตรวจกับ LINE', lastPayload);
+call(W, { action: 'bootstrap', idToken: 'real-token-1' });
+ok(W.fetchCalls === 1, 'คำสั่งถัดไปใช้ผลตรวจที่จำไว้ ไม่ถาม LINE ซ้ำ', W.fetchCalls);
+r = call(W, { action: 'bootstrap', idToken: 'expired' });
+ok(!r.ok && r.code === 'TOKEN_INVALID' && !r.error.includes('IdToken'), 'token หมดอายุ → ข้อความภาษาไทย ไม่โชว์รายละเอียดภายใน', r);
+r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+ok(!r.ok && r.code === 'TEST_DISABLED', 'ปิดโหมดทดสอบแล้ว token ทดสอบใช้ไม่ได้', r);
+
+console.log('\n[15] ข้อผิดพลาดภายในไม่หลุดออกไป');
+delete W.ss.sheets.Promotions;
+W.cache.delete('rows:Promotions'); // ไม่งั้นยังใช้ค่าที่จำไว้ได้อีก 5 นาที
+r = call(W, { action: 'bootstrap', idToken: 'real-token-1' });
+ok(!r.ok && r.error === 'ระบบขัดข้อง กรุณาลองใหม่อีกครั้ง' && !r.debug, 'ชีตหาย → ข้อความกลางๆ (โหมดจริงไม่มี debug)', r);
+ok(W.logs.some(l => l.startsWith('ERROR')), 'บันทึกรายละเอียดไว้ใน Log ของ Apps Script');
+
+console.log('\n[16] ข้อความที่ผู้ใช้เห็นไม่บอกว่าระบบเก็บข้อมูลที่ไหน (ผู้ใช้ตัดสินใจ 3 พ.ย. 2569)');
+{
+  const fs = require('fs');
+  const path = require('path');
+  const root = path.join(__dirname, '..', '..');
+  const BANNED = /Google|Drive|Sheet|ชีต|Apps Script/;
+  const gs = fs.readFileSync(path.join(root, 'code.gs'), 'utf8');
+  // เฉพาะบรรทัดที่เรียก userError_ (ข้อความอยู่บรรทัดเดียวกันทุกจุด) ไม่นับตัวฟังก์ชันเอง
+  const msgs = gs.split('\n').filter(l => l.includes('userError_(') && !l.includes('function userError_'))
+    .map(l => l.slice(l.indexOf('userError_(')));
+  const badMsgs = msgs.filter(m => BANNED.test(m));
+  ok(msgs.length > 50 && badMsgs.length === 0, `ข้อความแจ้งผู้ใช้ใน code.gs ${msgs.length} จุด ไม่มีคำว่า Google / Drive / ชีต / Apps Script`, badMsgs);
+  // หน้าเว็บ: ไม่นับบรรทัดคอมเมนต์ และข้อความแผงทดสอบที่โชว์เฉพาะตอนเปิดในเครื่อง (localhost)
+  const badUi = [];
+  ['customer.js', 'staff.js', 'admin.js', 'ui.js', 'api.js', 'line.js', 'shop.js'].forEach(f => {
+    fs.readFileSync(path.join(root, 'app', f), 'utf8').split('\n').forEach((line, i) => {
+      const t = line.trim();
+      if (/^(\/\/|\/?\*|<!--)/.test(t) || /🧪|enableTestMode/.test(t)) return;
+      const code = t.replace(/\/\/ .*$/, '').replace(/<!--.*?-->/g, '');
+      if (BANNED.test(code)) badUi.push(f + ':' + (i + 1) + ' ' + t.slice(0, 80));
+    });
+  });
+  ok(badUi.length === 0, 'ข้อความบนหน้าเว็บไม่มีคำว่า Google / Drive / ชีต / Apps Script', badUi);
+}
+
+console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
+process.exit(fail ? 1 : 0);
