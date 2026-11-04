@@ -154,6 +154,31 @@ code { background: var(--surface2); padding: 2px 6px; border-radius: 6px; font-s
 .avatar { width: 52px; height: 52px; border-radius: 50%; overflow: hidden; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--surface2); color: var(--muted); border: 2px solid var(--accent); }
 .avatar img { width: 100%; height: 100%; object-fit: cover; }
 .avatar.sm { width: 44px; height: 44px; border-width: 1px; }
+.avatar-lg { width: 76px; height: 76px; }
+/* ข้อมูลของฉัน: ดินสอที่มุมรูป + "แก้ไขข้อมูล ›" ใต้ชื่อ (ผู้ใช้เลือกแบบนี้แทนปุ่มเฟือง 4 พ.ย. 2569) — กดได้ทั้งรูปและข้อความ */
+.avatar-wrap { position: relative; flex-shrink: 0; border: 0; background: none; padding: 0; cursor: pointer; border-radius: 50%; }
+.avatar-edit { position: absolute; right: -3px; bottom: -3px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 2px var(--primary); }
+.hero-edit { display: inline-flex; align-items: center; gap: 2px; margin-top: 3px; padding: 2px 0; border: 0; background: none; font: inherit; font-size: 12.5px; color: var(--on-primary-muted); cursor: pointer; }
+.profile-top { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 22px 16px 6px; text-align: center; }
+.profile-name { font-size: 18px; }
+.profile-form { margin: 12px 16px; }
+.profile-note { color: var(--muted); font-size: 12.5px; text-align: center; padding: 4px 20px 16px; }
+.hint { display: block; color: var(--muted); font-size: 12.5px; font-weight: 400; margin-top: 4px; }
+.field-err { color: var(--danger); font-size: 13px; font-weight: 600; margin-top: 4px; }
+.field-err + .hint { display: none; } /* มีข้อความเตือนแล้ว ไม่ต้องโชว์คำอธิบายซ้อน */
+input.input-err { border-color: var(--danger); }
+.locked { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface2); font-weight: 700; }
+.locked .ic { color: var(--muted); }
+.birth-new { font-size: 24px; }
+/* สวิตช์รับข่าวสาร: ใช้ checkbox จริง (อ่านด้วยโปรแกรมอ่านหน้าจอได้) แต่งให้เป็นสวิตช์ */
+.switch-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; cursor: pointer; position: relative; }
+.switch-row .hint { margin-top: 2px; }
+.switch-input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.switch { width: 46px; height: 28px; border-radius: 99px; background: var(--line); position: relative; flex-shrink: 0; transition: background-color .2s; }
+.switch::after { content: ''; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--surface); box-shadow: 0 1px 3px rgba(0, 0, 0, .25); transition: transform .2s; }
+.switch-input:checked + .switch { background: var(--button); }
+.switch-input:checked + .switch::after { transform: translateX(18px); }
+.switch-input:focus-visible + .switch { outline: 2px solid var(--button); outline-offset: 2px; }
 .logo { width: 44px; height: 44px; border-radius: 12px; object-fit: cover; flex-shrink: 0; }
 .logo-text { display: flex; align-items: center; justify-content: center; background: var(--accent); color: var(--on-accent); font-weight: 800; font-size: 20px; }
 .logo-lg { width: 76px; height: 76px; border-radius: 22px; font-size: 34px; }
@@ -270,11 +295,23 @@ code { background: var(--surface2); padding: 2px 6px; border-radius: 6px; font-s
   background: color-mix(in srgb, var(--surface) 94%, transparent); backdrop-filter: blur(14px);
   border-top: 1px solid var(--line); box-shadow: 0 -10px 30px rgba(0, 0, 0, .05);
 }
-.nav-btn { border: 0; background: transparent; color: var(--muted); font-size: 12px; font-weight: 700; padding: 4px 0; display: flex; flex-direction: column; align-items: center; gap: 2px; }
-.nav-icon { position: relative; width: 44px; height: 32px; border-radius: 12px; display: flex; align-items: center; justify-content: center; }
-.nav-btn.active { color: var(--button); }
-.nav-btn.active .nav-icon { background: var(--surface2); }
-.badge { position: absolute; top: -2px; right: 2px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--danger); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
+.nav-btn { border: 0; background: transparent; color: var(--muted); font-size: 12px; font-weight: 700; padding: 4px 0; display: flex; flex-direction: column; align-items: center; gap: 3px; -webkit-tap-highlight-color: transparent; }
+.nav-icon { position: relative; width: 52px; height: 32px; border-radius: 99px; display: flex; align-items: center; justify-content: center; transition: background-color .2s ease, color .2s ease, transform .2s ease, box-shadow .2s ease; }
+/* เมนูที่เลือก: แคปซูลสีปุ่มของร้าน ไอคอนสีตัวหนังสือบนปุ่ม (--on-button คำนวณให้อ่านออกทั้งสีร้านเข้มและอ่อน)
+   ใช้สีร้านจากตัวแปรเสมอ — เจ้าของร้านเปลี่ยนสีในหลังบ้านแล้วเมนูเปลี่ยนตามเอง (ผู้ใช้เลือกแบบนี้ 4 พ.ย. 2569) */
+.nav-btn.active { color: var(--button); font-weight: 800; }
+.nav-btn.active .nav-icon {
+  background: var(--button); color: var(--on-button); transform: translateY(-1px);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--button) 35%, transparent);
+  animation: nav-pop .22s ease-out;
+}
+@keyframes nav-pop { from { transform: scale(.7); } to { transform: translateY(-1px); } }
+@media (prefers-reduced-motion: reduce) {
+  .nav-icon { transition: none; }
+  .nav-btn.active .nav-icon { animation: none; }
+}
+/* ขอบสีพื้นเมนูรอบป้ายตัวเลข: ไม่ให้ป้ายแดงจมไปกับแคปซูลสีร้าน */
+.badge { position: absolute; top: -5px; right: 0; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--danger); color: #fff; font-size: 11px; line-height: 18px; text-align: center; box-shadow: 0 0 0 2px var(--surface); }
 
 /* ---------- ป๊อปอัป ---------- */
 .modal { position: fixed; inset: 0; z-index: 100; background: rgba(0, 0, 0, .6); display: flex; align-items: flex-end; justify-content: center; }

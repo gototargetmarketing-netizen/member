@@ -7,7 +7,7 @@ import { applyDevParams, mountDevBar } from './devbar.js';
 import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, qrSvg, setBusy, creditHtml, bootHtml } from './ui.js';
 
 const app = document.getElementById('app');
-const PAGES = ['home', 'rewards', 'coupons', 'history', 'collect'];
+const PAGES = ['home', 'rewards', 'coupons', 'history', 'collect', 'profile'];
 const S = { shop: null, line: null, api: null, data: null, page: 'home', histFilter: 'all', couponTab: 'active', ready: false, stale: false };
 const withRequestId = createRetryKeeper();
 
@@ -16,6 +16,7 @@ const T = (key, fallback) => (cfg().texts && cfg().texts[key]) || fallback;
 const unit = () => T('pointUnit', 'แต้ม');
 
 document.addEventListener('click', onClick);
+document.addEventListener('input', onPhoneInput);
 window.addEventListener('hashchange', () => { S.page = pageFromHash(); closeModal(); if (S.data) render(); window.scrollTo(0, 0); });
 main();
 
@@ -54,7 +55,7 @@ async function main() {
   }
 }
 
-const LOADING_TEXT = { register: 'กำลังสมัครสมาชิก...', redeem: 'กำลังแลกของรางวัล...' };
+const LOADING_TEXT = { register: 'กำลังสมัครสมาชิก...', redeem: 'กำลังแลกของรางวัล...', updateProfile: 'กำลังบันทึก...' };
 
 /* ---------- สาขาที่ลูกค้าสแกน QR สมัครสมาชิก (ลิงก์ ...?branch=B001) ----------
  * จำไว้ในเครื่องจนกว่าจะสมัครเสร็จ: ระหว่างนั้นหน้าอาจโหลดใหม่หลายรอบ (LINE พาไปเข้าสู่ระบบ / เชื่อมต่อใหม่)
@@ -141,6 +142,7 @@ function onClick(e) {
     case 'coupon-tab': S.couponTab = el.dataset.tab; render(); break;
     case 'hist': S.histFilter = el.dataset.filter; render(); break;
     case 'privacy': showPrivacy(); break;
+    case 'profile-confirm': doSaveProfile(el); break;
     case 'close': closeModal(); break;
     case 'reload': window.location.reload(); break;
     case 'relogin': if (S.line) S.line.relogin(); break;
@@ -198,8 +200,10 @@ function render() {
       </div>`;
     return;
   }
-  const body = { home: pageHome, rewards: pageRewards, coupons: pageCoupons, history: pageHistory, collect: pageCollect }[S.page] || pageHome;
+  const body = { home: pageHome, rewards: pageRewards, coupons: pageCoupons, history: pageHistory, collect: pageCollect, profile: pageProfile }[S.page] || pageHome;
   app.innerHTML = testBanner() + `<main class="screen">${body()}</main>${nav()}`;
+  const pf = document.getElementById('profile');
+  if (pf) pf.addEventListener('submit', onProfileSubmit);
 }
 
 function nav() {
@@ -243,17 +247,20 @@ function avatarHtml() {
 // ปฏิทินของมือถือบางเครื่องเป็น ค.ศ. และต้องเลื่อนย้อนหลายสิบปี) — ส่งให้ Apps Script เป็น yyyy-mm-dd ค.ศ.
 const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 
-function birthSelects() {
+// value = วันเกิดเดิม yyyy-mm-dd (หน้าข้อมูลของฉัน) → เลือกไว้ให้
+function birthSelects(value = '') {
   const thisYearBE = new Date().getFullYear() + 543;
-  const opts = (placeholder, items) => `<option value="">${placeholder}</option>` + items.map(([v, t]) => `<option value="${v}">${t}</option>`).join('');
+  const [vy, vm, vd] = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value.split('-').map(Number) : [0, 0, 0];
+  const pick = { bdDay: vd, bdMonth: vm, bdYear: vy ? vy + 543 : 0 };
+  const opts = (placeholder, items, name) => `<option value="">${placeholder}</option>` + items.map(([v, t]) => `<option value="${v}" ${pick[name] === v ? 'selected' : ''}>${t}</option>`).join('');
   const days = Array.from({ length: 31 }, (_, i) => [i + 1, i + 1]);
   const months = TH_MONTHS.map((m, i) => [i + 1, m]);
   const years = Array.from({ length: 100 }, (_, i) => [thisYearBE - 1 - i, thisYearBE - 1 - i]);
   return `
     <div class="date-row">
-      <select name="bdDay" class="select" aria-label="วันเกิด">${opts('วัน', days)}</select>
-      <select name="bdMonth" class="select" aria-label="เดือนเกิด">${opts('เดือน', months)}</select>
-      <select name="bdYear" class="select" aria-label="ปีเกิด (พ.ศ.)">${opts('ปี พ.ศ.', years)}</select>
+      <select name="bdDay" class="select" aria-label="วันเกิด">${opts('วัน', days, 'bdDay')}</select>
+      <select name="bdMonth" class="select" aria-label="เดือนเกิด">${opts('เดือน', months, 'bdMonth')}</select>
+      <select name="bdYear" class="select" aria-label="ปีเกิด (พ.ศ.)">${opts('ปี พ.ศ.', years, 'bdYear')}</select>
     </div>`;
 }
 
@@ -284,8 +291,8 @@ function renderRegister() {
           <input name="lastName" maxlength="40" autocomplete="family-name" placeholder="นามสกุล"></label>
         <div class="field"><span>วันเกิด <em>*</em> <small>ใช้มอบสิทธิพิเศษเดือนเกิด</small></span>
           ${birthSelects()}</div>
-        <label class="field"><span>เบอร์โทรศัพท์ <em>*</em></span>
-          <input name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="08x-xxx-xxxx" maxlength="15"></label>
+        <label class="field"><span>เบอร์มือถือ <em>*</em></span>
+          ${phoneInput('')}</label>
         <label class="check"><input type="checkbox" name="consentPrivacy">
           <span>ฉันยอมรับ<button type="button" class="link" data-act="privacy">นโยบายความเป็นส่วนตัว</button>ของร้าน <em>*</em></span></label>
         <label class="check"><input type="checkbox" name="consentMarketing">
@@ -340,6 +347,144 @@ function restoreRegisterDraft() {
   box.hidden = false;
 }
 
+/* =====================================================
+ * ข้อมูลของฉัน: ลูกค้าแก้ชื่อ เบอร์ วันเกิด (ได้ 1 ครั้ง) และการรับข่าวสาร
+ * Apps Script ตรวจซ้ำทุกอย่าง (เบอร์ซ้ำ / วันเกิดล็อก / สมาชิกถูกระงับ) — หน้านี้ตรวจแค่ให้รู้เร็ว
+ * ===================================================== */
+// เบอร์มือถือไทย 10 หลัก (ผู้ใช้ขอ 4 พ.ย. 2569) — ต้องตรงกับ cleanMobile_ ใน code.gs
+const MOBILE = /^0[689]\d{8}$/;
+const PHONE_MSG = 'กรุณากรอกเบอร์มือถือ 10 หลัก';
+
+// ไม่ใช้ maxlength: วางเบอร์แบบ "+66 81 234 5678" ต้องแปลงก่อนตัด ไม่งั้นตัวเลขท้ายหาย — ตัดเหลือ 10 หลักใน onPhoneInput แทน
+function phoneInput(value) {
+  return `<input name="phone" type="tel" inputmode="numeric" autocomplete="tel" placeholder="08xxxxxxxx" data-phone value="${esc(value)}">`;
+}
+
+function phoneDigits(raw) {
+  let d = String(raw || '').replace(/\D/g, '');
+  if (d.startsWith('66') && d.length >= 11) d = '0' + d.slice(2);
+  return d.slice(0, 10);
+}
+
+// รับเฉพาะตัวเลขตั้งแต่ตอนพิมพ์ พิมพ์เกิน 10 หลักแล้วไม่ขึ้น
+function onPhoneInput(e) {
+  const el = e.target.closest && e.target.closest('input[data-phone]');
+  if (!el) return;
+  const v = phoneDigits(el.value);
+  if (v !== el.value) el.value = v;
+  clearFieldError(el);
+}
+
+function fieldError(input, msg) {
+  clearFieldError(input);
+  input.classList.add('input-err');
+  input.setAttribute('aria-invalid', 'true');
+  input.insertAdjacentHTML('afterend', `<div class="field-err" role="alert">${esc(msg)}</div>`);
+  input.focus();
+}
+
+function clearFieldError(input) {
+  input.classList.remove('input-err');
+  input.removeAttribute('aria-invalid');
+  const next = input.nextElementSibling;
+  if (next && next.classList.contains('field-err')) next.remove();
+}
+
+const fmtBirth = iso => (iso ? fmtDate(iso + 'T00:00:00+07:00') : '-');
+
+function pageProfile() {
+  const m = S.data.member;
+  return `
+    ${pageHead('ข้อมูลของฉัน')}
+    <div class="profile-top">
+      <span class="avatar avatar-lg">${avatarHtml()}</span>
+      <b class="profile-name">${esc(m.name)}</b>
+      <span class="muted small">รหัสสมาชิก ${esc(m.memberId)}</span>
+    </div>
+    <form id="profile" class="card form profile-form" novalidate>
+      <label class="field"><span>ชื่อ <em>*</em></span>
+        <input name="firstName" maxlength="40" autocomplete="given-name" value="${esc(m.firstName || '')}"></label>
+      <label class="field"><span>นามสกุล <em>*</em></span>
+        <input name="lastName" maxlength="40" autocomplete="family-name" value="${esc(m.lastName || '')}" placeholder="นามสกุล"></label>
+      <label class="field"><span>เบอร์มือถือ <em>*</em></span>
+        ${phoneInput(m.phone || '')}
+        <small class="hint">ตัวเลข 10 หลัก พนักงานใช้ค้นหาบัตรสมาชิกของคุณ</small></label>
+      <div class="field"><span>วันเกิด <em>*</em></span>
+        ${m.birthLocked
+          ? `<div class="locked">${icon('lock', 18)}<span>${esc(fmtBirth(m.birthDate))}</span></div>
+             <small class="hint">แก้วันเกิดได้ 1 ครั้ง (ใช้ไปแล้ว) ต้องการแก้อีก กรุณาติดต่อร้าน</small>`
+          : `${birthSelects(m.birthDate)}
+             <small class="hint">${m.birthDate ? 'แก้วันเกิดได้ 1 ครั้ง (ใช้มอบสิทธิพิเศษเดือนเกิด)' : 'ใช้มอบสิทธิพิเศษเดือนเกิด'}</small>`}
+      </div>
+      <label class="switch-row">
+        <span><b>รับข่าวสารและโปรโมชันทาง LINE</b><small class="hint">ปิดได้ทุกเมื่อ</small></span>
+        <input type="checkbox" name="consentMarketing" class="switch-input" ${m.marketingConsent ? 'checked' : ''}>
+        <span class="switch" aria-hidden="true"></span>
+      </label>
+      <div class="form-error" id="profile-error" hidden></div>
+      <button class="btn btn-primary btn-block btn-lg" type="submit">บันทึกข้อมูล</button>
+    </form>
+    <p class="profile-note">ร้านใช้ข้อมูลนี้ตาม<button type="button" class="link" data-act="privacy">นโยบายความเป็นส่วนตัว</button> · ${esc(unit())}และคูปองไม่เปลี่ยน</p>`;
+}
+
+function onProfileSubmit(e) {
+  e.preventDefault();
+  const f = e.target;
+  const m = S.data.member;
+  const errBox = document.getElementById('profile-error');
+  const showErr = (msg) => { errBox.textContent = msg; errBox.hidden = !msg; };
+  showErr('');
+  const firstName = f.firstName.value.trim();
+  const lastName = f.lastName.value.trim();
+  const phone = phoneDigits(f.phone.value);
+  if (!firstName) return showErr('กรุณากรอกชื่อ');
+  if (!lastName) return showErr('กรุณากรอกนามสกุล');
+  if (/\d/.test(firstName + lastName)) return showErr('ชื่อและนามสกุลต้องไม่มีตัวเลข');
+  if (!MOBILE.test(phone)) return fieldError(f.phone, PHONE_MSG);
+  let birthDate = m.birthDate;
+  if (!m.birthLocked) {
+    birthDate = birthValue(f);
+    if (birthDate === '') return showErr('กรุณาเลือกวันเกิดให้ครบ วัน เดือน ปี');
+    if (birthDate === null) return showErr('วันเกิดไม่ถูกต้อง กรุณาตรวจวันที่อีกครั้ง');
+  }
+  S.pendingProfile = { firstName, lastName, phone, birthDate, consentMarketing: f.consentMarketing.checked };
+  // เปลี่ยนวันเกิดได้ครั้งเดียว → ให้ยืนยันก่อน (เติมวันเกิดที่ยังว่างไม่นับ)
+  if (m.birthDate && birthDate !== m.birthDate) {
+    openModal(`
+      <div class="modal-head"><h2>ยืนยันเปลี่ยนวันเกิด</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+      <div class="confirm-cost"><b class="birth-new">${esc(fmtBirth(birthDate))}</b><span>เดิม ${esc(fmtBirth(m.birthDate))}</span></div>
+      <p class="notice">${icon('alert', 18)}<span>เปลี่ยนวันเกิดเองได้ครั้งเดียว หลังจากนี้ต้องติดต่อร้านถ้าต้องการแก้อีก</span></p>
+      <div class="modal-actions">
+        <button class="btn" data-act="close">ยกเลิก</button>
+        <button class="btn btn-primary" data-act="profile-confirm">ยืนยัน บันทึก</button>
+      </div>`);
+    return;
+  }
+  doSaveProfile(f.querySelector('button[type="submit"]'));
+}
+
+async function doSaveProfile(btn) {
+  const p = S.pendingProfile;
+  if (!p) return;
+  setBusy(btn, true);
+  try {
+    const r = await S.api.call('updateProfile', p);
+    S.pendingProfile = null;
+    S.data.member = r.member;
+    writeCache(S.data);
+    closeModal();
+    toast(r.changed ? 'บันทึกข้อมูลแล้ว' : 'ข้อมูลเหมือนเดิม ไม่มีอะไรเปลี่ยน', 'ok');
+    go('home');
+  } catch (e) {
+    setBusy(btn, false);
+    closeModal();
+    const f = document.getElementById('profile');
+    if (f && (e.code === 'BAD_PHONE' || e.code === 'PHONE_TAKEN')) return fieldError(f.phone, e.message);
+    const box = document.getElementById('profile-error');
+    if (box) { box.textContent = e.message; box.hidden = false; } else toast(e.message, 'err');
+  }
+}
+
 async function onRegister(e) {
   e.preventDefault();
   const f = e.target;
@@ -348,13 +493,13 @@ async function onRegister(e) {
   const firstName = f.firstName.value.trim();
   const lastName = f.lastName.value.trim();
   const birthDate = birthValue(f);
-  const phone = f.phone.value.replace(/\D/g, '');
+  const phone = phoneDigits(f.phone.value);
   if (!firstName) return showErr('กรุณากรอกชื่อ');
   if (!lastName) return showErr('กรุณากรอกนามสกุล');
   if (/\d/.test(firstName + lastName)) return showErr('ชื่อและนามสกุลต้องไม่มีตัวเลข');
   if (birthDate === '') return showErr('กรุณาเลือกวันเกิดให้ครบ วัน เดือน ปี');
   if (birthDate === null) return showErr('วันเกิดไม่ถูกต้อง กรุณาตรวจวันที่อีกครั้ง');
-  if (!/^(0\d{8,9}|66\d{9})$/.test(phone)) return showErr('กรุณากรอกเบอร์โทรให้ถูกต้อง เช่น 0812345678');
+  if (!MOBILE.test(phone)) { showErr(''); return fieldError(f.phone, PHONE_MSG); }
   if (!f.consentPrivacy.checked) return showErr('กรุณายอมรับนโยบายความเป็นส่วนตัว');
   showErr('');
 
@@ -417,10 +562,12 @@ function pageHome() {
   return `
     <header class="hero">
       <div class="hero-row">
-        <div class="avatar">${avatarHtml()}</div>
+        <button type="button" class="avatar-wrap" data-act="go" data-page="profile" aria-label="แก้ไขข้อมูลของฉัน">
+          <span class="avatar">${avatarHtml()}</span><span class="avatar-edit">${icon('edit', 12)}</span></button>
         <div class="hero-text">
           <div class="hello">${esc(T('greeting', 'สวัสดี'))}</div>
           <div class="hero-name">${esc(m.name)}</div>
+          <button type="button" class="hero-edit" data-act="go" data-page="profile">แก้ไขข้อมูล ${icon('right', 13)}</button>
         </div>
         ${logoHtml('logo-sm')}
       </div>

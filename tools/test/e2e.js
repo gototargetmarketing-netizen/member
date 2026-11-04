@@ -36,7 +36,7 @@ const adminOp = (op) => fetch(API + '/__admin', { method: 'POST', body: JSON.str
     ok(/วันเกิดไม่ถูกต้อง/.test(await b.text('#reg-error')), 'เลือก 31 เมษายน → แจ้งว่าวันที่ไม่มีจริง');
     await b.eval(`(() => { const f = document.querySelector('#reg'); f.bdDay.value = '18'; f.bdMonth.value = '2'; f.bdYear.value = '2538'; return true; })()`);
     await b.click('#reg button[type=submit]');
-    ok(/เบอร์โทร/.test(await b.text('#reg-error')), 'ไม่กรอกเบอร์ → แจ้งเตือน');
+    ok((await b.text('#reg .field-err')) === 'กรุณากรอกเบอร์มือถือ 10 หลัก', 'ไม่กรอกเบอร์ → แจ้งใต้ช่อง "กรุณากรอกเบอร์มือถือ 10 หลัก"');
     await b.type('#reg input[name=phone]', '081-234-5678');
     await b.click('#reg button[type=submit]');
     ok(/นโยบาย/.test(await b.text('#reg-error')), 'ไม่ติ๊กยอมรับ → แจ้งเตือน');
@@ -176,6 +176,43 @@ const adminOp = (op) => fetch(API + '/__admin', { method: 'POST', body: JSON.str
     await b.waitFor(`document.querySelector('.collect-rate')`, 10000);
     ok(/20 บาท = 1 พอยท์/.test(await b.text('.collect-rate')), 'หน้าวิธีสะสมใช้อัตราจากชีต');
     await b.shot(path.join(OUT, '16-collect.png'), { full: true });
+
+    console.log('\n[ลูกค้า] ข้อมูลของฉัน');
+    await b.eval(`localStorage.setItem('crm_test_user', JSON.stringify({id:'U_TEST_1', name:'สมชาย ใจดี'}))`);
+    await b.nav(`${WEB}/khamwan#home`);
+    await b.waitFor(`document.querySelector('.hero .avatar-edit') && document.querySelector('.hero-edit')`, 10000, 'ดินสอที่รูป');
+    await b.click('.hero .avatar-wrap');
+    await b.waitFor(`document.querySelector('#profile')`, 5000, 'หน้าข้อมูลของฉัน');
+    ok(true, 'กดรูปลูกค้า → เปิดหน้าข้อมูลของฉัน');
+    const pf = await b.eval(`(() => { const f = document.getElementById('profile'); return [f.firstName.value, f.lastName.value, f.phone.value, f.bdDay.value, f.bdMonth.value, f.bdYear.value].join('|'); })()`);
+    ok(pf === 'สมชาย|ใจดี|0812345678|18|2|2538', 'กรอกข้อมูลเดิมไว้ให้ครบ (วันเกิดเป็น พ.ศ.)', pf);
+    await b.type('#profile input[name=phone]', '+66 99-888 77665');
+    ok((await b.eval(`document.querySelector('#profile input[name=phone]').value`)) === '0998887766', 'ช่องเบอร์: วาง +66 แล้วแปลงเป็น 0 / รับแค่ตัวเลข 10 หลัก');
+    await b.type('#profile input[name=phone]', '0812');
+    await b.click('#profile button[type=submit]');
+    ok((await b.text('#profile .field-err')) === 'กรุณากรอกเบอร์มือถือ 10 หลัก', 'เบอร์ไม่ครบ → แจ้งใต้ช่อง "กรุณากรอกเบอร์มือถือ 10 หลัก"');
+    await b.shot(path.join(OUT, '19-profile-error.png'), { full: true });
+    await b.type('#profile input[name=phone]', '0812345678');
+    ok(!(await b.eval(`!!document.querySelector('#profile .field-err')`)), 'แก้เบอร์แล้วข้อความเตือนหายเอง');
+    const mkBefore = await b.eval(`document.querySelector('#profile input[name=consentMarketing]').checked`);
+    await b.type('#profile input[name=lastName]', 'ใจงาม');
+    await b.eval(`(() => { const f = document.getElementById('profile'); f.bdDay.value = '19'; return true; })()`);
+    await b.click('#profile .switch-row .switch');
+    await b.click('#profile button[type=submit]');
+    await b.waitFor(`document.querySelector('.modal [data-act=profile-confirm]')`, 3000, 'ยืนยันเปลี่ยนวันเกิด');
+    ok(/เปลี่ยนวันเกิดเองได้ครั้งเดียว/.test(await b.text('.modal')), 'เปลี่ยนวันเกิด → เตือนว่าแก้เองได้ครั้งเดียว');
+    await b.click('.modal [data-act=profile-confirm]');
+    await b.waitFor(`document.querySelector('.hero-name') && document.querySelector('.hero-name').innerText === 'สมชาย ใจงาม'`, 8000, 'กลับหน้าแรก ชื่อใหม่');
+    ok(true, 'บันทึกแล้วกลับหน้าแรก เห็นชื่อใหม่ "สมชาย ใจงาม"');
+    await b.click('.hero-edit');
+    await b.waitFor(`document.querySelector('#profile')`, 5000);
+    ok(/19 ก\.พ\. 2538/.test(await b.text('#profile .locked')), 'แก้วันเกิดแล้ว → ล็อก แสดงวันที่ใหม่พร้อมรูปกุญแจ');
+    ok((await b.eval(`document.querySelector('#profile input[name=consentMarketing]').checked`)) === !mkBefore, 'สวิตช์รับข่าวสารบันทึกตามที่เปลี่ยน');
+    await b.shot(path.join(OUT, '20-profile-locked.png'), { full: true });
+    // คืนค่าเดิมบางส่วน ให้รันซ้ำบนเซิร์ฟเวอร์เดิมได้
+    await b.type('#profile input[name=lastName]', 'ใจดี');
+    await b.click('#profile button[type=submit]');
+    await b.waitFor(`document.querySelector('.hero-name') && document.querySelector('.hero-name').innerText === 'สมชาย ใจดี'`, 8000, 'คืนชื่อเดิม');
 
     console.log('\n[ร้านตัวอย่าง] ธีม minimal — โค้ดชุดเดียวกัน เปลี่ยนแค่ config');
     await b.eval(`localStorage.setItem('crm_test_user', JSON.stringify({id:'U_TEST_2', name:'มานี'}))`);

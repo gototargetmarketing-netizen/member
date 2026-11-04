@@ -37,7 +37,7 @@ const PRESETS = [
 const RANGE_KEY = 'crm_admin_range';
 const BRANCH_KEY = 'crm_admin_branch';
 // ข้อความในป๊อปอัป "กำลังโหลด" ตามคำสั่ง (คำสั่งอ่านข้อมูลอื่นๆ = "กำลังโหลด...")
-const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave'];
+const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave', 'adminMemberUpdate'];
 const LOADING_TEXT = { adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...' };
 
 const app = document.getElementById('app');
@@ -118,6 +118,7 @@ function onClick(e) {
     case 'reward-edit': openRewardEdit(id); break;
     case 'promo-edit': openPromoEdit(id); break;
     case 'member-status': openMemberStatus(); break;
+    case 'member-edit': openMemberEdit(); break;
     case 'settings-confirm': doSaveSettings(el); break;
     case 'brand-confirm': doSaveBrand(S.pendingBrand, el); break;
     case 'color-reset': resetColor(id); break;
@@ -161,6 +162,7 @@ function onSubmit(e) {
     case 'reward': saveReward(form); break;
     case 'promo': savePromo(form); break;
     case 'member-status': saveMemberStatus(form); break;
+    case 'member-edit': saveMemberEdit(form); break;
     case 'settings': confirmSettings(form); break;
     case 'brand': saveBrand(form); break;
   }
@@ -728,7 +730,7 @@ function renderMember(r) {
         <dl class="kv">
           ${m.firstName ? `<dt>ชื่อ</dt><dd>${esc(m.firstName)}</dd><dt>นามสกุล</dt><dd>${esc(m.lastName || '-')}</dd>` : ''}
           <dt>เบอร์โทร</dt><dd>${esc(fmtPhone(m.phone) || m.phoneMasked || '-')}</dd>
-          ${owner ? `<dt>วันเกิด</dt><dd>${m.birthDate ? fmtDate(m.birthDate + 'T00:00:00+07:00') : '-'}</dd>` : ''}
+          ${owner ? `<dt>วันเกิด</dt><dd>${m.birthDate ? fmtDate(m.birthDate + 'T00:00:00+07:00') : '-'}${m.birthSelfEdits ? ' <span class="muted small">(ลูกค้าแก้เองครบแล้ว)</span>' : ''}</dd>` : ''}
           <dt>สมัครเมื่อ</dt><dd>${fmtDateTime(m.joinedAt)}</dd>
           ${hasBranches() ? `<dt>สมัครที่สาขา</dt><dd>${esc(branchName(m.joinedBranch))}</dd>
           <dt>มาบ่อยที่สุด</dt><dd>${m.topBranch ? `${esc(branchName(m.topBranch))} <span class="muted small">(${fmtNum(m.topBranchVisits)} บิลล่าสุด)</span>` : '-'}</dd>` : ''}
@@ -739,6 +741,7 @@ function renderMember(r) {
           ${m.note ? `<dt>หมายเหตุ</dt><dd>${esc(m.note)}</dd>` : ''}
         </dl>
         <div class="member-status-row">
+          ${owner ? `<button class="btn btn-sm" data-act="member-edit">${icon('edit', 16)} แก้ไขข้อมูล</button>` : ''}
           ${m.status === 'ACTIVE'
             ? `<button class="btn btn-sm btn-danger-outline" data-act="member-status">${icon('shield', 16)} ระงับสมาชิก</button>`
             : `<button class="btn btn-sm btn-primary" data-act="member-status">${icon('check', 16)} เปิดใช้อีกครั้ง</button>`}
@@ -772,6 +775,15 @@ function renderMember(r) {
           </tr>`).join('') : emptyRow(8, 'ยังไม่มีรายการ')}
         </tbody></table></div>
     </section>
+    ${(m.profileLog || []).length ? `
+    <section class="card adm-card flush">
+      <div class="card-head pad"><h2>ประวัติการแก้ข้อมูล</h2><span class="muted small">จดเฉพาะช่องที่แก้ ไม่เก็บค่าเดิม</span></div>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>วันเวลา</th><th>แก้ช่อง</th><th>โดย</th></tr></thead>
+        <tbody>${m.profileLog.map(l => `
+          <tr><td class="nowrap">${fmtDateTime(l.date)}</td><td>${esc(l.changed)}</td><td>${esc(l.by)}</td></tr>`).join('')}
+        </tbody></table></div>
+    </section>` : ''}
     <section class="card adm-card flush">
       <div class="card-head pad"><h2>คูปอง</h2><span class="muted small">${fmtNum(r.coupons.length)} ใบ</span></div>
       <div class="tbl-wrap"><table class="tbl">
@@ -823,6 +835,51 @@ async function doAdjust(btn) {
   } catch (e) {
     setBusy(btn, false);
     toast(e.code === 'NETWORK' ? e.message + ' (กดยืนยันอีกครั้งได้ ระบบจะไม่บันทึกซ้ำ)' : e.message, 'err');
+  }
+}
+
+/* =====================================================
+ * แก้ข้อมูลสมาชิกแทนลูกค้า (เจ้าของร้านเท่านั้น — Apps Script ตรวจซ้ำ)
+ * ใช้ตอนลูกค้าโทรมาขอแก้ หรือขอแก้วันเกิดครั้งที่สอง / การรับข่าวสารไม่มีให้แก้ (ลูกค้ายินยอมเองเท่านั้น)
+ * ===================================================== */
+function openMemberEdit() {
+  const m = S.member;
+  if (!m || !isOwner()) return;
+  openModal(`
+    <div class="modal-head"><h2>แก้ไขข้อมูลสมาชิก</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <p class="muted small mono">${esc(m.memberId)}</p>
+    <form class="form" data-form="member-edit" autocomplete="off">
+      <div class="form-grid">
+        <label class="field"><span>ชื่อ <em>*</em></span><input name="firstName" value="${esc(m.firstName || m.name)}" maxlength="40"></label>
+        <label class="field"><span>นามสกุล <em>*</em></span><input name="lastName" value="${esc(m.firstName ? m.lastName : '')}" maxlength="40"></label>
+        <label class="field"><span>เบอร์มือถือ <em>*</em></span><input name="phone" value="${esc(m.phone || '')}" inputmode="numeric" maxlength="10" placeholder="08xxxxxxxx"></label>
+        <label class="field"><span>วันเกิด <em>*</em></span><input type="date" name="birthDate" value="${esc(m.birthDate || '')}" max="${todayKey()}"></label>
+      </div>
+      <p class="muted small">ทุกการแก้จะจดไว้ในประวัติ (ช่องที่แก้ + ชื่อคุณ) · การรับข่าวสารลูกค้าต้องเปิด-ปิดเองในหน้าข้อมูลของฉัน</p>
+      <div class="modal-actions">
+        <button class="btn" type="button" data-act="close">ยกเลิก</button>
+        <button class="btn btn-primary" type="submit">บันทึก</button>
+      </div>
+    </form>`);
+}
+
+async function saveMemberEdit(form) {
+  const m = S.member;
+  const v = formValues(form, ['firstName', 'lastName', 'phone', 'birthDate']);
+  v.phone = v.phone.replace(/\D/g, '');
+  if (!v.firstName || !v.lastName) return toast('กรุณากรอกชื่อและนามสกุล', 'err');
+  if (!/^0[689]\d{8}$/.test(v.phone)) return toast('กรุณากรอกเบอร์มือถือ 10 หลัก', 'err');
+  if (!v.birthDate) return toast('กรุณาเลือกวันเกิด', 'err');
+  const btn = form.querySelector('button[type="submit"]');
+  setBusy(btn, true);
+  try {
+    const r = await S.api.call('adminMemberUpdate', { memberId: m.memberId, ...v });
+    closeModal();
+    toast(r.changed ? 'บันทึกข้อมูลสมาชิกแล้ว' : 'ข้อมูลเหมือนเดิม ไม่มีอะไรเปลี่ยน', 'ok');
+    loadMember(m.memberId);
+  } catch (e) {
+    setBusy(btn, false);
+    toast(e.message, 'err');
   }
 }
 

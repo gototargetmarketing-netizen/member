@@ -16,7 +16,7 @@
  * ทุกคำสั่งต้องมี LINE ID Token ซึ่งตรวจกับ LINE ที่นี่ — ห้ามเชื่อ userId ที่หน้าเว็บส่งมา
  *******************************************************/
 
-const APP_VERSION = '2.6.0';
+const APP_VERSION = '2.7.0';
 const TZ = 'Asia/Bangkok';
 
 const SHEET = {
@@ -28,7 +28,9 @@ const SHEET = {
   STAFF: 'Staff',
   PROMOS: 'Promotions',
   // หลายสาขา (2.6.0) — ร้านที่ยังไม่เพิ่มสาขาจะไม่มีชีตนี้ก็ได้ ระบบซ่อนเรื่องสาขาทั้งหมด
-  BRANCHES: 'Branches'
+  BRANCHES: 'Branches',
+  // ประวัติการแก้ข้อมูลสมาชิก (2.7.0) — จดว่าแก้ช่องไหน เมื่อไร โดยใคร ไม่เก็บค่าเก่า (ลดข้อมูลส่วนตัวที่ต้องเก็บ)
+  PROFILE_LOG: 'Profile_Log'
 };
 
 // รูปแบบเซลล์ — ตั้งก่อนเขียนทุกครั้ง เพราะ Google Sheets แปลงค่าเอง
@@ -52,7 +54,9 @@ const COLUMNS = {
     // เพิ่มใน 2.3.0 — Name ยังเก็บ "ชื่อ นามสกุล" รวมกัน (หน้าพนักงาน/หลังบ้านใช้ต่อได้)
     ['First_Name', F_TEXT], ['Last_Name', F_TEXT],
     // เพิ่มใน 2.6.0: สาขาที่สมัคร (รหัสสาขา / ONLINE = ไม่ได้สแกน QR สาขา / ว่าง = ร้านยังไม่มีสาขา)
-    ['Joined_Branch', F_TEXT]
+    ['Joined_Branch', F_TEXT],
+    // เพิ่มใน 2.7.0: จำนวนครั้งที่ลูกค้าเปลี่ยนวันเกิดเอง (ได้ 1 ครั้ง กันเปลี่ยนเพื่อรับสิทธิ์วันเกิดซ้ำ)
+    ['Birth_Date_Edits', F_INT]
   ],
   Transactions: [
     ['Tx_ID', F_TEXT], ['Date', F_DATETIME], ['Member_ID', F_TEXT], ['Type', F_TEXT],
@@ -87,6 +91,9 @@ const COLUMNS = {
   // ไม่มีปุ่มลบสาขา (รายการเก่าอ้างถึงอยู่) ใช้ Status = INACTIVE แทน
   Branches: [
     ['Branch_ID', F_TEXT], ['Name', F_TEXT], ['Status', F_TEXT], ['Sort', F_INT], ['Created_At', F_DATETIME]
+  ],
+  Profile_Log: [
+    ['Date', F_DATETIME], ['Member_ID', F_TEXT], ['Changed', F_TEXT], ['By', F_TEXT]
   ]
 };
 
@@ -124,7 +131,7 @@ const LEGACY_SHOP_NAME = 'ร้านของฉัน';
 // คอลัมน์ที่เพิ่มทีหลัง: ชีตของร้านเดิมยังไม่มีก็ทำงานได้ (ระบบเติมให้เองตอนต้องเขียน)
 // กันกรณีวาง code.gs ใหม่แล้วลืมรัน testSetup → ทั้งระบบล่มเพราะหาคอลัมน์ไม่เจอ
 const LATE_COLUMNS = {
-  Members: ['First_Name', 'Last_Name', 'Joined_Branch'],
+  Members: ['First_Name', 'Last_Name', 'Joined_Branch', 'Birth_Date_Edits'],
   Transactions: ['Branch'],
   Coupons: ['Used_Branch'],
   Staff: ['Branches']
@@ -147,6 +154,7 @@ const ACTIONS = {
   bootstrap: { run: actBootstrap_ },
   register: { run: actRegister_ },
   redeem: { run: actRedeem_ },
+  updateProfile: { run: actUpdateProfile_ },
   staffMe: { run: actStaffMe_ },
   staffLookup: { roles: ALL_STAFF, run: actStaffLookup_ },
   addPurchase: { roles: ALL_STAFF, run: actAddPurchase_ },
@@ -170,6 +178,8 @@ const ACTIONS = {
   adminPromos: { roles: MANAGERS, run: actAdminPromos_ },
   adminPromoSave: { roles: MANAGERS, run: actAdminPromoSave_ },
   adminMemberStatus: { roles: MANAGERS, run: actAdminMemberStatus_ },
+  // แก้ชื่อ/เบอร์/วันเกิดให้ลูกค้า: เจ้าของร้านเท่านั้น (คนเดียวที่เห็นเบอร์เต็มและวันเกิดอยู่แล้ว)
+  adminMemberUpdate: { roles: ['OWNER'], run: actAdminMemberUpdate_ },
   adminSettings: { roles: MANAGERS, run: actAdminSettings_ },
   // อัตราแต้ม/ชื่อร้านมีผลกับทุกบิลถัดไป → เจ้าของร้านเท่านั้น
   adminSettingsSave: { roles: ['OWNER'], run: actAdminSettingsSave_ },
@@ -367,7 +377,7 @@ function actRegister_(p, ctx) {
   const name = firstName + ' ' + lastName;
   const birthDate = cleanBirthDate_(p.birthDate);
   if (!birthDate) throw userError_('กรุณาเลือกวันเกิด', 'BAD_BIRTHDATE');
-  const phone = cleanPhone_(p.phone);
+  const phone = cleanMobile_(p.phone);
   const c = cfg_();
   const joined = joinedBranch_(p.branch); // สาขาจาก QR ที่ลูกค้าสแกน (ร้านไม่มีสาขา = '')
 
@@ -485,6 +495,105 @@ function actRedeem_(p, ctx) {
       return { points: balance, coupon: publicCoupon_(coupon, now) };
     });
    });
+  });
+}
+
+
+/* =====================================================
+ * 3.1) แก้ข้อมูลสมาชิก (2.7.0) — ลูกค้าแก้เองในหน้า "ข้อมูลของฉัน" / เจ้าของร้านแก้ให้ในหลังบ้าน
+ * ผู้ใช้ตกลง 4 พ.ย. 2569: ชื่อแก้ได้เสมอ / เบอร์แก้ได้ (ห้ามซ้ำ) / วันเกิดลูกค้าแก้เองได้ 1 ครั้ง
+ * (เติมวันเกิดที่ยังว่างไม่นับ) / รับข่าวสาร ลูกค้าเปิด-ปิดเองเท่านั้น (PDPA: ร้านให้ความยินยอมแทนไม่ได้)
+ * ตั้งค่าเดิมซ้ำได้ผลเดิม จึงไม่ต้องใช้ requestId
+ * ===================================================== */
+const BIRTH_SELF_EDITS = 1;
+const PROFILE_LABEL = { name: 'ชื่อ-นามสกุล', phone: 'เบอร์โทร', birth: 'วันเกิด', marketing: 'รับข่าวสาร' };
+
+function actUpdateProfile_(p, ctx) {
+  const input = cleanProfileInput_(p, true);
+  return withLock_(function () {
+    ensureColumns_(SHEET.MEMBERS);
+    const m = findMemberByLine_(ctx.user.userId);
+    if (!m) throw userError_('กรุณาสมัครสมาชิกก่อน', 'NOT_MEMBER');
+    assertActiveMember_(m);
+    const changed = applyProfile_(m, input, { self: true, by: 'ลูกค้า' });
+    const fresh = readRow_(SHEET.MEMBERS, m._row);
+    return { changed: changed.length, member: publicMember_(fresh) };
+  });
+}
+
+function actAdminMemberUpdate_(p, ctx) {
+  const id = cleanMemberId_(p.memberId);
+  const input = cleanProfileInput_(p, false);
+  return withLock_(function () {
+    ensureColumns_(SHEET.MEMBERS);
+    const row = findRow_(SHEET.MEMBERS, 'Member_ID', id);
+    if (!row) throw userError_('ไม่พบสมาชิก', 'NOT_FOUND');
+    const m = readRow_(SHEET.MEMBERS, row);
+    const changed = applyProfile_(m, input, { self: false, by: ctx.staff.name });
+    if (changed.length) console.log('แก้ข้อมูลสมาชิก ' + id + ' (' + changed.join(', ') + ') โดย ' + ctx.staff.name);
+    return { changed: changed.length, member: adminMember_(readRow_(SHEET.MEMBERS, row), ctx.staff.role) };
+  });
+}
+
+// ตรวจค่าที่ส่งมา (เหมือนตอนสมัคร) — รับข่าวสารแก้ได้เฉพาะลูกค้าเอง
+function cleanProfileInput_(p, self) {
+  const firstName = cleanNamePart_(p.firstName, 'ชื่อ');
+  const lastName = cleanNamePart_(p.lastName, 'นามสกุล');
+  const birthDate = cleanBirthDate_(p.birthDate);
+  if (!birthDate) throw userError_('กรุณาเลือกวันเกิด', 'BAD_BIRTHDATE');
+  const out = { firstName: firstName, lastName: lastName, phone: cleanMobile_(p.phone), birthDate: birthDate };
+  if (self && typeof p.consentMarketing === 'boolean') out.marketing = p.consentMarketing ? 'YES' : 'NO';
+  return out;
+}
+
+// เขียนเฉพาะช่องที่เปลี่ยนจริง + จดประวัติ (เรียกภายใน withLock_ เท่านั้น — ตรวจเบอร์ซ้ำต้องไม่ชนกับคนที่สมัครพร้อมกัน)
+function applyProfile_(m, v, opt) {
+  const fields = {};
+  const changed = [];
+  const name = v.firstName + ' ' + v.lastName;
+  if (name !== String(m.Name || '') || v.firstName !== String(m.First_Name || '') || v.lastName !== String(m.Last_Name || '')) {
+    fields.Name = name; fields.First_Name = v.firstName; fields.Last_Name = v.lastName;
+    changed.push(PROFILE_LABEL.name);
+  }
+  if (v.phone !== String(m.Phone || '')) {
+    const other = findRow_(SHEET.MEMBERS, 'Phone', v.phone);
+    if (other && other !== m._row) {
+      throw userError_('เบอร์นี้มีสมาชิกคนอื่นใช้แล้ว ถ้าเป็นเบอร์ของคุณ กรุณาติดต่อร้าน', 'PHONE_TAKEN');
+    }
+    fields.Phone = v.phone;
+    changed.push(PROFILE_LABEL.phone);
+  }
+  const oldBirth = String(m.Birth_Date || '');
+  if (v.birthDate !== oldBirth) {
+    const edits = toInt_(m.Birth_Date_Edits);
+    if (opt.self && oldBirth) {
+      if (edits >= BIRTH_SELF_EDITS) throw userError_('แก้วันเกิดได้ครั้งเดียว ต้องการแก้อีก กรุณาติดต่อร้าน', 'BIRTH_LOCKED');
+      fields.Birth_Date_Edits = edits + 1;
+    }
+    fields.Birth_Date = v.birthDate;
+    changed.push(PROFILE_LABEL.birth);
+  }
+  if (v.marketing && v.marketing !== (upper_(m.Marketing_Consent) === 'YES' ? 'YES' : 'NO')) {
+    fields.Marketing_Consent = v.marketing;
+    changed.push(PROFILE_LABEL.marketing);
+  }
+  if (!changed.length) return changed;
+  updateFields_(SHEET.MEMBERS, m._row, fields);
+  logProfile_(String(m.Member_ID), changed, opt.by);
+  return changed;
+}
+
+function logProfile_(memberId, changed, by) {
+  const ss = getSpreadsheet_();
+  if (!ss.getSheetByName(SHEET.PROFILE_LOG)) ensureSheet_(ss, SHEET.PROFILE_LOG); // ร้านเดิมที่ยังไม่ได้รัน testSetup
+  appendObj_(SHEET.PROFILE_LOG, { Date: new Date(), Member_ID: memberId, Changed: changed.join(', '), By: by });
+}
+
+// ประวัติการแก้ของสมาชิกคนหนึ่ง (ใหม่ → เก่า) — ไม่มีชีตก็ได้ []
+function profileLog_(memberId, limit) {
+  if (!getSpreadsheet_().getSheetByName(SHEET.PROFILE_LOG)) return [];
+  return rowsWhere_(SHEET.PROFILE_LOG, 'Member_ID', memberId, limit).reverse().map(function (r) {
+    return { date: iso_(r.Date), changed: String(r.Changed || ''), by: String(r.By || '') };
   });
 }
 
@@ -923,6 +1032,8 @@ function actAdminMember_(p, ctx) {
   out.firstName = String(m.First_Name || '');
   out.lastName = String(m.Last_Name || '');
   out.joinedBranch = upper_(m.Joined_Branch);
+  out.birthSelfEdits = toInt_(m.Birth_Date_Edits);
+  out.profileLog = profileLog_(id, 30);
   const history = rowsWhere_(SHEET.TX, 'Member_ID', id, 200).reverse();
   // สาขาที่มาบ่อยที่สุด (นับจากบิลซื้อในประวัติล่าสุด) — ช่วยดูว่าลูกค้าเป็นขาประจำสาขาไหน
   const visits = {};
@@ -1918,9 +2029,15 @@ function assertActiveMember_(m) {
 }
 
 function publicMember_(m) {
+  const first = String(m.First_Name || '');
   return {
     memberId: String(m.Member_ID || ''),
     name: String(m.Name || ''),
+    // สมาชิกที่สมัครก่อนมีช่องนามสกุล: ชื่อเต็มอยู่ใน Name → ใส่ช่องชื่อ ให้ลูกค้าแยกนามสกุลเองตอนแก้
+    firstName: first || String(m.Name || ''),
+    lastName: first ? String(m.Last_Name || '') : '',
+    marketingConsent: upper_(m.Marketing_Consent) === 'YES',
+    birthLocked: !!String(m.Birth_Date || '') && toInt_(m.Birth_Date_Edits) >= BIRTH_SELF_EDITS,
     phone: String(m.Phone || ''),
     birthDate: String(m.Birth_Date || ''),
     picture: safeUrl_(m.Picture),
@@ -2412,10 +2529,13 @@ function normalizePhone_(v) {
   return /^0\d{8,9}$/.test(digits) ? digits : '';
 }
 
-function cleanPhone_(v) {
-  const phone = normalizePhone_(v);
-  if (!phone) throw userError_('กรุณากรอกเบอร์โทรให้ถูกต้อง เช่น 0812345678', 'BAD_PHONE');
-  return phone;
+// เบอร์ของสมาชิก (สมัคร / แก้ข้อมูล): มือถือไทย 10 หลัก ขึ้นต้น 06 08 09 — ผู้ใช้ขอ 4 พ.ย. 2569
+// รับแบบมีขีด/ช่องว่าง และ +66 ได้ (แปลงให้) / การค้นเบอร์ที่หน้าพนักงานยังใช้ normalizePhone_ (กว้างกว่า) เหมือนเดิม
+function cleanMobile_(v) {
+  let digits = String(v == null ? '' : v).replace(/\D/g, '');
+  if (digits.indexOf('66') === 0 && digits.length === 11) digits = '0' + digits.slice(2);
+  if (!/^0[689]\d{8}$/.test(digits)) throw userError_('กรุณากรอกเบอร์มือถือ 10 หลัก', 'BAD_PHONE');
+  return digits;
 }
 
 function cleanBirthDate_(v) {

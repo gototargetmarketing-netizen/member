@@ -34,7 +34,7 @@ function hasFormula() {
 
 console.log('\n[1] ติดตั้งชีต');
 run(W, 'testSetup');
-ok(['Settings', 'Members', 'Transactions', 'Rewards', 'Coupons', 'Staff', 'Promotions', 'Branches'].every(n => sheet(n)), 'สร้างครบ 8 ชีต (รวมสาขา)');
+ok(['Settings', 'Members', 'Transactions', 'Rewards', 'Coupons', 'Staff', 'Promotions', 'Branches', 'Profile_Log'].every(n => sheet(n)), 'สร้างครบ 9 ชีต (รวมสาขา + ประวัติแก้ข้อมูล)');
 ok(rowsOf('Settings').length === 22, 'Settings มี 22 ค่า (รวมโฟลเดอร์รูป + หน้าตาร้าน)', rowsOf('Settings').length);
 ok(rowsOf('Rewards').length === 3 && rowsOf('Promotions').length === 1, 'มีรางวัลตัวอย่าง 3 / โปรโมชัน 1');
 run(W, 'testSetup');
@@ -761,6 +761,73 @@ console.log('\n[13.9] หลายสาขา (2.6.0)');
   ok(x.ok && rowsOfW(W2, 'Transactions').slice(-1)[0].Branch === 'B001', 'รายการแรกที่มีสาขา → เติมคอลัมน์ Branch ให้เองแล้วบันทึกได้', rowsOfW(W2, 'Transactions').slice(-1)[0]);
   x = r2({ action: 'adminStaffUpdate', idToken: tok('SO'), userId: 'SO', role: 'OWNER', status: 'ACTIVE', branches: ['B001'] });
   ok(!x.ok && x.code === 'SELF_EDIT', 'ยังแก้สิทธิ์ของตัวเองไม่ได้เหมือนเดิม', x);
+}
+
+console.log('\n[13.10] ลูกค้าแก้ข้อมูลตัวเอง / เจ้าของร้านแก้ให้ (2.7.0)');
+{
+  const regP = (id, phone, extra = {}) => call(W, { action: 'register', idToken: tok(id), firstName: 'แก้', lastName: 'ข้อมูล', phone, birthDate: '1992-05-05', consentPrivacy: true, ...extra });
+  r = regP('UP0', '0212345678');
+  ok(!r.ok && r.code === 'BAD_PHONE' && r.error === 'กรุณากรอกเบอร์มือถือ 10 หลัก', 'สมัครด้วยเบอร์บ้าน (02) → ต้องเป็นมือถือ 10 หลัก', r);
+  r = regP('UP0', '081234567');
+  ok(!r.ok && r.code === 'BAD_PHONE', 'เบอร์ 9 หลัก → ปฏิเสธ', r);
+  r = regP('UP0', '08123456789');
+  ok(!r.ok && r.code === 'BAD_PHONE', 'เบอร์ 11 หลัก → ปฏิเสธ', r);
+  r = regP('UP1', '091-111-2222');
+  ok(r.ok && r.member.phone === '0911112222' && r.member.firstName === 'แก้' && r.member.birthLocked === false, 'สมัครด้วยเบอร์มีขีด → เก็บเป็นตัวเลข 10 หลัก', r.member);
+  const MP = r.member.memberId;
+  regP('UP2', '0922223333');
+  const base = { firstName: 'สมศรี', lastName: 'มีสุข', phone: '0911112222', birthDate: '1992-05-05' };
+
+  r = call(W, { action: 'updateProfile', idToken: tok('UNOBODY'), ...base });
+  ok(!r.ok && r.code === 'NOT_MEMBER', 'ยังไม่ได้สมัคร → แก้ข้อมูลไม่ได้', r);
+  r = call(W, { action: 'updateProfile', idToken: tok('UP1'), ...base, consentMarketing: true });
+  ok(r.ok && r.changed === 2 && r.member.name === 'สมศรี มีสุข' && r.member.marketingConsent === true, 'แก้ชื่อ + เปิดรับข่าวสาร', r);
+  let row = rowsOf('Members').find(m => m.Member_ID === MP);
+  ok(row.First_Name === 'สมศรี' && row.Last_Name === 'มีสุข' && row.Name === 'สมศรี มีสุข' && row.Marketing_Consent === 'YES', 'ชีตเปลี่ยนตามทั้งชื่อ นามสกุล และชื่อเต็ม', row);
+  r = call(W, { action: 'updateProfile', idToken: tok('UP1'), ...base, consentMarketing: true });
+  ok(r.ok && r.changed === 0, 'กดบันทึกซ้ำโดยไม่ได้แก้ → ไม่มีอะไรเปลี่ยน ไม่จดประวัติ', r);
+  r = call(W, { action: 'updateProfile', idToken: tok('UP1'), ...base, phone: '0922223333' });
+  ok(!r.ok && r.code === 'PHONE_TAKEN', 'เปลี่ยนเป็นเบอร์ที่สมาชิกคนอื่นใช้ → ปฏิเสธ', r);
+  r = call(W, { action: 'updateProfile', idToken: tok('UP1'), ...base, phone: '0812' });
+  ok(!r.ok && r.code === 'BAD_PHONE' && r.error === 'กรุณากรอกเบอร์มือถือ 10 หลัก', 'แก้เบอร์ไม่ครบ 10 หลัก → ปฏิเสธ', r);
+  r = call(W, { action: 'updateProfile', idToken: tok('UP1'), ...base, phone: '+66 95 555 6666' });
+  ok(r.ok && r.member.phone === '0955556666', 'เปลี่ยนเบอร์ใหม่ (+66 แปลงเป็น 0)', r.member);
+  r = call(W, { action: 'staffLookup', idToken: tok('O1'), query: '0955556666' });
+  ok(r.ok && r.member.memberId === MP, 'พนักงานค้นด้วยเบอร์ใหม่เจอทันที', r);
+  r = call(W, { action: 'updateProfile', idToken: tok('UP1'), ...base, phone: '0955556666', firstName: '' });
+  ok(!r.ok && r.code === 'BAD_NAME', 'ลบชื่อออก → ปฏิเสธ (บังคับเหมือนตอนสมัคร)', r);
+
+  r = call(W, { action: 'updateProfile', idToken: tok('UP1'), ...base, phone: '0955556666', birthDate: '1993-06-06' });
+  ok(r.ok && r.member.birthDate === '1993-06-06' && r.member.birthLocked === true, 'แก้วันเกิดครั้งแรกได้ → แล้วล็อก', r.member);
+  r = call(W, { action: 'updateProfile', idToken: tok('UP1'), ...base, phone: '0955556666', birthDate: '1994-07-07' });
+  ok(!r.ok && r.code === 'BIRTH_LOCKED', 'แก้วันเกิดครั้งที่สอง → ให้ติดต่อร้าน', r);
+  r = call(W, { action: 'updateProfile', idToken: tok('UP1'), ...base, phone: '0955556666', birthDate: '1993-06-06', firstName: 'ศรี' });
+  ok(r.ok && r.changed === 1, 'วันเกิดล็อกแล้ว แต่ยังแก้ชื่อได้ (ส่งวันเกิดเดิมมา)', r);
+  // สมาชิกเก่าที่ยังไม่มีวันเกิด: เติมครั้งแรกไม่นับเป็นการแก้
+  setCell('Members', 'Member_ID', MP, 'Birth_Date', '');
+  setCell('Members', 'Member_ID', MP, 'Birth_Date_Edits', 0);
+  r = call(W, { action: 'updateProfile', idToken: tok('UP1'), ...base, phone: '0955556666', firstName: 'ศรี', birthDate: '1990-01-01' });
+  ok(r.ok && r.member.birthLocked === false, 'สมาชิกเก่าเติมวันเกิดที่ยังว่าง → ไม่นับ ยังแก้ได้อีก 1 ครั้ง', r.member);
+
+  r = call(W, { action: 'adminMemberUpdate', idToken: tok('A1'), memberId: MP, ...base, phone: '0955556666', birthDate: '1990-01-01' });
+  ok(!r.ok && r.code === 'NO_ROLE', 'ผู้จัดการแก้ข้อมูลลูกค้าไม่ได้ (เจ้าของร้านเท่านั้น)', r);
+  setCell('Members', 'Member_ID', MP, 'Birth_Date_Edits', 1);
+  r = call(W, { action: 'adminMemberUpdate', idToken: tok('O1'), memberId: MP, ...base, phone: '0955556666', birthDate: '1988-08-08', consentMarketing: false });
+  row = rowsOf('Members').find(m => m.Member_ID === MP);
+  ok(r.ok && row.Birth_Date === '1988-08-08' && row.Marketing_Consent === 'YES', 'เจ้าของร้านแก้วันเกิดที่ล็อกแล้วได้ / แก้การรับข่าวสารแทนลูกค้าไม่ได้', row);
+  r = call(W, { action: 'adminMemberUpdate', idToken: tok('O1'), memberId: MP, ...base, phone: '0922223333', birthDate: '1988-08-08' });
+  ok(!r.ok && r.code === 'PHONE_TAKEN', 'เจ้าของร้านเปลี่ยนเป็นเบอร์ซ้ำก็ไม่ได้', r);
+  r = call(W, { action: 'adminMember', idToken: tok('O1'), memberId: MP });
+  const log = r.member.profileLog;
+  ok(r.ok && log.length >= 5 && log[0].by === 'เจ้าของ' && /วันเกิด/.test(log[0].changed) && log.some(l => l.by === 'ลูกค้า' && /เบอร์โทร/.test(l.changed)), 'หลังบ้านเห็นประวัติการแก้ (ใหม่ → เก่า / ใครแก้)', log);
+  ok(!rowsOf('Profile_Log').some(l => /09[0-9]{8}|19[0-9]{2}-/.test(l.Changed)), 'ประวัติจดแค่ชื่อช่องที่แก้ ไม่เก็บเบอร์/วันเกิด');
+
+  setCell('Members', 'Member_ID', MP, 'Status', 'BLOCKED');
+  r = call(W, { action: 'updateProfile', idToken: tok('UP1'), ...base, phone: '0955556666', birthDate: '1988-08-08' });
+  ok(!r.ok && r.code === 'MEMBER_BLOCKED', 'สมาชิกถูกระงับ → แก้ข้อมูลเองไม่ได้', r);
+  setCell('Members', 'Member_ID', MP, 'Status', 'ACTIVE');
+  r = call(W, { action: 'bootstrap', idToken: tok('UP1') });
+  ok(r.ok && r.member.firstName === 'สมศรี' && r.member.lastName === 'มีสุข' && typeof r.member.marketingConsent === 'boolean', 'หน้าลูกค้าได้ข้อมูลแยกชื่อ/นามสกุลไว้กรอกฟอร์ม', r.member);
 }
 
 console.log('\n[14] LINE token จริง (จำลอง LINE)');

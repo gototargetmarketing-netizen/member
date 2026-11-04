@@ -114,6 +114,12 @@ async function seed() {
     await b.click('.modal [data-act=adjust-confirm]');
     await b.waitFor(`Number(document.querySelector('.kpi .kpi-value').innerText.replace(/\\D/g,'')) === ${before + 15}`, 8000, 'แต้มเพิ่ม 15');
     ok(/ชดเชยทดสอบหลังบ้าน/.test(await b.text('.tbl')), `ปรับ +15 (${before} → ${before + 15}) และขึ้นในประวัติ`);
+    await b.click('[data-act=member-edit]');
+    await b.waitFor(`document.querySelector('.modal form[data-form=member-edit]')`, 3000, 'ฟอร์มแก้ข้อมูลสมาชิก');
+    ok(!(await b.eval(`!!document.querySelector('.modal [name=consentMarketing]')`)), 'เจ้าของร้านแก้ข้อมูลได้ แต่ไม่มีช่องรับข่าวสาร (ลูกค้ายินยอมเองเท่านั้น)');
+    await b.eval(`(() => { const f = document.querySelector('.modal form'); f.birthDate.value = '1990-02-20'; f.requestSubmit(); return true; })()`);
+    await b.waitFor(`!document.querySelector('.modal') && /ประวัติการแก้ข้อมูล/.test(document.getElementById('view').innerText) && !document.getElementById('view').classList.contains('is-loading')`, 8000, 'บันทึก + ประวัติ');
+    ok(/20 ก\.พ\. 2533/.test(await b.text('.kv')) && /ประวัติการแก้ข้อมูล[\s\S]*วันเกิด\s+U_ADM_OWNER/.test(await b.text('#view')), 'เจ้าของร้านแก้วันเกิดได้ และขึ้นในประวัติการแก้ข้อมูล');
     await b.shot(path.join(OUT, 'a04-member.png'), { full: true });
     await b.click('.back-link');
     await b.waitFor(`document.querySelector('form[data-form=members] input[name=q]')?.value === '0002'`, 8000, 'กลับรายชื่อ');
