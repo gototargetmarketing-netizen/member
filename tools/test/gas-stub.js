@@ -51,6 +51,9 @@ class FakeRange {
   constructor(sheet, r, c, nr, nc) { Object.assign(this, { sheet, r, c, nr, nc }); }
   getRow() { return this.r; }
   getValues() {
+    // นับจำนวนช่องที่อ่าน + จำนวนครั้งที่เรียกชีต (ชุดทดสอบใช้ตรวจว่าไม่อ่านเกินจำเป็น)
+    this.sheet.readCells = (this.sheet.readCells || 0) + this.nr * this.nc;
+    this.sheet.readCalls = (this.sheet.readCalls || 0) + 1;
     const out = [];
     for (let i = 0; i < this.nr; i++) { const row = []; for (let j = 0; j < this.nc; j++) row.push(this.sheet.get(this.r + i, this.c + j)); out.push(row); }
     return out;
@@ -78,6 +81,7 @@ class FakeRange {
       return entire ? s === t : s.includes(t);
     };
     const all = () => {
+      range.sheet.searchCells = (range.sheet.searchCells || 0) + range.nr * range.nc;
       const out = [];
       for (let i = 0; i < range.nr; i++) for (let j = 0; j < range.nc; j++) {
         if (match(range.sheet.get(range.r + i, range.c + j))) out.push(new FakeRange(range.sheet, range.r + i, range.c + j, 1, 1));

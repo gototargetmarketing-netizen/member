@@ -16,7 +16,7 @@
  * ทุกคำสั่งต้องมี LINE ID Token ซึ่งตรวจกับ LINE ที่นี่ — ห้ามเชื่อ userId ที่หน้าเว็บส่งมา
  *******************************************************/
 
-const APP_VERSION = '2.8.0';
+const APP_VERSION = '2.8.1';
 const TZ = 'Asia/Bangkok';
 
 const SHEET = {
@@ -372,7 +372,9 @@ function actBootstrap_(p, ctx) {
     birthday: null
   };
   if (!member) return out;
-  out.birthday = birthdayOffer_(member, now);
+  // อ่านคูปองครั้งเดียว ใช้ทั้งรายการคูปอง (100 ใบล่าสุด) และเช็กของขวัญวันเกิด (200 ใบล่าสุด เหมือนตอนกดรับ)
+  const coupons = rowsWhere_(SHEET.COUPONS, 'Member_ID', member.Member_ID, 200);
+  out.birthday = birthdayOffer_(member, now, coupons);
 
   // อัปเดตรูปโปรไฟล์เมื่อลูกค้าเปลี่ยนรูปใน LINE (เขียนเฉพาะตอนที่เปลี่ยนจริง)
   if (ctx.user.picture && ctx.user.picture !== String(member.Picture || '')) {
@@ -382,7 +384,7 @@ function actBootstrap_(p, ctx) {
 
   out.member = publicMember_(member);
   out.history = rowsWhere_(SHEET.TX, 'Member_ID', member.Member_ID, c.historyLimit).reverse().map(publicTx_);
-  out.coupons = rowsWhere_(SHEET.COUPONS, 'Member_ID', member.Member_ID, 100).reverse()
+  out.coupons = coupons.slice(-100).reverse()
     .map(function (cp) { return publicCoupon_(cp, now); });
   return out;
 }
@@ -451,7 +453,7 @@ function actRedeem_(p, ctx) {
   return afterWrite_([SHEET.REWARDS], function () {
    return withLock_(function () {
     return once_('redeem', ctx.user.userId, p.requestId, function (reqId) {
-      const dup = findOne_(SHEET.TX, 'Request_ID', reqId);
+      const dup = findRecentTx_(reqId);
       if (dup) return { duplicate: true, points: toInt_(dup.Balance_After) };
 
       const member = findMemberByLine_(ctx.user.userId);
@@ -708,7 +710,7 @@ function actAddPurchase_(p, ctx) {
 
   return withLock_(function () {
     return once_('addPurchase', ctx.user.userId, p.requestId, function (reqId) {
-      const dup = findOne_(SHEET.TX, 'Request_ID', reqId);
+      const dup = findRecentTx_(reqId);
       if (dup) {
         const dm = findOne_(SHEET.MEMBERS, 'Member_ID', dup.Member_ID);
         return {
@@ -788,7 +790,7 @@ function actAdjustPoints_(p, ctx) {
 
   return withLock_(function () {
     return once_('adjustPoints', ctx.user.userId, p.requestId, function (reqId) {
-      const dup = findOne_(SHEET.TX, 'Request_ID', reqId);
+      const dup = findRecentTx_(reqId);
       if (dup) return { duplicate: true, pointsAdded: toInt_(dup.Points), balance: toInt_(dup.Balance_After) };
 
       const row = findRow_(SHEET.MEMBERS, 'Member_ID', memberId);
@@ -2195,20 +2197,23 @@ function birthdayBlock_(m, now) {
 }
 
 // คูปองวันเกิดของปีนี้ (ถ้ารับไปแล้ว)
-function birthdayCoupon_(m, now) {
+// coupons = คูปองของสมาชิกที่อ่านมาแล้ว (ตอนเปิดหน้าลูกค้า) → ใช้ซ้ำ + ใช้รายการของรางวัลที่จำไว้ (แค่แสดงการ์ด)
+// ไม่ส่ง coupons (ตอนกดรับ ภายในล็อก) → อ่านสดจากชีตทั้งคู่ กันรับซ้ำ ห้ามเปลี่ยนเป็นค่าที่จำไว้
+function birthdayCoupon_(m, now, coupons) {
   const year = Utilities.formatDate(now, TZ, 'yyyy-MM-dd').slice(0, 4);
   const ids = {};
-  readAll_(SHEET.REWARDS).forEach(function (r) { if (upper_(r.Type) === REWARD_BIRTHDAY) ids[String(r.Reward_ID)] = true; });
-  return rowsWhere_(SHEET.COUPONS, 'Member_ID', m.Member_ID, 200).filter(function (c) {
+  (coupons ? cachedRows_(SHEET.REWARDS) : readAll_(SHEET.REWARDS))
+    .forEach(function (r) { if (upper_(r.Type) === REWARD_BIRTHDAY) ids[String(r.Reward_ID)] = true; });
+  return (coupons || rowsWhere_(SHEET.COUPONS, 'Member_ID', m.Member_ID, 200)).filter(function (c) {
     const d = toDate_(c.Issued_At);
     return ids[String(c.Reward_ID)] && d && Utilities.formatDate(d, TZ, 'yyyy-MM-dd').slice(0, 4) === year && upper_(c.Status) !== 'CANCELLED';
   }).pop() || null;
 }
 
-// การ์ดหน้าลูกค้า: null = ไม่แสดง
-function birthdayOffer_(m, now) {
+// การ์ดหน้าลูกค้า: null = ไม่แสดง / coupons = คูปองของสมาชิก (ล่าสุด 200 ใบ เรียงเก่าไปใหม่) ที่ bootstrap อ่านไว้แล้ว
+function birthdayOffer_(m, now, coupons) {
   if (upper_(m.Status || 'ACTIVE') !== 'ACTIVE' || birthdayBlock_(m, now)) return null;
-  const got = birthdayCoupon_(m, now);
+  const got = birthdayCoupon_(m, now, coupons);
   if (got) return couponState_(got, now) === 'ACTIVE' ? { claimed: true, coupon: publicCoupon_(got, now) } : null;
   const r = birthdayReward_(now);
   if (!r) return null;
@@ -2513,9 +2518,13 @@ function findOne_(name, header, value) {
   return row ? readRow_(name, row) : null;
 }
 
+// แถวที่ห่างกันไม่เกินนี้ อ่านรวบเป็นก้อนเดียว — อ่านแถวเกินมาไม่กี่พันแถว เร็วกว่าเรียกชีตเพิ่มอีกรอบ
+// (เรียกชีตแต่ละครั้งมีเวลาตั้งต้นของมันเอง ถ้าอ่านทีละแถวตอนข้อมูลน้อยจะกลับช้ากว่าเดิม)
+const READ_GAP = 2000;
+
 // แถวที่คอลัมน์ header = value (เอาเฉพาะ limit แถวล่าสุด เรียงจากเก่าไปใหม่)
-// อ่านแค่ช่วงตั้งแต่แถวที่ต้องการแถวแรกจนท้ายชีต — สมาชิกที่มาบ่อยจะอ่านแค่ส่วนท้ายชีต
-// ถ้าชีต Transactions ใหญ่มาก (หลายหมื่นแถว) ให้ย้ายข้อมูลปีเก่าไปชีตเก็บถาวร
+// อ่านเฉพาะแถวที่ต้องการ ข้ามช่วงยาวๆ ที่เป็นของคนอื่น (2.8.1) — เดิมอ่านตั้งแต่แถวแรกจนท้ายชีต
+// ลูกค้าที่สมัครมานานจึงต้องอ่านรายการทั้งร้านย้อนไปถึงวันสมัคร ยิ่งข้อมูลสะสมยิ่งช้า
 function rowsWhere_(name, header, value, limit) {
   const v = String(value == null ? '' : value);
   const t = table_(name);
@@ -2525,13 +2534,33 @@ function rowsWhere_(name, header, value, limit) {
     .createTextFinder(v).matchEntireCell(true).matchCase(true).findAll();
   if (!cells.length) return [];
   const rows = cells.map(function (c) { return c.getRow(); }).sort(function (a, b) { return a - b; }).slice(-limit);
-  const first = rows[0];
-  const block = t.sheet.getRange(first, 1, last - first + 1, t.width).getValues();
-  const want = {};
-  rows.forEach(function (r) { want[r] = true; });
   const out = [];
-  block.forEach(function (v, i) { if (want[first + i]) out.push(rowToObj_(t, v, first + i)); });
+  let i = 0;
+  while (i < rows.length) {
+    // รวมแถวที่อยู่ใกล้กันเป็นก้อนเดียว แล้วอ่านก้อนละครั้ง
+    let j = i;
+    while (j + 1 < rows.length && rows[j + 1] - rows[j] <= READ_GAP) j++;
+    const first = rows[i];
+    const block = t.sheet.getRange(first, 1, rows[j] - first + 1, t.width).getValues();
+    for (let k = i; k <= j; k++) out.push(rowToObj_(t, block[rows[k] - first], rows[k]));
+    i = j + 1;
+  }
   return out;
+}
+
+// หารายการที่ส่งซ้ำ (requestId เดิม) เฉพาะรายการล่าสุด — การส่งซ้ำเกิดตอนเน็ตหลุดแล้วกดใหม่ภายในไม่กี่นาที
+// 2,000 รายการ ≈ 20 วันถ้าร้านมีวันละ 100 บิล เผื่อไว้มาก / ไม่ค้นทั้งชีต เพราะค้นระหว่างล็อกคิว
+// (ค้นนาน = ทุกสาขาต้องรอนาน) และยังมีด่านกันซ้ำใน once_ อีกชั้น
+const DUP_SCAN_ROWS = 2000;
+function findRecentTx_(requestId) {
+  const v = String(requestId || '');
+  const t = table_(SHEET.TX);
+  const last = t.sheet.getLastRow();
+  if (!v || last < 2) return null;
+  const first = Math.max(2, last - DUP_SCAN_ROWS + 1);
+  const cell = t.sheet.getRange(first, t.col.Request_ID, last - first + 1, 1)
+    .createTextFinder(v).matchEntireCell(true).matchCase(true).findNext();
+  return cell ? readRow_(SHEET.TX, cell.getRow()) : null;
 }
 
 function specFormat_(name, header) {

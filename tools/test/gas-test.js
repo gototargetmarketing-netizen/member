@@ -995,5 +995,91 @@ console.log('\n[16] ข้อความที่ผู้ใช้เห็น
   ok(badUi.length === 0, 'ข้อความบนหน้าเว็บไม่มีคำว่า Google / Drive / ชีต / Apps Script', badUi);
 }
 
+console.log('\n[17] ข้อมูลเยอะ (2.8.1): อ่านเฉพาะแถวที่ต้องใช้ แต่ผลต้องเหมือนเดิมทุกอย่าง');
+{
+  const fs = require('fs');
+  const path = require('path');
+  // code.gs รุ่นก่อนแก้ (ถ้ามีในเครื่อง) ใช้เทียบผลแบบตรงตัว — ไม่มีก็ยังเทียบกับข้อมูลในชีตได้
+  const OLD = path.join(__dirname, '..', '..', 'backups', '2569-11-04_ก่อนเร่งความเร็ว-2.8.1', 'code.gs');
+  const callOld = (world, body) => { process.env.CODE_GS = OLD; try { return call(world, body); } finally { delete process.env.CODE_GS; } };
+  const W2 = createWorld();
+  const s2 = n => W2.ss.getSheetByName(n);
+  run(W2, 'testSetup');
+  run(W2, 'enableTestMode');
+  const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+  const month = ymd.slice(5, 7);
+  const other = String((Number(month) % 12) + 1).padStart(2, '0');
+  const reg = (id, phone, birth) => call(W2, { action: 'register', idToken: tok(id), firstName: 'ข้อมูล', lastName: 'เยอะ', phone, birthDate: birth, consentPrivacy: true }).member.memberId;
+  const A = reg('UBIG_A', '0641110001', `1990-${month}-05`); // ลูกค้ามาน้อย รายการกระจายทั้งปี + เกิดเดือนนี้
+  const B = reg('UBIG_B', '0641110002', `1990-${other}-05`); // ลูกค้าประจำ รายการเกินจำนวนที่แสดง
+  const C = reg('UBIG_C', '0641110003', `1990-${other}-06`); // มีแค่รายการต้อนรับ
+  const bulk = (name, objs) => {
+    const s = s2(name); const h = s.data[0];
+    objs.forEach(o => s.data.push(h.map(k => (k in o ? o[k] : ''))));
+    s.maxRows = Math.max(s.maxRows, s.data.length + 10);
+  };
+  const N = 30000;
+  const aAt = new Set([10, 9000, 18000, 27000, 29990]);
+  const bAt = new Set();
+  for (let i = 100; i < 29000; i += 725) bAt.add(i);  // กระจายห่างๆ
+  for (let i = 29001; i < 29200; i += 4) bAt.add(i);  // ถี่ช่วงท้าย
+  const txs = [];
+  for (let i = 0; i < N; i++) {
+    const who = aAt.has(i) ? A : bAt.has(i) ? B : 'KW-OT' + (i % 500);
+    txs.push({ Tx_ID: 'TX-BULK' + i, Date: new Date(Date.now() - (N - i) * 60000), Member_ID: who, Type: 'EARN', Amount: 100, Points: 10, Balance_After: i, Detail: 'บิล ' + i, Staff: 'พนักงาน', Request_ID: 'REQ-BULK-' + i, Ref: '', Branch: '' });
+  }
+  bulk('Transactions', txs);
+  // ของขวัญวันเกิด: A รับไปแล้วปีนี้ คูปองอยู่ต้นชีต (ไกลจากท้าย) — ต้องยังเห็นว่า "รับแล้ว"
+  bulk('Rewards', [{ Reward_ID: 'RW-BDAY', Name: 'ของขวัญทดสอบ', Points: 0, Valid_Days: 0, Quota: 0, Issued: 1, Sort: 1, Status: 'ACTIVE', Type: 'BIRTHDAY' }]);
+  W2.cache.delete('rows:Rewards');
+  const cps = [];
+  const soon = new Date(Date.now() + 20 * 86400000);
+  for (let i = 0; i < 3000; i++) {
+    let o = { Coupon_Code: 'CP-OT' + i, Member_ID: 'KW-OT' + (i % 500), Reward_ID: 'RW-OT', Name: 'อื่น', Points_Used: 10, Issued_At: new Date(), Expires_At: soon, Status: 'ACTIVE' };
+    if (i === 5) o = { ...o, Coupon_Code: 'CP-BDAYA1', Member_ID: A, Reward_ID: 'RW-BDAY', Name: 'ของขวัญทดสอบ', Points_Used: 0 };
+    if (i === 1500 || i === 2990) o = { ...o, Coupon_Code: 'CP-A' + i, Member_ID: A };
+    cps.push(o);
+  }
+  bulk('Coupons', cps);
+  { const s = s2('Members'); const h = s.data[0]; s.data.find(x => x[h.indexOf('Member_ID')] === A)[h.indexOf('Joined_At')] = new Date(Date.now() - 60 * 86400000); }
+
+  const histOf = id => rowsOfW(W2, 'Transactions').filter(t => t.Member_ID === id).slice(-50).reverse().map(t => t.Tx_ID);
+  const cpOf = id => rowsOfW(W2, 'Coupons').filter(c => c.Member_ID === id).slice(-100).reverse().map(c => c.Coupon_Code);
+  [['A', 'UBIG_A', A], ['B', 'UBIG_B', B], ['C', 'UBIG_C', C]].forEach(([label, uid, mid]) => {
+    const tx = s2('Transactions');
+    tx.readCells = 0; tx.readCalls = 0;
+    const rNew = call(W2, { action: 'bootstrap', idToken: tok(uid) });
+    const cells = tx.readCells; const calls = tx.readCalls;
+    ok(rNew.ok && JSON.stringify(rNew.history.map(h => h.id)) === JSON.stringify(histOf(mid)), `ลูกค้า ${label}: ประวัติแต้มตรงกับข้อมูลจริง (${rNew.history.length} รายการ ใหม่สุดก่อน)`, rNew.history && rNew.history.slice(0, 3));
+    ok(JSON.stringify(rNew.coupons.map(c => c.code)) === JSON.stringify(cpOf(mid)), `ลูกค้า ${label}: คูปองตรงกับข้อมูลจริง (${rNew.coupons.length} ใบ)`, rNew.coupons.map(c => c.code));
+    if (fs.existsSync(OLD)) {
+      tx.readCells = 0;
+      const rOld = callOld(W2, { action: 'bootstrap', idToken: tok(uid) });
+      ok(JSON.stringify(rOld) === JSON.stringify(rNew), `ลูกค้า ${label}: ผลทั้งหมดเหมือนรุ่น 2.8.0 ทุกตัวอักษร (รายการแต้มอ่าน ${cells.toLocaleString()} ช่อง ${calls} ครั้ง — เดิม ${tx.readCells.toLocaleString()} ช่อง)`);
+    }
+    if (label === 'A') ok(cells < 1000, 'ลูกค้า A (รายการกระจายทั้งปี): ไม่อ่านรายการของคนอื่นทั้งชีต', cells);
+  });
+
+  let r = call(W2, { action: 'bootstrap', idToken: tok('UBIG_A') });
+  ok(r.birthday && r.birthday.claimed === true && r.birthday.coupon.code === 'CP-BDAYA1', 'คูปองวันเกิดอยู่ต้นชีต → การ์ดยังบอก "รับแล้ว" ถูกต้อง', r.birthday);
+  r = call(W2, { action: 'claimBirthday', idToken: tok('UBIG_A'), requestId: rid() });
+  ok(r.ok && r.already === true && r.coupon.code === 'CP-BDAYA1' && rowsOfW(W2, 'Coupons').filter(c => c.Member_ID === A).length === 3, 'กดรับซ้ำ (อ่านสด) → ได้คูปองเดิม ไม่ออกใบใหม่', r);
+
+  // กันบันทึกซ้ำ: ค้นเฉพาะ 2,000 รายการล่าสุด
+  call(W2, { action: 'staffMe', idToken: tok('OBIG', 'เจ้าของ') });
+  { const s = s2('Staff'); const h = s.data[0]; const row = s.data.find(x => x[h.indexOf('LINE_User_ID')] === 'OBIG'); row[h.indexOf('Status')] = 'ACTIVE'; row[h.indexOf('Role')] = 'OWNER'; }
+  const req = rid();
+  r = call(W2, { action: 'addPurchase', idToken: tok('OBIG'), memberId: C, amount: 300, requestId: req });
+  ok(r.ok && r.pointsAdded > 0 && !r.duplicate, 'บันทึกยอดซื้อปกติได้', r);
+  const pts = r.balance;
+  [...W2.cache.keys()].filter(k => k.startsWith('rq:')).forEach(k => W2.cache.delete(k)); // เหมือนที่จำไว้หายไป เหลือแต่ด่านในชีต
+  const tx = s2('Transactions'); tx.searchCells = 0;
+  r = call(W2, { action: 'addPurchase', idToken: tok('OBIG'), memberId: C, amount: 300, requestId: req });
+  ok(r.ok && r.duplicate === true && r.balance === pts && rowsOfW(W2, 'Transactions').filter(t => t.Request_ID === req).length === 1, 'ส่งซ้ำ (ที่จำไว้หายแล้ว) → ชีตยังจับได้ ไม่บวกแต้มซ้ำ', r);
+  ok(tx.searchCells <= 2000, `ตอนกันซ้ำค้นแค่ ${tx.searchCells.toLocaleString()} แถวล่าสุด (ไม่ค้นทั้ง ${tx.getLastRow().toLocaleString()} แถว)`, tx.searchCells);
+  r = call(W2, { action: 'addPurchase', idToken: tok('OBIG'), memberId: C, amount: 300, requestId: 'REQ-BULK-29500' });
+  ok(r.ok && r.duplicate === true, 'requestId ของรายการเมื่อไม่นาน (อยู่ใน 2,000 ล่าสุด) → จับว่าซ้ำ', r);
+}
+
 console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
 process.exit(fail ? 1 : 0);
