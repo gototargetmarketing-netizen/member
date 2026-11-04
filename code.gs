@@ -16,7 +16,7 @@
  * ทุกคำสั่งต้องมี LINE ID Token ซึ่งตรวจกับ LINE ที่นี่ — ห้ามเชื่อ userId ที่หน้าเว็บส่งมา
  *******************************************************/
 
-const APP_VERSION = '2.7.0';
+const APP_VERSION = '2.8.0';
 const TZ = 'Asia/Bangkok';
 
 const SHEET = {
@@ -30,7 +30,9 @@ const SHEET = {
   // หลายสาขา (2.6.0) — ร้านที่ยังไม่เพิ่มสาขาจะไม่มีชีตนี้ก็ได้ ระบบซ่อนเรื่องสาขาทั้งหมด
   BRANCHES: 'Branches',
   // ประวัติการแก้ข้อมูลสมาชิก (2.7.0) — จดว่าแก้ช่องไหน เมื่อไร โดยใคร ไม่เก็บค่าเก่า (ลดข้อมูลส่วนตัวที่ต้องเก็บ)
-  PROFILE_LOG: 'Profile_Log'
+  PROFILE_LOG: 'Profile_Log',
+  // กติกาแต้มพิเศษ (2.8.0) เช่น แต้ม x2 ทุกวันพุธ — ระบบคิดให้ตอนพนักงานบันทึกยอดซื้อ
+  POINT_RULES: 'Point_Rules'
 };
 
 // รูปแบบเซลล์ — ตั้งก่อนเขียนทุกครั้ง เพราะ Google Sheets แปลงค่าเอง
@@ -69,7 +71,8 @@ const COLUMNS = {
     ['Reward_ID', F_TEXT], ['Name', F_TEXT], ['Description', F_TEXT], ['Points', F_INT],
     ['Image', F_TEXT], ['Valid_Days', F_INT], ['Quota', F_INT], ['Issued', F_INT],
     ['Limit_Per_Member', F_INT], ['Start_Date', F_DATE], ['End_Date', F_DATE],
-    ['Sort', F_INT], ['Status', F_TEXT]
+    ['Sort', F_INT], ['Status', F_TEXT],
+    ['Type', F_TEXT] // เพิ่มใน 2.8.0: ว่าง = แลกด้วยแต้ม / BIRTHDAY = ของขวัญวันเกิด (รับได้เฉพาะเดือนเกิด ปีละครั้ง)
   ],
   Coupons: [
     ['Coupon_Code', F_TEXT], ['Member_ID', F_TEXT], ['Reward_ID', F_TEXT], ['Name', F_TEXT],
@@ -94,6 +97,12 @@ const COLUMNS = {
   ],
   Profile_Log: [
     ['Date', F_DATETIME], ['Member_ID', F_TEXT], ['Changed', F_TEXT], ['By', F_TEXT]
+  ],
+  // Days = MON,WED (ว่าง = ทุกวัน) / Branch ว่าง = ทุกสาขา / Min_Amount ว่าง = ทุกบิล
+  Point_Rules: [
+    ['Rule_ID', F_TEXT], ['Name', F_TEXT], ['Multiplier', F_TEXT], ['Days', F_TEXT], ['Start_Date', F_DATE],
+    ['End_Date', F_DATE], ['Branch', F_TEXT], ['Min_Amount', F_MONEY], ['Show_Badge', F_TEXT], ['Status', F_TEXT],
+    ['Created_At', F_DATETIME]
   ]
 };
 
@@ -134,7 +143,8 @@ const LATE_COLUMNS = {
   Members: ['First_Name', 'Last_Name', 'Joined_Branch', 'Birth_Date_Edits'],
   Transactions: ['Branch'],
   Coupons: ['Used_Branch'],
-  Staff: ['Branches']
+  Staff: ['Branches'],
+  Rewards: ['Type']
 };
 
 const ROLES = ['OWNER', 'ADMIN', 'CASHIER'];
@@ -154,6 +164,7 @@ const ACTIONS = {
   bootstrap: { run: actBootstrap_ },
   register: { run: actRegister_ },
   redeem: { run: actRedeem_ },
+  claimBirthday: { run: actClaimBirthday_ },
   updateProfile: { run: actUpdateProfile_ },
   staffMe: { run: actStaffMe_ },
   staffLookup: { roles: ALL_STAFF, run: actStaffLookup_ },
@@ -189,7 +200,10 @@ const ACTIONS = {
   adminBrandSave: { roles: ['OWNER'], run: actAdminBrandSave_ },
   // สาขา: ผู้จัดการดูได้ / เพิ่ม-แก้-ปิดสาขาได้เฉพาะเจ้าของร้าน
   adminBranches: { roles: MANAGERS, run: actAdminBranches_ },
-  adminBranchSave: { roles: ['OWNER'], run: actAdminBranchSave_ }
+  adminBranchSave: { roles: ['OWNER'], run: actAdminBranchSave_ },
+  // แต้มพิเศษ: ผู้จัดการดูได้ / ตั้งกติกาได้เฉพาะเจ้าของร้าน (มีผลกับต้นทุนเหมือนอัตราแต้ม)
+  adminRules: { roles: MANAGERS, run: actAdminRules_ },
+  adminRuleSave: { roles: ['OWNER'], run: actAdminRuleSave_ }
 };
 
 // เปิด URL ตรงๆ ใช้เช็กว่า Deploy สำเร็จ (ไม่คืนข้อมูลใดๆ)
@@ -352,9 +366,13 @@ function actBootstrap_(p, ctx) {
     history: [],
     coupons: [],
     rewards: listRewards_(now),
-    promos: listPromos_(now)
+    promos: listPromos_(now),
+    // ป้าย "แต้ม x2 วันนี้" ที่หน้าลูกค้า (เฉพาะกติกาที่เจ้าของร้านติ๊กให้แสดง)
+    badges: rulesOn_(now).filter(function (r) { return r.showBadge; }).map(publicRule_),
+    birthday: null
   };
   if (!member) return out;
+  out.birthday = birthdayOffer_(member, now);
 
   // อัปเดตรูปโปรไฟล์เมื่อลูกค้าเปลี่ยนรูปใน LINE (เขียนเฉพาะตอนที่เปลี่ยนจริง)
   if (ctx.user.picture && ctx.user.picture !== String(member.Picture || '')) {
@@ -443,7 +461,8 @@ function actRedeem_(p, ctx) {
       const now = new Date();
       const rRow = findRow_(SHEET.REWARDS, 'Reward_ID', rewardId);
       const reward = rRow ? readRow_(SHEET.REWARDS, rRow) : null;
-      if (!reward || upper_(reward.Status) !== 'ACTIVE' || !inWindow_(reward.Start_Date, reward.End_Date, now)) {
+      if (!reward || upper_(reward.Status) !== 'ACTIVE' || !inWindow_(reward.Start_Date, reward.End_Date, now) ||
+          upper_(reward.Type) === REWARD_BIRTHDAY) {
         throw userError_('รางวัลนี้ไม่พร้อมให้แลกแล้ว', 'REWARD_UNAVAILABLE');
       }
 
@@ -639,6 +658,7 @@ function actStaffMe_(p, ctx) {
     out.hasBranches = active.length > 0;
     out.branches = active.filter(function (b) { return staffCanUse_(me, b.id); })
       .map(function (b) { return { id: b.id, name: b.name }; });
+    out.rules = rulesOn_(new Date()).map(publicRule_);
   }
   return out;
 }
@@ -680,8 +700,11 @@ function actAddPurchase_(p, ctx) {
     throw userError_('ยอดซื้อเกิน ' + fmtNum_(c.maxPurchase) + ' บาทต่อบิล (ถ้าถูกต้อง ให้เจ้าของร้านปรับ "ยอดซื้อสูงสุดต่อบิล" ในหลังบ้าน เมนูตั้งค่าร้าน)', 'OVER_MAX');
   }
   const note = cleanNote_(p.note);
-  const points = Math.floor(amount / c.pointRate + 1e-9);
+  const basePoints = Math.floor(amount / c.pointRate + 1e-9);
   const branch = resolveStaffBranch_(p, ctx.staff);
+  // แต้มพิเศษ: ตรงหลายกติกา → ใช้อันที่ให้มากสุดอันเดียว ไม่คูณซ้อน (ผู้ใช้ตกลง 4 พ.ย. 2569) / ปัดลงเป็นจำนวนเต็ม
+  const rule = bestRule_(new Date(), branch, amount);
+  const points = rule ? Math.floor(basePoints * rule.multiplier + 1e-9) : basePoints;
 
   return withLock_(function () {
     return once_('addPurchase', ctx.user.userId, p.requestId, function (reqId) {
@@ -705,14 +728,20 @@ function actAddPurchase_(p, ctx) {
       const visits = toInt_(m.Visit_Count) + 1;
       updateFields_(SHEET.MEMBERS, row, { Points: balance, Total_Spend: spend, Visit_Count: visits, Last_Visit_At: now });
 
-      const detail = note || ('ซื้อสินค้า ' + fmtMoney_(amount) + ' บาท' + (points ? '' : ' (ไม่ถึงเกณฑ์รับแต้ม)'));
+      const base = note || ('ซื้อสินค้า ' + fmtMoney_(amount) + ' บาท' + (points ? '' : ' (ไม่ถึงเกณฑ์รับแต้ม)'));
+      // ชื่อกติกาต่อท้าย ลูกค้าเห็นในประวัติว่าได้พิเศษเพราะอะไร / รหัสกติกาเก็บใน Ref ไว้ดูย้อนหลัง
+      const detail = rule && points > basePoints ? base + ' · ' + rule.name : base;
       const txId = appendTx_({
         memberId: memberId, type: 'EARN', amount: amount, points: points, balance: balance,
-        detail: detail, staff: ctx.staff.name, requestId: reqId, branch: branch
+        detail: detail, staff: ctx.staff.name, requestId: reqId, branch: branch,
+        ref: rule && points > basePoints ? rule.id : ''
       });
 
       m.Points = balance; m.Total_Spend = spend; m.Visit_Count = visits; m.Last_Visit_At = now;
-      return { txId: txId, amount: amount, pointsAdded: points, balance: balance, member: staffMember_(m) };
+      return {
+        txId: txId, amount: amount, pointsAdded: points, basePoints: basePoints, balance: balance, member: staffMember_(m),
+        rule: rule && points > basePoints ? { name: rule.name, multiplier: rule.multiplier } : null
+      };
     });
   });
 }
@@ -982,8 +1011,11 @@ function actAdminMembers_(p, ctx) {
   const sort = ['joined', 'points', 'spend', 'lastVisit', 'name'].indexOf(p.sort) >= 0 ? p.sort : 'joined';
   const status = ['ACTIVE', 'BLOCKED'].indexOf(upper_(p.status)) >= 0 ? upper_(p.status) : '';
   const branch = branchFilter_(p.branch); // สาขาที่สมัคร
+  const birthMonth = p.birthMonth === true && role === 'OWNER' ? Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd').slice(5, 7) : '';
 
-  let list = readAll_(SHEET.MEMBERS).filter(function (m) { return m.Member_ID && sameBranch_(m.Joined_Branch, branch); });
+  let list = readAll_(SHEET.MEMBERS).filter(function (m) {
+    return m.Member_ID && sameBranch_(m.Joined_Branch, branch) && (!birthMonth || String(m.Birth_Date || '').slice(5, 7) === birthMonth);
+  });
   if (status) list = list.filter(function (m) { return (upper_(m.Status) || 'ACTIVE') === status; });
   if (q) {
     // ค้นเบอร์: เจ้าของร้านค้นบางส่วนได้ / ผู้จัดการต้องพิมพ์เบอร์เต็ม (กันไล่เดาเบอร์ลูกค้าทีละหลัก)
@@ -1249,10 +1281,13 @@ function actAdminRewards_() {
 function actAdminRewardSave_(p, ctx) {
   const r = p.reward || {};
   const id = r.id ? cleanKey_(r.id, 'รหัสรางวัล') : '';
+  const birthday = upper_(r.type) === REWARD_BIRTHDAY;
   const fields = {
     Name: cleanText_(r.name, 80, 'ชื่อของรางวัล', true),
     Description: cleanText_(r.description, 300, 'รายละเอียด'),
-    Points: intIn_(r.points, 1, 1000000, 'แต้มที่ใช้แลก'),
+    Points: birthday ? (String(r.points == null ? '' : r.points).trim() === '' ? 0 : intIn_(r.points, 0, 1000000, 'แต้มที่ใช้แลก'))
+      : intIn_(r.points, 1, 1000000, 'แต้มที่ใช้แลก'),
+    Type: birthday ? REWARD_BIRTHDAY : '',
     Image: cleanImage_(r.image),
     Valid_Days: optInt_(r.validDays, 1, 3650, 'จำนวนวันที่ใช้ได้'),
     Quota: optInt_(r.quota, 1, 1000000, 'จำนวนทั้งหมด'),
@@ -1264,6 +1299,7 @@ function actAdminRewardSave_(p, ctx) {
 
   return afterWrite_([SHEET.REWARDS], function () { return withLock_(function () {
     return once_('rewardSave', ctx.user.userId, p.requestId, function () {
+      ensureColumns_(SHEET.REWARDS); // ชีตเก่ายังไม่มีคอลัมน์ Type
       const now = new Date();
       if (id) {
         const row = findRow_(SHEET.REWARDS, 'Reward_ID', id);
@@ -1416,9 +1452,10 @@ function adminReward_(r, now) {
     endDate: dayKey_(r.End_Date),
     sort: toInt_(r.Sort),
     status: status,
-    // สิ่งที่ลูกค้าเห็นตอนนี้ (ตรงกับเงื่อนไขใน listRewards_)
+    type: upper_(r.Type) === REWARD_BIRTHDAY ? REWARD_BIRTHDAY : '',
+    // สิ่งที่ลูกค้าเห็นตอนนี้ (ตรงกับเงื่อนไขใน listRewards_) — ของขวัญวันเกิดให้ 0 แต้มได้
     state: status !== 'ACTIVE' ? 'INACTIVE'
-      : toInt_(r.Points) <= 0 ? 'INVALID'
+      : toInt_(r.Points) <= 0 && upper_(r.Type) !== REWARD_BIRTHDAY ? 'INVALID'
       : windowState_(r.Start_Date, r.End_Date, now) || (quota > 0 && issued >= quota ? 'SOLD_OUT' : 'ACTIVE')
   };
 }
@@ -2015,6 +2052,219 @@ function actAdminBranchSave_(p, ctx) {
 
 
 /* =====================================================
+ * 4.6) แต้มพิเศษ (2.8.0): กติกาคูณแต้ม เช่น x2 ทุกวันพุธ / x3 เปิดสาขาใหม่ / ซื้อครบ 500 x1.5
+ * - ตรงหลายกติกา → ใช้อันที่ให้แต้มมากสุดอันเดียว (ไม่คูณซ้อน กันแต้มพุ่งจนร้านขาดทุน)
+ * - Apps Script คิดเองตอนบันทึกยอดซื้อ หน้าพนักงานแค่โชว์ตัวอย่าง
+ * ===================================================== */
+const RULE_MULTIPLIERS = [1.5, 2, 3];
+const DAY_CODES = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+
+// วันในสัปดาห์ตามเวลาไทย — คิดจากวันที่ yyyy-MM-dd ไม่ใช้รูปแบบชื่อวันของ formatDate (ขึ้นกับภาษาของสคริปต์)
+function dayCode_(now) {
+  const d = new Date(Utilities.formatDate(now, TZ, 'yyyy-MM-dd') + 'T00:00:00Z');
+  return DAY_CODES[(d.getUTCDay() + 6) % 7];
+}
+
+function ruleRows_() {
+  if (!getSpreadsheet_().getSheetByName(SHEET.POINT_RULES)) return []; // ร้านเดิมที่ยังไม่ได้รัน testSetup
+  return cachedRows_(SHEET.POINT_RULES).filter(function (r) { return r.Rule_ID; });
+}
+
+function ruleFromRow_(r) {
+  const days = upper_(r.Days).split(/[,\s]+/).filter(function (d) { return DAY_CODES.indexOf(d) >= 0; });
+  const mult = Number(r.Multiplier);
+  return {
+    id: String(r.Rule_ID),
+    name: String(r.Name || ''),
+    multiplier: RULE_MULTIPLIERS.indexOf(mult) >= 0 ? mult : 1,
+    days: days.length ? days : DAY_CODES.slice(),
+    startDate: dayKey_(r.Start_Date),
+    endDate: dayKey_(r.End_Date),
+    branch: upper_(r.Branch),
+    minAmount: toNum_(r.Min_Amount),
+    showBadge: upper_(r.Show_Badge) === 'YES',
+    status: upper_(r.Status) === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
+    _row: r
+  };
+}
+
+// กติกาที่เปิดอยู่และมีผลในวันนั้น (ยังไม่ดูสาขา/ยอดซื้อ)
+function rulesOn_(now) {
+  const day = dayCode_(now);
+  return ruleRows_().map(ruleFromRow_).filter(function (r) {
+    return r.status === 'ACTIVE' && r.multiplier > 1 && r.days.indexOf(day) >= 0 && inWindow_(r._row.Start_Date, r._row.End_Date, now);
+  });
+}
+
+function bestRule_(now, branch, amount) {
+  let best = null;
+  rulesOn_(now).forEach(function (r) {
+    if (r.branch && r.branch !== branch) return;
+    if (r.minAmount > 0 && amount < r.minAmount) return;
+    if (!best || r.multiplier > best.multiplier) best = r;
+  });
+  return best;
+}
+
+function publicRule_(r) {
+  const bn = r.branch ? branchNames_()[r.branch] || '' : '';
+  return { id: r.id, name: r.name, multiplier: r.multiplier, branch: r.branch, branchName: bn, minAmount: r.minAmount };
+}
+
+function adminRule_(r, now) {
+  const o = publicRule_(r);
+  o.days = r.days; o.startDate = r.startDate; o.endDate = r.endDate; o.showBadge = r.showBadge; o.status = r.status;
+  const win = windowState_(r._row.Start_Date, r._row.End_Date, now);
+  const today = dayCode_(now);
+  o.state = r.status !== 'ACTIVE' ? 'INACTIVE' : win || (r.days.indexOf(today) >= 0 ? 'TODAY' : 'ACTIVE');
+  return o;
+}
+
+function actAdminRules_() {
+  const now = new Date();
+  return { items: ruleRows_().map(ruleFromRow_).map(function (r) { return adminRule_(r, now); }) };
+}
+
+function actAdminRuleSave_(p, ctx) {
+  const r = p.rule || {};
+  const id = r.id ? cleanKey_(r.id, 'รหัสกติกา') : '';
+  const mult = Number(r.multiplier);
+  if (RULE_MULTIPLIERS.indexOf(mult) < 0) throw userError_('เลือกจำนวนเท่าของแต้ม ×1.5 ×2 หรือ ×3', 'BAD_INPUT');
+  const days = (Array.isArray(r.days) ? r.days : []).map(upper_).filter(function (d, i, a) { return DAY_CODES.indexOf(d) >= 0 && a.indexOf(d) === i; });
+  if (!days.length) throw userError_('เลือกวันที่มีผลอย่างน้อย 1 วัน', 'BAD_INPUT');
+  const branch = upper_(r.branch);
+  if (branch && !branchList_().some(function (b) { return b.id === branch; })) throw userError_('ไม่พบสาขานี้', 'BAD_BRANCH');
+  const minRaw = String(r.minAmount == null ? '' : r.minAmount).replace(/,/g, '').trim();
+  const min = minRaw === '' ? '' : Number(minRaw);
+  if (min !== '' && (!isFinite(min) || min < 0 || min > 10000000)) throw userError_('ยอดขั้นต่ำต้องเป็นตัวเลข 0–10,000,000', 'BAD_INPUT');
+  const fields = {
+    Name: cleanText_(r.name, 60, 'ชื่อกติกา', true),
+    Multiplier: String(mult),
+    Days: DAY_CODES.filter(function (d) { return days.indexOf(d) >= 0; }).join(','),
+    Branch: branch,
+    Min_Amount: min === '' || min === 0 ? '' : round2_(min),
+    Show_Badge: r.showBadge === true ? 'YES' : 'NO',
+    Status: cleanStatus_(r.status || 'ACTIVE')
+  };
+  Object.assign(fields, cleanWindow_(r.startDate, r.endDate));
+
+  return afterWrite_([SHEET.POINT_RULES], function () { return withLock_(function () {
+    return once_('ruleSave', ctx.user.userId, p.requestId, function () {
+      const ss = getSpreadsheet_();
+      if (!ss.getSheetByName(SHEET.POINT_RULES)) ensureSheet_(ss, SHEET.POINT_RULES);
+      let row;
+      if (id) {
+        row = findRow_(SHEET.POINT_RULES, 'Rule_ID', id);
+        if (!row) throw userError_('ไม่พบกติกานี้', 'NOT_FOUND');
+        updateFields_(SHEET.POINT_RULES, row, fields);
+      } else {
+        row = appendObj_(SHEET.POINT_RULES, Object.assign({ Rule_ID: nextId_(SHEET.POINT_RULES, 'Rule_ID', 'PR'), Created_At: new Date() }, fields));
+      }
+      console.log((id ? 'แก้' : 'เพิ่ม') + 'กติกาแต้มพิเศษ ' + fields.Name + ' x' + fields.Multiplier + ' (' + fields.Status + ') โดย ' + ctx.staff.name);
+      return { rule: adminRule_(ruleFromRow_(readRow_(SHEET.POINT_RULES, row)), new Date()), created: !id };
+    });
+  }); });
+}
+
+/* =====================================================
+ * 4.7) ของขวัญวันเกิด (2.8.0) — ผู้ใช้ตกลง 4 พ.ย. 2569
+ * รับได้ทั้งเดือนเกิด ปีละ 1 ครั้ง / ต้องเป็นสมาชิก ≥ 30 วัน และไม่ได้เพิ่งเปลี่ยนวันเกิดใน 30 วัน (กันสมัครหรือแก้วันเกิดเพื่อรับของขวัญ)
+ * ของขวัญ = ของรางวัลที่ Type = BIRTHDAY (เจ้าของร้านตั้งในหลังบ้าน) ใช้ที่ร้านเหมือนคูปองปกติ
+ * ===================================================== */
+const REWARD_BIRTHDAY = 'BIRTHDAY';
+const BIRTHDAY_MIN_DAYS = 30;
+
+function birthdayReward_(now) {
+  return cachedRows_(SHEET.REWARDS).filter(function (r) {
+    return r.Reward_ID && upper_(r.Type) === REWARD_BIRTHDAY && upper_(r.Status) === 'ACTIVE' &&
+      inWindow_(r.Start_Date, r.End_Date, now) && (toInt_(r.Quota) <= 0 || toInt_(r.Issued) < toInt_(r.Quota));
+  }).sort(function (a, b) { return toInt_(a.Sort) - toInt_(b.Sort); })[0] || null;
+}
+
+// '' = มีสิทธิ์ / เหตุผลที่ยังไม่มีสิทธิ์ (ใช้ทั้งตอนแสดงการ์ดและตอนกดรับ)
+function birthdayBlock_(m, now) {
+  const birth = String(m.Birth_Date || '');
+  if (!birth || birth.slice(5, 7) !== Utilities.formatDate(now, TZ, 'yyyy-MM-dd').slice(5, 7)) return 'NOT_MONTH';
+  const minAgo = now.getTime() - BIRTHDAY_MIN_DAYS * 86400000;
+  const joined = toDate_(m.Joined_At);
+  if (!joined || joined.getTime() > minAgo) return 'TOO_NEW';
+  const changedRecently = profileLog_(String(m.Member_ID), 20).some(function (l) {
+    return l.changed.indexOf(PROFILE_LABEL.birth) >= 0 && new Date(l.date).getTime() > minAgo;
+  });
+  return changedRecently ? 'TOO_NEW' : '';
+}
+
+// คูปองวันเกิดของปีนี้ (ถ้ารับไปแล้ว)
+function birthdayCoupon_(m, now) {
+  const year = Utilities.formatDate(now, TZ, 'yyyy-MM-dd').slice(0, 4);
+  const ids = {};
+  readAll_(SHEET.REWARDS).forEach(function (r) { if (upper_(r.Type) === REWARD_BIRTHDAY) ids[String(r.Reward_ID)] = true; });
+  return rowsWhere_(SHEET.COUPONS, 'Member_ID', m.Member_ID, 200).filter(function (c) {
+    const d = toDate_(c.Issued_At);
+    return ids[String(c.Reward_ID)] && d && Utilities.formatDate(d, TZ, 'yyyy-MM-dd').slice(0, 4) === year && upper_(c.Status) !== 'CANCELLED';
+  }).pop() || null;
+}
+
+// การ์ดหน้าลูกค้า: null = ไม่แสดง
+function birthdayOffer_(m, now) {
+  if (upper_(m.Status || 'ACTIVE') !== 'ACTIVE' || birthdayBlock_(m, now)) return null;
+  const got = birthdayCoupon_(m, now);
+  if (got) return couponState_(got, now) === 'ACTIVE' ? { claimed: true, coupon: publicCoupon_(got, now) } : null;
+  const r = birthdayReward_(now);
+  if (!r) return null;
+  return {
+    claimed: false, rewardId: String(r.Reward_ID), name: String(r.Name || ''), description: String(r.Description || ''),
+    image: safeUrl_(driveImage_(r.Image)), points: toInt_(r.Points), until: iso_(endOfMonth_(now))
+  };
+}
+
+function endOfMonth_(now) {
+  const k = Utilities.formatDate(now, TZ, 'yyyy-MM-dd');
+  const last = new Date(Date.UTC(Number(k.slice(0, 4)), Number(k.slice(5, 7)), 0)); // วันที่ 0 ของเดือนถัดไป = วันสุดท้ายของเดือนนี้
+  return new Date(last.toISOString().slice(0, 10) + 'T23:59:59+07:00');
+}
+
+function actClaimBirthday_(p, ctx) {
+  return afterWrite_([SHEET.REWARDS], function () { return withLock_(function () {
+    return once_('claimBirthday', ctx.user.userId, p.requestId, function (reqId) {
+      const m = findMemberByLine_(ctx.user.userId);
+      if (!m) throw userError_('กรุณาสมัครสมาชิกก่อน', 'NOT_MEMBER');
+      assertActiveMember_(m);
+      const now = new Date();
+      const block = birthdayBlock_(m, now);
+      if (block === 'NOT_MONTH') throw userError_('ของขวัญวันเกิดรับได้เฉพาะในเดือนเกิดของคุณ', 'NOT_BIRTH_MONTH');
+      if (block) throw userError_('ของขวัญวันเกิดสำหรับสมาชิกที่สมัครครบ ' + BIRTHDAY_MIN_DAYS + ' วันขึ้นไป', 'TOO_NEW');
+      const got = birthdayCoupon_(m, now);
+      if (got) return { already: true, coupon: publicCoupon_(got, now) };
+      invalidateRows_([SHEET.REWARDS]); // อ่านจำนวนที่แลกล่าสุดจากชีต (กันเกินโควตา)
+      const r = birthdayReward_(now);
+      if (!r) throw userError_('ตอนนี้ร้านยังไม่มีของขวัญวันเกิด', 'REWARD_UNAVAILABLE');
+      const rRow = findRow_(SHEET.REWARDS, 'Reward_ID', r.Reward_ID);
+      const reward = readRow_(SHEET.REWARDS, rRow);
+      const cost = toInt_(reward.Points);
+      const points = toInt_(m.Points);
+      if (cost > points) throw userError_('แต้มไม่พอ ต้องใช้ ' + fmtNum_(cost) + ' แต้ม (มีอยู่ ' + fmtNum_(points) + ')', 'NOT_ENOUGH');
+      const code = newCouponCode_();
+      const days = toInt_(reward.Valid_Days);
+      let txId = '';
+      if (cost > 0) {
+        updateFields_(SHEET.MEMBERS, m._row, { Points: points - cost });
+        txId = appendTx_({ memberId: m.Member_ID, type: 'REDEEM', points: -cost, balance: points - cost, detail: 'แลก ' + String(reward.Name || ''), requestId: reqId, ref: code });
+      }
+      const coupon = {
+        Coupon_Code: code, Member_ID: m.Member_ID, Reward_ID: String(reward.Reward_ID), Name: String(reward.Name || ''),
+        Points_Used: cost, Issued_At: now, Expires_At: days > 0 ? endOfDayAfter_(now, days) : endOfMonth_(now),
+        Used_At: '', Used_By: '', Status: 'ACTIVE', Tx_ID: txId
+      };
+      appendObj_(SHEET.COUPONS, coupon);
+      updateFields_(SHEET.REWARDS, rRow, { Issued: toInt_(reward.Issued) + 1 });
+      return { coupon: publicCoupon_(coupon, now), points: points - cost };
+    });
+  }); });
+}
+
+
+/* =====================================================
  * 5) ข้อมูลที่ส่งออกไปหน้าเว็บ (เลือกเฉพาะที่จำเป็น)
  * ===================================================== */
 
@@ -2101,7 +2351,7 @@ function publicCoupon_(cp, now) {
 function listRewards_(now) {
   return cachedRows_(SHEET.REWARDS)
     .filter(function (r) {
-      return r.Reward_ID && upper_(r.Status) === 'ACTIVE' && toInt_(r.Points) > 0 &&
+      return r.Reward_ID && upper_(r.Status) === 'ACTIVE' && toInt_(r.Points) > 0 && upper_(r.Type) !== REWARD_BIRTHDAY &&
         inWindow_(r.Start_Date, r.End_Date, now);
     })
     .map(function (r) {
@@ -2413,12 +2663,12 @@ function invalidateRows_(names) {
 // (onEdit ทำงานเองเมื่อมีคนพิมพ์ในชีตที่ผูกกับสคริปต์นี้ ไม่ต้องตั้งค่าอะไรเพิ่ม)
 function onEdit(e) {
   const name = e && e.range ? e.range.getSheet().getName() : '';
-  if (name === SHEET.SETTINGS || name === SHEET.REWARDS || name === SHEET.PROMOS || name === SHEET.BRANCHES) invalidateRows_([name]);
+  if ([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS, SHEET.BRANCHES, SHEET.POINT_RULES].indexOf(name) >= 0) invalidateRows_([name]);
 }
 
 // กด Run เองได้ ถ้าแก้ชีตด้วยวิธีอื่น (เช่นวางข้อมูลจากที่อื่น) แล้วอยากให้ลูกค้าเห็นทันที
 function clearCache() {
-  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS, SHEET.BRANCHES]);
+  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS, SHEET.BRANCHES, SHEET.POINT_RULES]);
   Logger.log('ล้างข้อมูลที่จำไว้แล้ว ลูกค้าจะเห็นค่าล่าสุดจากชีต');
 }
 
@@ -2608,7 +2858,7 @@ function testSetup() {
   Object.keys(COLUMNS).forEach(function (name) { ensureSheet_(ss, name); });
   seedSettings_();
   seedSamples_();
-  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS, SHEET.BRANCHES]); // ค่าที่จำไว้อาจเป็นของเก่า
+  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS, SHEET.BRANCHES, SHEET.POINT_RULES]); // ค่าที่จำไว้อาจเป็นของเก่า
   settings_ = null;
   const c = cfg_();
   const s = getSettings_();
@@ -2626,7 +2876,7 @@ function testSetup() {
     Logger.log('⚠️ โฟลเดอร์เก็บรูป: ' + (e && e.userMessage ? e.userMessage : e));
   }
   // ไม่ทิ้งค่าที่จำไว้ (เจ้าของร้านมักกรอก LIFF_ID ในชีตต่อจากนี้ทันที)
-  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS, SHEET.BRANCHES]);
+  invalidateRows_([SHEET.SETTINGS, SHEET.REWARDS, SHEET.PROMOS, SHEET.BRANCHES, SHEET.POINT_RULES]);
 }
 
 // เปิดโหมดทดสอบ: ใช้กับ Apps Script ตัวทดสอบของเราเท่านั้น — ห้ามรันในสคริปต์ของร้านจริง
@@ -2670,7 +2920,8 @@ function ensureSheet_(ss, name) {
     Promotions: { Status: ['ACTIVE', 'INACTIVE'] },
     Coupons: { Status: ['ACTIVE', 'USED', 'CANCELLED'] },
     Staff: { Role: ROLES, Status: ['PENDING', 'ACTIVE', 'DISABLED'] },
-    Branches: { Status: ['ACTIVE', 'INACTIVE'] }
+    Branches: { Status: ['ACTIVE', 'INACTIVE'] },
+    Point_Rules: { Status: ['ACTIVE', 'INACTIVE'], Show_Badge: ['YES', 'NO'] }
   }[name] || {};
   Object.keys(lists).forEach(function (h) {
     const rule = SpreadsheetApp.newDataValidation().requireValueInList(lists[h], true).setAllowInvalid(false).build();
@@ -2705,8 +2956,9 @@ function seedSamples_() {
   }
   if (table_(SHEET.PROMOS).sheet.getLastRow() < 2) {
     appendObj_(SHEET.PROMOS, {
-      Promo_ID: 'P001', Title: 'ตัวอย่างโปรโมชัน: แต้ม x2 ทุกวันพุธ', Subtitle: 'แก้ข้อความนี้ในชีต Promotions',
-      Tag: 'โปรประจำเดือน', Image: 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?auto=format&fit=crop&q=80&w=900',
+      // ลูกค้าเห็นข้อความนี้ → ห้ามพูดถึงชีต (ผู้ใช้ตัดสินใจ 3 พ.ย. 2569) และไม่โฆษณาโปรที่ยังไม่ได้ตั้งกติกาไว้จริง
+      Promo_ID: 'P001', Title: 'ยินดีต้อนรับสมาชิกใหม่', Subtitle: 'สะสมแต้มทุกครั้งที่ซื้อ แลกของรางวัลได้เลย',
+      Tag: 'สมาชิก', Image: 'https://images.unsplash.com/photo-1551024709-8f23befc6f87?auto=format&fit=crop&q=80&w=900',
       Link: '', Start_Date: '', End_Date: '', Sort: 1, Status: 'ACTIVE'
     });
   }

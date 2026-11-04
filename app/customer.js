@@ -55,7 +55,7 @@ async function main() {
   }
 }
 
-const LOADING_TEXT = { register: 'กำลังสมัครสมาชิก...', redeem: 'กำลังแลกของรางวัล...', updateProfile: 'กำลังบันทึก...' };
+const LOADING_TEXT = { register: 'กำลังสมัครสมาชิก...', redeem: 'กำลังแลกของรางวัล...', updateProfile: 'กำลังบันทึก...', claimBirthday: 'กำลังรับของขวัญ...' };
 
 /* ---------- สาขาที่ลูกค้าสแกน QR สมัครสมาชิก (ลิงก์ ...?branch=B001) ----------
  * จำไว้ในเครื่องจนกว่าจะสมัครเสร็จ: ระหว่างนั้นหน้าอาจโหลดใหม่หลายรอบ (LINE พาไปเข้าสู่ระบบ / เชื่อมต่อใหม่)
@@ -143,6 +143,7 @@ function onClick(e) {
     case 'hist': S.histFilter = el.dataset.filter; render(); break;
     case 'privacy': showPrivacy(); break;
     case 'profile-confirm': doSaveProfile(el); break;
+    case 'birthday-claim': claimBirthday(el); break;
     case 'close': closeModal(); break;
     case 'reload': window.location.reload(); break;
     case 'relogin': if (S.line) S.line.relogin(); break;
@@ -485,6 +486,59 @@ async function doSaveProfile(btn) {
   }
 }
 
+/* =====================================================
+ * แต้มพิเศษวันนี้ + ของขวัญวันเกิด (2.8.0)
+ * Apps Script ตัดสินทั้งหมด (เดือนเกิด / สมาชิกครบ 30 วัน / ปีละครั้ง) หน้านี้แค่แสดงตามที่ได้มา
+ * ===================================================== */
+function badgesHtml() {
+  const list = S.data.badges || [];
+  if (!list.length) return '';
+  return `<div class="today-badges">${list.map(b => `
+    <div class="today-badge">${icon('bolt', 16)}<span><b>วันนี้ ${esc(b.name)}</b>${b.branchName ? ` · เฉพาะ${esc(b.branchName)}` : ''}${b.minAmount ? ` · ซื้อครบ ฿${fmtNum(b.minAmount)}` : ''}</span></div>`).join('')}</div>`;
+}
+
+function birthdayCard() {
+  const b = S.data.birthday;
+  if (!b) return '';
+  const first = (S.data.member.firstName || S.data.member.name || '').split(' ')[0];
+  if (b.claimed) {
+    return `
+      <section class="bday">
+        <div class="bday-icon">${icon('cake', 30)}</div>
+        <div class="grow">
+          <div class="bday-tag">เดือนเกิดของคุณ 🎉</div>
+          <h3>รับของขวัญวันเกิดแล้ว</h3>
+          <p>${esc(b.coupon.name)} · ใช้ที่ร้านได้ถึง ${fmtDate(b.coupon.expiresAt)}</p>
+          <button class="btn btn-primary btn-sm" data-act="coupon-qr" data-id="${esc(b.coupon.code)}">${icon('qr', 16)} แสดงคูปอง</button>
+        </div>
+      </section>`;
+  }
+  return `
+    <section class="bday">
+      <div class="bday-icon">${icon('cake', 30)}</div>
+      <div class="grow">
+        <div class="bday-tag">เดือนเกิดของคุณ 🎉</div>
+        <h3>สุขสันต์วันเกิด คุณ${esc(first)}</h3>
+        <p>ร้านมีของขวัญให้ รับได้ถึง ${fmtDate(b.until)}</p>
+        <div class="bday-gift">${icon('gift', 18)} ${esc(b.name)}${b.points ? ` <span class="muted small">(ใช้ ${fmtNum(b.points)} ${esc(unit())})</span>` : ''}</div>
+        <button class="btn btn-primary btn-sm" data-act="birthday-claim">รับของขวัญ</button>
+      </div>
+    </section>`;
+}
+
+async function claimBirthday(btn) {
+  setBusy(btn, true, 'กำลังรับ...');
+  try {
+    const r = await withRequestId('birthday', rid => S.api.call('claimBirthday', { requestId: rid }));
+    await refresh();
+    toast(r.already ? 'คุณรับของขวัญปีนี้ไปแล้ว' : 'รับของขวัญวันเกิดแล้ว 🎉', 'ok');
+    if (r.coupon) showCouponQr(r.coupon.code);
+  } catch (e) {
+    setBusy(btn, false);
+    toast(e.message, 'err');
+  }
+}
+
 async function onRegister(e) {
   e.preventDefault();
   const f = e.target;
@@ -573,6 +627,8 @@ function pageHome() {
       </div>
     </header>
     ${memberCard(m)}
+    ${birthdayCard()}
+    ${badgesHtml()}
     <section class="section">
       <div class="quick">${quick.map(([page, ic, label]) => `
         <button data-act="go" data-page="${page}"><span class="quick-icon">${icon(ic, 22)}</span><span>${esc(label)}</span></button>`).join('')}

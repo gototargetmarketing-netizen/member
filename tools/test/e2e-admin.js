@@ -53,7 +53,7 @@ async function seed() {
     await b.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: DL });
 
     // เปลี่ยนหน้าในหลังบ้าน แล้วรอจนหน้าใหม่วาดเสร็จ (หน้าเดิมยังค้างจางๆ ระหว่างโหลด จึงต้องดูหัวข้อหน้า)
-    const LABEL = {"overview": "ภาพรวม", "members": "สมาชิก", "transactions": "รายการแต้ม", "coupons": "คูปอง", "rewards": "ของรางวัล", "promos": "โปรโมชัน", "staff": "พนักงาน", "brand": "หน้าตาร้าน", "settings": "ตั้งค่าร้าน"};
+    const LABEL = {"overview": "ภาพรวม", "members": "สมาชิก", "transactions": "รายการแต้ม", "coupons": "คูปอง", "rewards": "ของรางวัล", "promos": "โปรโมชัน", "rules": "แต้มพิเศษ", "staff": "พนักงาน", "brand": "หน้าตาร้าน", "settings": "ตั้งค่าร้าน"};
     const gotoPage = async (page) => {
       await b.click(`.adm-nav a[data-page=${page}]`);
       await b.waitFor(`(document.querySelector('.adm-head h1')?.innerText || '') === ${JSON.stringify(LABEL[page])} && !document.getElementById('view').classList.contains('is-loading')`, 10000, 'หน้า ' + LABEL[page]);
@@ -362,6 +362,97 @@ async function seed() {
 
     const errors = b.logs.filter(l => /EXCEPTION|console\.error|log\.error/.test(l) && !/favicon/.test(l));
     ok(errors.length === 0, 'ไม่มี error ใน console', errors);
+
+    console.log('\n[แต้มพิเศษ] เจ้าของร้านตั้งกติกา → พนักงานเห็นตัวอย่างแต้ม → ลูกค้าเห็นป้าย');
+    await b.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false });
+    await b.eval(asUser('U_ADM_OWNER', 'เจ้าของร้าน'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/khamwan/admin#overview`);
+    await b.waitFor(`document.querySelectorAll('.kpi').length === 8`, 10000);
+    await gotoPage('rules');
+    const RULE = 'แต้ม x2 ทดสอบ ' + STAMP;
+    await b.click('[data-act=rule-edit][data-id=""]');
+    await b.waitFor(`document.querySelector('.modal form[data-form=rule]')`, 3000, 'ฟอร์มกติกา');
+    ok((await b.eval(`document.querySelectorAll('.modal input[name=days]:checked').length`)) === 0 && (await b.eval(`document.querySelector('.modal input[name=multiplier]:checked').value`)) === '2', 'เพิ่มกติกาใหม่: ค่าตั้งต้น ×2 และยังไม่เลือกวัน');
+    await b.type('.modal input[name=name]', RULE);
+    await b.eval(`document.querySelector('.modal form').requestSubmit()`);
+    ok(/เลือกวันที่มีผลอย่างน้อย 1 วัน/.test(await b.text('#toast')) && (await b.eval(`!!document.querySelector('.modal form[data-form=rule]')`)), 'ไม่เลือกวันแล้วกดบันทึก → เตือนให้เลือกวัน');
+    // เลือกวันนี้ (เวลาไทย) ให้กติกามีผลทันที
+    await b.eval(`(() => { const k = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date()); const d = ['SUN','MON','TUE','WED','THU','FRI','SAT'][new Date(k + 'T00:00:00Z').getUTCDay()]; document.querySelector('.modal input[name=days][value=' + d + ']').checked = true; return true; })()`);
+    await b.shot(path.join(OUT, 'a19-rule-edit.png'));
+    await b.eval(`document.querySelector('.modal form').requestSubmit()`);
+    await b.waitFor(`!document.querySelector('.modal') && document.getElementById('view').innerText.includes(${JSON.stringify(RULE)}) && !document.getElementById('view').classList.contains('is-loading')`, 8000, 'บันทึกกติกา');
+    ok(/มีผลวันนี้/.test(await b.eval(`[...document.querySelectorAll('.tbl tbody tr')].find(tr => tr.innerText.includes(${JSON.stringify(RULE)})).innerText`)), 'กติกาใหม่ขึ้นในตาราง สถานะ "มีผลวันนี้"');
+    await b.shot(path.join(OUT, 'a20-rules.png'));
+    await b.eval(asUser('U_ADM_CASH', 'แคชเชียร์'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/khamwan/staff`);
+    await b.waitFor(`document.querySelector('#lookup')`, 10000, 'หน้าพนักงาน');
+    await b.type('#lookup input', ids[0]);
+    await b.eval(`document.querySelector('#lookup').requestSubmit()`);
+    await b.waitFor(`document.querySelector('#purchase')`, 8000, 'ฟอร์มยอดซื้อ');
+    ok((await b.text('.today-promo')).includes(RULE), 'หน้าพนักงาน: แถบบอกว่าวันนี้มีแต้มพิเศษ');
+    await b.type('#purchase input[name=amount]', '400');
+    ok(/\+40/.test(await b.text('#preview')) && /ปกติ \+20/.test(await b.text('#preview')), 'พิมพ์ 400 → ตัวอย่าง +40 (ปกติ +20)', await b.text('#preview'));
+    await b.eval(`document.querySelector('#purchase').requestSubmit()`);
+    await b.waitFor(`document.querySelector('.flash.ok')`, 8000, 'บันทึกสำเร็จ');
+    ok(/\+40/.test(await b.text('.flash')) && (await b.text('.flash')).includes(RULE), 'บันทึกแล้วได้ +40 จริง (Apps Script คิดเอง)', await b.text('.flash'));
+    await b.shot(path.join(OUT, 'a21-staff-bonus.png'), { full: true });
+    await b.eval(asUser('U_ADM_C1', 'ลูกค้า'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/khamwan#home`);
+    await b.waitFor(`document.querySelector('.today-badge')`, 10000, 'ป้ายแต้มพิเศษ');
+    ok((await b.text('.today-badges')).includes(RULE), 'หน้าลูกค้า: ป้าย "วันนี้ ' + RULE + '"');
+
+    console.log('\n[ของขวัญวันเกิด]');
+    await b.eval(asUser('U_ADM_OWNER', 'เจ้าของร้าน'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/khamwan/admin#overview`);
+    await b.waitFor(`document.querySelectorAll('.kpi').length === 8`, 10000);
+    await gotoPage('rewards');
+    const GIFT = 'ของขวัญวันเกิด ' + STAMP;
+    await b.click('[data-act=reward-edit][data-id=""]');
+    await b.waitFor(`document.querySelector('.modal form[data-form=reward]')`, 3000);
+    await b.type('.modal input[name=name]', GIFT);
+    const shown = sel => b.eval(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); return !!el && el.offsetParent !== null; })()`);
+    ok(!(await shown('#bday-hint')) && !(await shown('#quota-hint')) && (await shown('#limit-field')), 'ประเภทแลกด้วยแต้ม: ไม่เห็นคำอธิบายวันเกิด / เห็นช่องจำกัดต่อคน');
+    await b.eval(`(() => { const r = document.querySelector('.modal input[name=type][value=BIRTHDAY]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    ok(!(await b.eval(`document.getElementById('bday-hint').hidden`)) && (await b.eval(`document.querySelector('.modal input[name=points]').placeholder`)) === 'ว่าง = ฟรี', 'เลือก "ของขวัญวันเกิด" → แต้มไม่บังคับ (ว่าง = ฟรี) + อธิบายเงื่อนไข');
+    ok((await shown('#bday-hint')) && (await shown('#quota-hint')) && !(await shown('#limit-field')), 'ของขวัญวันเกิด: เห็นคำอธิบาย + คำแนะนำช่องจำนวน / ซ่อนช่องจำกัดต่อคน');
+    await b.shot(path.join(OUT, 'a24-birthday-form.png'));
+    await b.eval(`document.querySelector('.modal form').requestSubmit()`);
+    await b.waitFor(`!document.querySelector('.modal') && document.getElementById('view').innerText.includes(${JSON.stringify(GIFT)}) && !document.getElementById('view').classList.contains('is-loading')`, 8000, 'บันทึกของขวัญ');
+    const giftRow = await b.eval(`[...document.querySelectorAll('.tbl tbody tr')].find(tr => tr.innerText.includes(${JSON.stringify(GIFT)})).innerText`);
+    ok(/ของขวัญวันเกิด/.test(giftRow) && /ฟรี/.test(giftRow), 'ตารางของรางวัลแสดงป้าย 🎂 และ "ฟรี"', giftRow);
+    const bkk = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+    const BD = 'U_ADM_BD_' + STAMP;
+    const reg = await api('register', BD, { firstName: 'วันเกิด', lastName: 'เดือนนี้', birthDate: `1992-${bkk.slice(5, 7)}-01`, phone: '06' + String(Date.now()).slice(-8), consentPrivacy: true });
+    await fetch(API + '/__set', { method: 'POST', body: JSON.stringify({ sheet: 'Members', matchCol: 'Member_ID', matchVal: reg.member.memberId, col: 'Joined_At', daysAgo: 40 }) });
+    await b.eval(asUser(BD, 'วันเกิด'));
+    await b.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 2, mobile: true });
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/khamwan#home`);
+    await b.waitFor(`document.querySelector('.bday [data-act=birthday-claim]')`, 10000, 'การ์ดวันเกิด');
+    ok((await b.text('.bday')).includes('สุขสันต์วันเกิด คุณวันเกิด'), 'สมาชิกครบ 30 วัน + เดือนเกิด → การ์ด "สุขสันต์วันเกิด"');
+    await b.shot(path.join(OUT, 'a22-birthday-card.png'));
+    await b.click('.bday [data-act=birthday-claim]');
+    await b.waitFor(`document.querySelector('.modal .qr-svg')`, 10000, 'คูปองของขวัญ');
+    ok(true, 'กดรับของขวัญ → เปิด QR คูปองให้เลย');
+    await b.click('.modal [data-act=close]');
+    ok(/รับของขวัญวันเกิดแล้ว/.test(await b.text('.bday')), 'การ์ดเปลี่ยนเป็น "รับของขวัญวันเกิดแล้ว" + ปุ่มแสดงคูปอง');
+    await b.shot(path.join(OUT, 'a23-birthday-claimed.png'));
+
+    console.log('\n[สมาชิก] กรองเกิดเดือนนี้ (เจ้าของร้าน)');
+    await b.send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 860, deviceScaleFactor: 1, mobile: false });
+    await b.eval(asUser('U_ADM_OWNER', 'เจ้าของร้าน'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/khamwan/admin#members`);
+    await b.waitFor(`document.querySelector('form[data-form=members] select[name=birth]')`, 10000);
+    await b.eval(`(() => { const s = document.querySelector('form[data-form=members] select[name=birth]'); s.value = 'this'; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    await b.waitFor(`/ตามที่ค้นหา/.test(document.querySelector('.adm-head').innerText) && !document.getElementById('view').classList.contains('is-loading')`, 8000);
+    ok(/วันเกิด เดือนนี้/.test(await b.text('.tbl')), 'เลือก "เกิดเดือนนี้" → เห็นสมาชิกที่เกิดเดือนนี้');
+    // ปิดกติกาและของขวัญที่สร้าง ไม่ให้กระทบการรันรอบถัดไป
+    for (const x of (await api('adminRules', 'U_ADM_OWNER')).items) await api('adminRuleSave', 'U_ADM_OWNER', { rule: { ...x, status: 'INACTIVE' }, requestId: rid() });
   } catch (e) {
     fail++;
     console.log('  ✗ หยุดกลางทาง: ' + e.message);

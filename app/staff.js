@@ -14,7 +14,8 @@ const app = document.getElementById('app');
 const S = {
   shop: null, line: null, api: null, me: null, settings: null, view: null, flash: null, scanner: null, ready: false, testMode: false,
   // หลายสาขา: hasBranches = ร้านมีสาขาที่เปิดอยู่ / branches = สาขาที่คนนี้เลือกได้ / branch = สาขาที่ทำงานอยู่ตอนนี้
-  hasBranches: false, branches: [], branch: null
+  hasBranches: false, branches: [], branch: null,
+  rules: [] // กติกาแต้มพิเศษที่มีผลวันนี้ (ไว้โชว์ตัวอย่างแต้ม — Apps Script คิดแต้มจริงเอง)
 };
 // ข้อความในป๊อปอัป "กำลังโหลด" — null = ทำเบื้องหลัง (รายการล่าสุดโหลดเองหลังบันทึก ไม่ต้องบังจอ)
 const LOADING_TEXT = { staffLookup: 'กำลังค้นหา...', addPurchase: 'กำลังบันทึก...', useCoupon: 'กำลังบันทึก...', adjustPoints: 'กำลังบันทึก...', staffRecent: null };
@@ -50,6 +51,7 @@ async function main() {
     S.testMode = !!r.testMode;
     S.ready = true;
     if (S.me.status !== 'ACTIVE') return renderPending(r.testMode);
+    S.rules = r.rules || [];
     S.hasBranches = !!r.hasBranches;
     S.branches = r.branches || [];
     if (S.hasBranches) {
@@ -220,6 +222,32 @@ function onBranchError(e) {
 }
 
 /* =====================================================
+ * แต้มพิเศษ: คำนวณแบบเดียวกับ bestRule_ ใน code.gs (กติกาที่ให้มากสุดอันเดียว / คูณจากแต้มที่ปัดแล้ว แล้วปัดลง)
+ * ===================================================== */
+const branchRules = () => S.rules.filter(r => !r.branch || (S.branch && r.branch === S.branch.id));
+
+function bestRule(amount) {
+  return branchRules().filter(r => !r.minAmount || amount >= r.minAmount)
+    .reduce((best, r) => (!best || r.multiplier > best.multiplier ? r : best), null);
+}
+
+function pointsFor(amount) {
+  const base = amount > 0 ? Math.floor(amount / S.settings.pointRate + 1e-9) : 0;
+  const rule = bestRule(amount);
+  const total = rule ? Math.floor(base * rule.multiplier + 1e-9) : base;
+  return { base, total, rule: total > base ? rule : null };
+}
+
+// ชื่อกติกามีจำนวนเท่าอยู่แล้ว (เช่น "แต้ม x2 ทุกวันพุธ") ไม่ต้องเติม ×2 ซ้ำ
+const ruleLabel = r => (/[x×]\s*\d/i.test(r.name) ? r.name : `×${r.multiplier} ${r.name}`);
+
+function todayPromoHtml() {
+  const list = branchRules();
+  if (!list.length) return '';
+  return `<div class="today-promo">${icon('bolt', 18)}<span>วันนี้มีแต้มพิเศษ: ${list.map(r => esc(r.name) + (r.minAmount ? ` (ซื้อครบ ฿${fmtNum(r.minAmount)})` : '')).join(' · ')}</span></div>`;
+}
+
+/* =====================================================
  * หน้าหลักของพนักงาน
  * ===================================================== */
 function renderMain(testMode) {
@@ -289,9 +317,9 @@ function renderResult() {
     const amount = form.amount;
     const update = () => {
       const a = parseAmount(amount.value);
-      const pts = a > 0 ? Math.floor(a / S.settings.pointRate + 1e-9) : 0;
+      const p = pointsFor(a > 0 ? a : 0);
       document.getElementById('preview').innerHTML = a > 0
-        ? `ลูกค้าจะได้ <b>+${fmtNum(pts)}</b> ${esc(unit())}${pts === 0 ? ' (ยอดไม่ถึงเกณฑ์ แต่จะบันทึกยอดซื้อ)' : ''}`
+        ? `ลูกค้าจะได้ <b>+${fmtNum(p.total)}</b> ${esc(unit())}${p.rule ? ` <span class="chip">${esc(ruleLabel(p.rule))}</span><span class="was">ปกติ +${fmtNum(p.base)}</span>` : ''}${p.total === 0 ? ' (ยอดไม่ถึงเกณฑ์ แต่จะบันทึกยอดซื้อ)' : ''}`
         : `ทุก ${fmtMoney(S.settings.pointRate)} บาท = 1 ${esc(unit())}`;
     };
     amount.addEventListener('input', update);
@@ -329,6 +357,7 @@ function memberView(v) {
         <div><b>฿${fmtMoney(m.totalSpend)}</b><span>ยอดซื้อรวม</span></div>
       </div>
       ${blocked ? `<div class="notice notice-err">${icon('shield', 18)} สมาชิกนี้ถูกระงับ บันทึกแต้มไม่ได้</div>` : `
+      ${todayPromoHtml()}
       <form id="purchase" class="purchase" autocomplete="off">
         <label class="field"><span>ยอดซื้อ (บาท)</span>
           <input name="amount" class="input-xl" inputmode="decimal" placeholder="0" enterkeyhint="done"></label>
@@ -395,7 +424,7 @@ function onPurchaseSubmit(e) {
   const amount = parseAmount(f.amount.value);
   if (!(amount > 0)) return toast('กรุณาใส่ยอดซื้อ', 'err');
   if (amount > S.settings.maxPurchase) return toast(`ยอดเกิน ${fmtNum(S.settings.maxPurchase)} บาทต่อบิล`, 'err');
-  const pts = Math.floor(amount / S.settings.pointRate + 1e-9);
+  const pts = pointsFor(amount).total;
   const m = S.view.member;
   S.pendingPurchase = { memberId: m.memberId, amount, note: f.note.value.trim() };
 
@@ -427,7 +456,7 @@ async function doPurchase(btn) {
     if (r.member) S.view.member = r.member;
     S.flash = r.duplicate
       ? { kind: 'warn', html: 'รายการนี้บันทึกไปแล้ว (ระบบไม่บันทึกซ้ำ)' }
-      : { kind: 'ok', html: `บันทึก ฿${fmtMoney(r.amount)} → <b>+${fmtNum(r.pointsAdded)} ${esc(unit())}</b> · คงเหลือ ${fmtNum(r.balance)}` };
+      : { kind: 'ok', html: `บันทึก ฿${fmtMoney(r.amount)} → <b>+${fmtNum(r.pointsAdded)} ${esc(unit())}</b>${r.rule ? ` (${esc(ruleLabel(r.rule))})` : ''} · คงเหลือ ${fmtNum(r.balance)}` };
     renderResult();
     toast('บันทึกแล้ว', 'ok');
     loadRecent();

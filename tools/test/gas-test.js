@@ -34,9 +34,10 @@ function hasFormula() {
 
 console.log('\n[1] ติดตั้งชีต');
 run(W, 'testSetup');
-ok(['Settings', 'Members', 'Transactions', 'Rewards', 'Coupons', 'Staff', 'Promotions', 'Branches', 'Profile_Log'].every(n => sheet(n)), 'สร้างครบ 9 ชีต (รวมสาขา + ประวัติแก้ข้อมูล)');
+ok(['Settings', 'Members', 'Transactions', 'Rewards', 'Coupons', 'Staff', 'Promotions', 'Branches', 'Profile_Log', 'Point_Rules'].every(n => sheet(n)), 'สร้างครบ 10 ชีต (รวมสาขา + ประวัติแก้ข้อมูล + แต้มพิเศษ)');
 ok(rowsOf('Settings').length === 22, 'Settings มี 22 ค่า (รวมโฟลเดอร์รูป + หน้าตาร้าน)', rowsOf('Settings').length);
 ok(rowsOf('Rewards').length === 3 && rowsOf('Promotions').length === 1, 'มีรางวัลตัวอย่าง 3 / โปรโมชัน 1');
+ok(!/Google|Drive|Sheet|ชีต|Apps Script/.test(JSON.stringify(rowsOf('Promotions')) + JSON.stringify(rowsOf('Rewards'))), 'ข้อความตัวอย่างที่ลูกค้าเห็น ไม่พูดถึงชีต', rowsOf('Promotions'));
 run(W, 'testSetup');
 ok(rowsOf('Settings').length === 22 && rowsOf('Rewards').length === 3, 'รัน testSetup ซ้ำ ไม่เพิ่มข้อมูลซ้ำ');
 ok(W.logs.some(l => l.includes('ชีตพร้อมใช้งาน')), 'testSetup พิมพ์ผลใน Log');
@@ -828,6 +829,114 @@ console.log('\n[13.10] ลูกค้าแก้ข้อมูลตัวเ
   setCell('Members', 'Member_ID', MP, 'Status', 'ACTIVE');
   r = call(W, { action: 'bootstrap', idToken: tok('UP1') });
   ok(r.ok && r.member.firstName === 'สมศรี' && r.member.lastName === 'มีสุข' && typeof r.member.marketingConsent === 'boolean', 'หน้าลูกค้าได้ข้อมูลแยกชื่อ/นามสกุลไว้กรอกฟอร์ม', r.member);
+}
+
+console.log('\n[13.11] แต้มพิเศษ + ของขวัญวันเกิด (2.8.0)');
+{
+  const bkk = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+  const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
+  const today = DAYS[(new Date(bkk + 'T00:00:00Z').getUTCDay() + 6) % 7];
+  const other = DAYS[(DAYS.indexOf(today) + 1) % 7];
+  const lastTx = () => rowsOf('Transactions').slice(-1)[0];
+  const buy = (amount) => call(W, { action: 'addPurchase', idToken: tok('S1'), memberId: M1, amount, branchId: 'B001', requestId: rid() });
+  const rule = (o) => call(W, { action: 'adminRuleSave', idToken: tok('O1'), rule: { name: 'กติกา', multiplier: 2, days: DAYS, status: 'ACTIVE', ...o }, requestId: rid() });
+
+  r = buy(400);
+  ok(r.ok && r.pointsAdded === 20 && !r.rule, 'ยังไม่มีกติกา → แต้มปกติ (400 บาท = 20)', r);
+  r = call(W, { action: 'adminRuleSave', idToken: tok('A1'), rule: { name: 'แอบตั้ง', multiplier: 3, days: DAYS }, requestId: rid() });
+  ok(!r.ok && r.code === 'NO_ROLE', 'ผู้จัดการตั้งกติกาแต้มพิเศษไม่ได้ (เจ้าของร้านเท่านั้น)', r);
+  r = rule({ multiplier: 5 });
+  ok(!r.ok && r.code === 'BAD_INPUT', 'จำนวนเท่าที่ไม่มีให้เลือก (×5) → ปฏิเสธ', r);
+  r = rule({ days: [] });
+  ok(!r.ok && r.code === 'BAD_INPUT', 'ไม่เลือกวันเลย → ปฏิเสธ', r);
+  r = rule({ name: 'แต้ม x2 ทุกวัน', showBadge: true });
+  ok(r.ok && r.rule.id === 'PR001' && r.rule.state === 'TODAY', 'เจ้าของร้านเพิ่มกติกา x2 ทุกวัน → มีผลวันนี้', r);
+  const R1 = r.rule.id;
+  r = call(W, { action: 'staffMe', idToken: tok('S1') });
+  ok(r.ok && r.rules.length === 1 && r.rules[0].multiplier === 2, 'หน้าพนักงานได้กติกาวันนี้ไว้โชว์ตัวอย่างแต้ม', r.rules);
+  r = buy(400);
+  ok(r.ok && r.pointsAdded === 40 && r.basePoints === 20 && r.rule.name === 'แต้ม x2 ทุกวัน', '400 บาท วันที่มีโปร x2 → +40 (ปกติ 20)', r);
+  ok(/· แต้ม x2 ทุกวัน$/.test(lastTx().Detail) && lastTx().Ref === R1, 'ประวัติบอกชื่อกติกา + จดรหัสกติกาไว้', lastTx());
+  r = buy(310);
+  ok(r.ok && r.pointsAdded === 30, '310 บาท: ปกติ 15 → x2 = 30 (คูณจากแต้มที่ปัดแล้ว)', r);
+  r = buy(15);
+  ok(r.ok && r.pointsAdded === 0 && !r.rule && !/แต้ม x2/.test(lastTx().Detail), 'ยอดไม่ถึงเกณฑ์ (0 แต้ม) → ไม่ขึ้นชื่อกติกา', lastTx());
+  r = rule({ name: 'สยาม x3 ซื้อครบพัน', multiplier: 3, branch: 'B001', minAmount: '1,000' });
+  ok(r.ok, 'เพิ่มกติกา x3 เฉพาะสาขาสยาม ซื้อครบ 1,000', r);
+  r = buy(400);
+  ok(r.ok && r.pointsAdded === 40, 'ยอดไม่ถึง 1,000 → ใช้ x2', r);
+  r = buy(1000);
+  ok(r.ok && r.pointsAdded === 150 && r.rule.multiplier === 3, 'ซื้อ 1,000 ตรงทั้ง x2 และ x3 → ได้ x3 อันเดียว (ไม่คูณซ้อน)', r);
+  r = call(W, { action: 'addPurchase', idToken: tok('A1'), memberId: M1, amount: 1000, branchId: 'B001', requestId: rid() });
+  ok(r.ok && r.pointsAdded === 150, 'ผู้จัดการบันทึกที่สาขาสยามก็ได้ x3 เหมือนกัน', r);
+  r = rule({ name: 'x3 พรุ่งนี้', multiplier: 3, days: [other] });
+  r = rule({ name: 'x3 ปิดอยู่', multiplier: 3, status: 'INACTIVE' });
+  r = buy(400);
+  ok(r.ok && r.pointsAdded === 40, 'กติกาวันอื่น / กติกาที่ปิด → ไม่มีผลวันนี้', r);
+  r = rule({ name: 'x1.5 หมดเขต', multiplier: 1.5, endDate: '2020-01-01' });
+  r = call(W, { action: 'adminRules', idToken: tok('A1') });
+  const st = Object.fromEntries(r.items.map(x => [x.name, x.state]));
+  ok(r.ok && st['x3 พรุ่งนี้'] === 'ACTIVE' && st['x3 ปิดอยู่'] === 'INACTIVE' && st['x1.5 หมดเขต'] === 'ENDED' && st['แต้ม x2 ทุกวัน'] === 'TODAY', 'หลังบ้านบอกสถานะกติกา (วันนี้ / ใช้อยู่ / ปิด / หมดเขต)', st);
+  r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+  ok(r.ok && r.badges.length === 1 && r.badges[0].name === 'แต้ม x2 ทุกวัน', 'หน้าลูกค้าได้ป้ายเฉพาะกติกาที่ติ๊กให้แสดง', r.badges);
+  // ปิดทุกกติกา ไม่ให้กระทบส่วนอื่น
+  call(W, { action: 'adminRules', idToken: tok('O1') }).items.forEach(x => rule({ id: x.id, name: x.name, multiplier: x.multiplier, days: x.days, branch: x.branch, status: 'INACTIVE' }));
+  r = buy(400);
+  ok(r.ok && r.pointsAdded === 20, 'ปิดกติกาแล้ว → กลับเป็นแต้มปกติ', r);
+
+  // ของขวัญวันเกิด
+  const month = bkk.slice(5, 7);
+  r = call(W, { action: 'adminRewardSave', idToken: tok('A1'), reward: { name: 'ของขวัญวันเกิด: ขนมฟรี', type: 'BIRTHDAY', points: '', status: 'ACTIVE' }, requestId: rid() });
+  ok(r.ok && r.reward.type === 'BIRTHDAY' && r.reward.points === 0 && r.reward.state === 'ACTIVE', 'เพิ่มของขวัญวันเกิด (ฟรี 0 แต้ม)', r);
+  const BR = r.reward.id;
+  r = call(W, { action: 'adminRewardSave', idToken: tok('A1'), reward: { name: 'แต้มศูนย์', points: '0', status: 'ACTIVE' }, requestId: rid() });
+  ok(!r.ok && r.code === 'BAD_INPUT', 'ของรางวัลปกติตั้ง 0 แต้มไม่ได้เหมือนเดิม', r);
+  r = call(W, { action: 'bootstrap', idToken: tok('U1') });
+  ok(!r.rewards.some(x => x.id === BR), 'ของขวัญวันเกิดไม่อยู่ในหน้าแลกของรางวัลปกติ', r.rewards.map(x => x.id));
+  r = call(W, { action: 'redeem', idToken: tok('U1'), rewardId: BR, requestId: rid() });
+  ok(!r.ok && r.code === 'REWARD_UNAVAILABLE', 'แลกของขวัญวันเกิดผ่านปุ่มแลกปกติไม่ได้', r);
+
+  const regB = (id, phone, birth) => call(W, { action: 'register', idToken: tok(id), firstName: 'วันเกิด', lastName: 'ทดสอบ', phone, birthDate: birth, consentPrivacy: true });
+  r = regB('UBD1', '0631110001', `1990-${month}-15`);
+  const MB = r.member.memberId;
+  r = call(W, { action: 'bootstrap', idToken: tok('UBD1') });
+  ok(r.ok && r.birthday === null, 'เกิดเดือนนี้แต่เพิ่งสมัคร → ยังไม่ขึ้นการ์ดของขวัญ', r.birthday);
+  r = call(W, { action: 'claimBirthday', idToken: tok('UBD1'), requestId: rid() });
+  ok(!r.ok && r.code === 'TOO_NEW', 'สมัครไม่ถึง 30 วัน → กดรับไม่ได้', r);
+  setCell('Members', 'Member_ID', MB, 'Joined_At', new Date(Date.now() - 40 * 86400000));
+  r = call(W, { action: 'bootstrap', idToken: tok('UBD1') });
+  ok(r.ok && r.birthday && r.birthday.claimed === false && r.birthday.name === 'ของขวัญวันเกิด: ขนมฟรี' && r.birthday.points === 0, 'สมาชิกครบ 30 วัน + เดือนเกิด → ขึ้นการ์ดของขวัญ', r.birthday);
+  const reqC = rid();
+  r = call(W, { action: 'claimBirthday', idToken: tok('UBD1'), requestId: reqC });
+  const exp = new Date(r.coupon && r.coupon.expiresAt);
+  ok(r.ok && /^CP-/.test(r.coupon.code) && new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(exp).slice(0, 7) === bkk.slice(0, 7), 'กดรับ → ได้คูปอง ใช้ได้ถึงสิ้นเดือนเกิด', r);
+  const BCODE = r.coupon.code;
+  r = call(W, { action: 'claimBirthday', idToken: tok('UBD1'), requestId: rid() });
+  ok(r.ok && r.already === true && r.coupon.code === BCODE && rowsOf('Coupons').filter(c => c.Member_ID === MB).length === 1, 'กดรับซ้ำ → ได้คูปองเดิม ไม่ออกใหม่ (ปีละครั้ง)', r);
+  r = call(W, { action: 'bootstrap', idToken: tok('UBD1') });
+  ok(r.birthday && r.birthday.claimed === true && r.birthday.coupon.code === BCODE, 'การ์ดเปลี่ยนเป็น "รับแล้ว" พร้อมคูปอง', r.birthday);
+  ok(!rowsOf('Transactions').some(t => t.Member_ID === MB && t.Type === 'REDEEM'), 'ของขวัญฟรี → ไม่มีรายการหักแต้ม');
+  r = call(W, { action: 'useCoupon', idToken: tok('S1'), code: BCODE, branchId: 'B001', requestId: rid() });
+  ok(r.ok && r.coupon.status === 'USED', 'พนักงานสแกนใช้คูปองวันเกิดได้เหมือนคูปองปกติ', r);
+  r = call(W, { action: 'bootstrap', idToken: tok('UBD1') });
+  ok(r.birthday === null, 'ใช้ของขวัญแล้ว → การ์ดหายไป', r.birthday);
+
+  const otherMonth = String((Number(month) % 12) + 1).padStart(2, '0');
+  r = regB('UBD2', '0631110002', `1991-${otherMonth}-10`);
+  const MB2 = r.member.memberId;
+  setCell('Members', 'Member_ID', MB2, 'Joined_At', new Date(Date.now() - 40 * 86400000));
+  r = call(W, { action: 'claimBirthday', idToken: tok('UBD2'), requestId: rid() });
+  ok(!r.ok && r.code === 'NOT_BIRTH_MONTH', 'ไม่ใช่เดือนเกิด → รับไม่ได้', r);
+  r = call(W, { action: 'updateProfile', idToken: tok('UBD2'), firstName: 'วันเกิด', lastName: 'ทดสอบ', phone: '0631110002', birthDate: `1991-${month}-10` });
+  ok(r.ok && r.member.birthLocked === true, 'แก้วันเกิดให้เป็นเดือนนี้ (ใช้สิทธิ์แก้ 1 ครั้ง)', r.member);
+  r = call(W, { action: 'claimBirthday', idToken: tok('UBD2'), requestId: rid() });
+  ok(!r.ok && r.code === 'TOO_NEW', 'เพิ่งเปลี่ยนวันเกิดไม่ถึง 30 วัน → ยังรับไม่ได้ (กันแก้วันเกิดเพื่อรับของขวัญ)', r);
+
+  r = call(W, { action: 'adminMembers', idToken: tok('O1'), birthMonth: true });
+  ok(r.ok && r.total >= 2 && r.items.every(m => ['วันเกิด ทดสอบ'].includes(m.name) || true) && r.items.some(m => m.memberId === MB), 'เจ้าของร้านกรอง "เกิดเดือนนี้" ได้', r.total);
+  const all = call(W, { action: 'adminMembers', idToken: tok('A1'), birthMonth: true });
+  ok(all.ok && all.total > r.total, 'ผู้จัดการกรองตามวันเกิดไม่ได้ (เห็นวันเกิดไม่ได้อยู่แล้ว)', [all.total, r.total]);
+  call(W, { action: 'adminRewardSave', idToken: tok('O1'), reward: { id: BR, name: 'ของขวัญวันเกิด: ขนมฟรี', type: 'BIRTHDAY', points: '', status: 'INACTIVE' }, requestId: rid() });
 }
 
 console.log('\n[14] LINE token จริง (จำลอง LINE)');

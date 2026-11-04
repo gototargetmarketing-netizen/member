@@ -163,6 +163,8 @@ code { background: var(--surface2); padding: 2px 6px; border-radius: 6px; font-s
 .profile-name { font-size: 18px; }
 .profile-form { margin: 12px 16px; }
 .profile-note { color: var(--muted); font-size: 12.5px; text-align: center; padding: 4px 20px 16px; }
+/* สิ่งที่ตั้ง hidden ต้องซ่อนเสมอ แม้คลาสจะกำหนด display ไว้ (เคยทำให้คำอธิบายของขวัญวันเกิดขึ้นตลอด) */
+[hidden] { display: none !important; }
 .hint { display: block; color: var(--muted); font-size: 12.5px; font-weight: 400; margin-top: 4px; }
 .field-err { color: var(--danger); font-size: 13px; font-weight: 600; margin-top: 4px; }
 .field-err + .hint { display: none; } /* มีข้อความเตือนแล้ว ไม่ต้องโชว์คำอธิบายซ้อน */
@@ -179,6 +181,39 @@ input.input-err { border-color: var(--danger); }
 .switch-input:checked + .switch { background: var(--button); }
 .switch-input:checked + .switch::after { transform: translateX(18px); }
 .switch-input:focus-visible + .switch { outline: 2px solid var(--button); outline-offset: 2px; }
+/* ---------- แต้มพิเศษ + ของขวัญวันเกิด (2.8.0) ---------- */
+/* หน้าลูกค้า: การ์ดของขวัญวันเกิด (ขึ้นเฉพาะเดือนเกิด) + ป้าย "วันนี้ แต้ม x2" */
+.bday { margin: 16px 16px 0; padding: 18px; border-radius: var(--radius); display: flex; gap: 14px; align-items: center;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 35%, var(--surface)), var(--surface));
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, var(--line)); box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 25%, transparent); }
+.bday-icon { width: 56px; height: 56px; border-radius: 18px; background: var(--button); color: var(--on-button); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.bday h3 { font-size: 17px; margin: 0; }
+.bday p { margin: 2px 0 10px; color: var(--muted); font-size: 13.5px; }
+.bday-tag { font-size: 12px; font-weight: 700; color: var(--button); }
+.bday-gift { display: flex; align-items: center; gap: 6px; font-weight: 800; margin-bottom: 10px; }
+.today-badges { display: flex; flex-direction: column; gap: 8px; margin: 14px 16px 0; }
+.today-badge { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 22%, var(--surface)); font-size: 14px; }
+.today-badge .ic, .today-promo .ic { color: var(--button); flex-shrink: 0; }
+/* หน้าพนักงาน: แถบบอกโปรวันนี้ + ตัวอย่างแต้ม */
+.today-promo { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--accent) 22%, var(--surface)); font-weight: 700; font-size: 14px; margin-bottom: 12px; }
+.preview .chip { vertical-align: middle; }
+.preview .was { color: var(--muted); font-size: 13px; text-decoration: line-through; margin-left: 6px; }
+/* หลังบ้าน: ตารางกติกา + ฟอร์ม (ใช้ radio / checkbox จริง แต่งเป็นปุ่ม) */
+.mult { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; padding: 4px 10px; border-radius: 99px; background: var(--button); color: var(--on-button); font-weight: 800; font-size: 14px; }
+.days { display: flex; gap: 4px; }
+.days span { width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; background: var(--surface2); color: var(--muted); }
+.days span.on { background: var(--button); color: var(--on-button); }
+.pick-row { display: flex; gap: 8px; }
+.pick { flex: 1; position: relative; cursor: pointer; }
+.pick input, .day-picks input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.pick span { display: block; padding: 10px; border-radius: var(--radius-sm); border: 1.5px solid var(--line); text-align: center; font-weight: 800; color: var(--muted); }
+.pick input:checked + span { border-color: var(--button); color: var(--button); background: color-mix(in srgb, var(--button) 8%, var(--surface)); }
+.day-picks { display: flex; gap: 6px; flex-wrap: wrap; }
+.day-picks label { position: relative; cursor: pointer; }
+.day-picks span { width: 40px; height: 40px; border-radius: 50%; border: 1.5px solid var(--line); display: flex; align-items: center; justify-content: center; font-weight: 700; color: var(--muted); }
+.day-picks input:checked + span { background: var(--button); border-color: var(--button); color: var(--on-button); }
+.pick input:focus-visible + span, .day-picks input:focus-visible + span { outline: 2px solid var(--button); outline-offset: 2px; }
+.chip-bday { font-size: 12px; padding: 2px 8px; background: color-mix(in srgb, var(--accent) 25%, var(--surface)); }
 .logo { width: 44px; height: 44px; border-radius: 12px; object-fit: cover; flex-shrink: 0; }
 .logo-text { display: flex; align-items: center; justify-content: center; background: var(--accent); color: var(--on-accent); font-weight: 800; font-size: 20px; }
 .logo-lg { width: 76px; height: 76px; border-radius: 22px; font-size: 34px; }

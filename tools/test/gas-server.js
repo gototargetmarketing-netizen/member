@@ -15,6 +15,17 @@ setSetting('MEMBER_PREFIX', 'KW');
 setSetting('WELCOME_POINTS', '20');
 // ไม่ตั้ง SHOP_NAME: ร้านทดสอบ 2 ร้าน (khamwan / demo) ใช้ชีตจำลองเดียวกัน ถ้าตั้งไว้ ชื่อจะทับกันทั้งสองร้าน
 
+// แก้ช่องในชีตจำลองตรงๆ (เฉพาะการทดสอบ เช่น ย้อนวันสมัครไป 40 วันเพื่อทดสอบของขวัญวันเกิด)
+function setCell(op) {
+  const s = W.ss.getSheetByName(op.sheet); if (!s) return { ok: false };
+  const h = s.data[0];
+  const row = s.data.find((r, i) => i > 0 && String(r[h.indexOf(op.matchCol)]) === String(op.matchVal));
+  if (!row) return { ok: false };
+  row[h.indexOf(op.col)] = op.daysAgo != null ? new Date(Date.now() - op.daysAgo * 86400000) : op.val;
+  W.cache.delete('rows:' + op.sheet);
+  return { ok: true };
+}
+
 function admin(op) {
   const s = W.ss.getSheetByName('Staff'); const h = s.data[0];
   const row = s.data.find((r, i) => i > 0 && r[0] === op.userId);
@@ -50,6 +61,7 @@ http.createServer((req, res) => {
     if (req.method === 'OPTIONS') { res.statusCode = 204; return res.end(); }
     try {
       if (req.url.startsWith('/__admin')) return res.end(JSON.stringify(admin(JSON.parse(body))));
+      if (req.url.startsWith('/__set')) return res.end(JSON.stringify(setCell(JSON.parse(body))));
       if (req.url.startsWith('/__log')) return res.end(JSON.stringify(log));
       if (req.url.startsWith('/__drive')) return res.end(JSON.stringify(W.drive));
       if (req.url.startsWith('/__dump')) return res.end(JSON.stringify(Object.fromEntries(Object.entries(W.ss.sheets).map(([k, v]) => [k, v.data]))));

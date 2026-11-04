@@ -19,6 +19,7 @@ const PAGES = [
   { id: 'coupons', label: 'คูปอง', icon: 'ticket' },
   { id: 'rewards', label: 'ของรางวัล', icon: 'gift' },
   { id: 'promos', label: 'โปรโมชัน', icon: 'star' },
+  { id: 'rules', label: 'แต้มพิเศษ', icon: 'coins' },
   { id: 'staff', label: 'พนักงาน', icon: 'shield' },
   { id: 'branches', label: 'สาขา', icon: 'pin' },
   { id: 'brand', label: 'หน้าตาร้าน', icon: 'palette' },
@@ -37,7 +38,7 @@ const PRESETS = [
 const RANGE_KEY = 'crm_admin_range';
 const BRANCH_KEY = 'crm_admin_branch';
 // ข้อความในป๊อปอัป "กำลังโหลด" ตามคำสั่ง (คำสั่งอ่านข้อมูลอื่นๆ = "กำลังโหลด...")
-const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave', 'adminMemberUpdate'];
+const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave', 'adminMemberUpdate', 'adminRuleSave'];
 const LOADING_TEXT = { adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...' };
 
 const app = document.getElementById('app');
@@ -46,7 +47,7 @@ const S = {
   range: loadRange(),
   // หลายสาขา: รายชื่อสาขาทั้งหมด (มาพร้อมคำขอแรก) + สาขาที่เลือกดูอยู่ ('' = ทุกสาขา) ใช้ร่วมกันทุกหน้า
   branches: [], branch: loadBranchFilter(),
-  members: { q: '', sort: 'joined', status: '', page: 1 },
+  members: { q: '', sort: 'joined', status: '', birth: '', page: 1 },
   tx: { type: '', staff: '', q: '', page: 1 },
   coupons: { status: '', page: 1 },
   member: null, staffItems: [], pendingAdjust: null,
@@ -117,6 +118,7 @@ function onClick(e) {
     case 'adjust-confirm': doAdjust(el); break;
     case 'reward-edit': openRewardEdit(id); break;
     case 'promo-edit': openPromoEdit(id); break;
+    case 'rule-edit': openRuleEdit(id); break;
     case 'member-status': openMemberStatus(); break;
     case 'member-edit': openMemberEdit(); break;
     case 'settings-confirm': doSaveSettings(el); break;
@@ -149,7 +151,7 @@ function onSubmit(e) {
       break;
     }
     case 'members':
-      Object.assign(S.members, { q: f.q.value.trim(), sort: f.sort.value, status: f.status.value, page: 1 });
+      Object.assign(S.members, { q: f.q.value.trim(), sort: f.sort.value, status: f.status.value, birth: f.birth ? f.birth.value : '', page: 1 });
       route();
       break;
     case 'tx':
@@ -161,6 +163,7 @@ function onSubmit(e) {
     case 'branch': saveBranch(form); break;
     case 'reward': saveReward(form); break;
     case 'promo': savePromo(form); break;
+    case 'rule': saveRule(form); break;
     case 'member-status': saveMemberStatus(form); break;
     case 'member-edit': saveMemberEdit(form); break;
     case 'settings': confirmSettings(form); break;
@@ -184,6 +187,7 @@ function onChange(e) {
   if (file) return uploadImage(file);
   if (e.target.matches('[data-branch-filter]')) return setBranchFilter(e.target.value);
   if (e.target.matches('[data-branch-all]')) return toggleBranchAll(e.target);
+  if (e.target.matches('input[name="type"]')) return onRewardType(e.target);
   const form = e.target.closest('form[data-form="members"], form[data-form="tx"]');
   if (form && e.target.tagName === 'SELECT') form.requestSubmit();
 }
@@ -397,6 +401,7 @@ function route() {
     coupons: loadCoupons,
     rewards: loadRewards,
     promos: loadPromos,
+    rules: loadRules,
     staff: loadStaff,
     branches: loadBranches,
     brand: loadBrand,
@@ -656,7 +661,7 @@ function setupChart(d) {
  * ===================================================== */
 function loadMembers() {
   const m = S.members;
-  fetchView('adminMembers', { q: m.q, sort: m.sort, status: m.status, page: m.page, ...branchData() }, renderMembers);
+  fetchView('adminMembers', { q: m.q, sort: m.sort, status: m.status, page: m.page, birthMonth: m.birth === 'this', ...branchData() }, renderMembers);
 }
 
 function renderMembers(r) {
@@ -664,7 +669,7 @@ function renderMembers(r) {
   const opt = (value, label, cur) => `<option value="${value}" ${cur === value ? 'selected' : ''}>${label}</option>`;
   const owner = isOwner();
   document.getElementById('view').innerHTML = `
-    ${pageHead('สมาชิก', `${fmtNum(r.total)} คน${m.q || m.status ? ' (ตามที่ค้นหา)' : ''}${S.branch ? ` · สมัครที่${branchNote()}` : ''}`, exportBtn('members'))}
+    ${pageHead('สมาชิก', `${fmtNum(r.total)} คน${m.q || m.status || m.birth ? ' (ตามที่ค้นหา)' : ''}${S.branch ? ` · สมัครที่${branchNote()}` : ''}`, exportBtn('members'))}
     <form class="filters" data-form="members" autocomplete="off">
       ${branchSelect()}
       <div class="search-box">${icon('search', 18)}<input name="q" value="${esc(m.q)}" placeholder="${owner ? 'ค้นชื่อ / รหัสสมาชิก / เบอร์โทร' : 'ค้นชื่อ / รหัสสมาชิก / เบอร์โทรเต็ม'}" enterkeyhint="search"></div>
@@ -674,6 +679,7 @@ function renderMembers(r) {
       <select name="status" aria-label="สถานะ">
         ${opt('', 'ทุกสถานะ', m.status)}${opt('ACTIVE', 'ใช้งานได้', m.status)}${opt('BLOCKED', 'ถูกระงับ', m.status)}
       </select>
+      ${owner ? `<select name="birth" aria-label="เดือนเกิด">${opt('', 'ทุกเดือนเกิด', m.birth)}${opt('this', '🎂 เกิดเดือนนี้', m.birth)}</select>` : ''}
       <button class="btn btn-sm btn-primary" type="submit">ค้นหา</button>
     </form>
     ${owner ? '' : '<p class="muted small adm-note">ผู้จัดการเห็นเบอร์โทรแค่ 4 ตัวท้าย (เจ้าของร้านเห็นเต็ม)</p>'}
@@ -974,8 +980,8 @@ function renderRewards(r) {
         <tbody>${r.items.length ? r.items.map(x => `
           <tr>
             <td class="thumb-cell">${thumb(x.imageUrl)}</td>
-            <td><b>${esc(x.name)}</b>${x.description ? `<div class="m-sub">${esc(x.description)}</div>` : ''}<div class="m-sub mono">${esc(x.id)}</div></td>
-            <td class="num">${fmtNum(x.points)}</td>
+            <td><b>${esc(x.name)}</b>${x.type === 'BIRTHDAY' ? ' <span class="chip chip-bday">🎂 ของขวัญวันเกิด</span>' : ''}${x.description ? `<div class="m-sub">${esc(x.description)}</div>` : ''}<div class="m-sub mono">${esc(x.id)}</div></td>
+            <td class="num">${x.points ? fmtNum(x.points) : 'ฟรี'}</td>
             <td class="num">${fmtNum(x.issued)} / ${x.quota ? fmtNum(x.quota) : 'ไม่จำกัด'}</td>
             <td class="num">${x.limitPerMember ? fmtNum(x.limitPerMember) : '-'}</td>
             <td class="nowrap">${esc(periodText(x.startDate, x.endDate))}</td>
@@ -990,19 +996,28 @@ function renderRewards(r) {
 function openRewardEdit(id) {
   const x = id ? S.rewards.find(r => r.id === id) : null;
   if (id && !x) return;
-  const v = x || { name: '', description: '', points: '', image: '', validDays: '', quota: '', limitPerMember: '', startDate: '', endDate: '', sort: '', status: 'ACTIVE', issued: 0 };
+  const v = x || { name: '', description: '', points: '', image: '', validDays: '', quota: '', limitPerMember: '', startDate: '', endDate: '', sort: '', status: 'ACTIVE', issued: 0, type: '' };
+  const bday = v.type === 'BIRTHDAY';
   openModal(`
     <div class="modal-head"><h2>${x ? 'แก้ไขของรางวัล' : 'เพิ่มของรางวัล'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
     <form class="form" data-form="reward" data-id="${esc(x ? x.id : '')}" autocomplete="off">
       <label class="field"><span>ชื่อของรางวัล <em>*</em></span><input name="name" value="${esc(v.name)}" maxlength="80" placeholder="เช่น เครื่องดื่มฟรี 1 แก้ว"></label>
       <label class="field"><span>รายละเอียด <small>(ไม่บังคับ)</small></span><textarea name="description" maxlength="300" rows="2" placeholder="เช่น เลือกเครื่องดื่มเย็นที่ร่วมรายการ">${esc(v.description)}</textarea></label>
+      <div class="field"><span>ประเภท</span>
+        <div class="pick-row">
+          <label class="pick"><input type="radio" name="type" value="" ${bday ? '' : 'checked'}><span>แลกด้วย${esc(unit())}</span></label>
+          <label class="pick"><input type="radio" name="type" value="BIRTHDAY" ${bday ? 'checked' : ''}><span>🎂 ของขวัญวันเกิด</span></label>
+        </div>
+        <small class="hint" id="bday-hint" ${bday ? '' : 'hidden'}>ลูกค้าเห็นและกดรับได้เฉพาะเดือนเกิด ปีละ 1 ครั้ง · ต้องเป็นสมาชิกอย่างน้อย 30 วัน · ระบบตรวจเดือนเกิดให้ พนักงานแค่สแกนคูปอง</small></div>
       <div class="form-grid">
-        <label class="field"><span>ใช้กี่${esc(unit())}แลก <em>*</em></span><input name="points" value="${esc(v.points)}" inputmode="numeric" placeholder="เช่น 80"></label>
-        <label class="field"><span>คูปองใช้ได้กี่วัน</span><input name="validDays" value="${esc(v.validDays)}" inputmode="numeric" placeholder="ว่าง = ${fmtNum(S.couponDays)} วัน (ค่าร้าน)"></label>
-        <label class="field"><span>จำนวนทั้งหมด</span><input name="quota" value="${esc(v.quota)}" inputmode="numeric" placeholder="ว่าง = ไม่จำกัด">${x ? `<small>แลกไปแล้ว ${fmtNum(x.issued)}</small>` : ''}</label>
-        <label class="field"><span>จำกัดต่อคน</span><input name="limitPerMember" value="${esc(v.limitPerMember)}" inputmode="numeric" placeholder="ว่าง = ไม่จำกัด"></label>
+        <label class="field"><span>ใช้กี่${esc(unit())}แลก <em id="points-req" ${bday ? 'hidden' : ''}>*</em></span><input name="points" value="${esc(bday && !v.points ? '' : v.points)}" inputmode="numeric" placeholder="${bday ? 'ว่าง = ฟรี' : 'เช่น 80'}"></label>
+        <label class="field"><span>คูปองใช้ได้กี่วัน</span><input name="validDays" value="${esc(v.validDays)}" inputmode="numeric" placeholder="${bday ? 'ว่าง = ถึงสิ้นเดือนเกิด' : `ว่าง = ${fmtNum(S.couponDays)} วัน (ค่าร้าน)`}"></label>
         <label class="field"><span>วันเริ่ม</span><input type="date" name="startDate" value="${esc(v.startDate)}"></label>
         <label class="field"><span>วันสิ้นสุด</span><input type="date" name="endDate" value="${esc(v.endDate)}"></label>
+        <label class="field"><span>จำนวนทั้งหมด</span><input name="quota" value="${esc(v.quota)}" inputmode="numeric" placeholder="ว่าง = ไม่จำกัด">${x ? `<small>แลกไปแล้ว ${fmtNum(x.issued)}</small>` : ''}
+          <small class="hint" id="quota-hint" ${bday ? '' : 'hidden'}>ว่าง = แจกทุกคนที่เกิดเดือนนั้น (แนะนำ) · ครบจำนวนแล้วลูกค้าคนอื่นจะไม่เห็นการ์ด</small></label>
+        ${/* ของขวัญวันเกิดจำกัดปีละครั้งต่อคนอยู่แล้ว ช่องนี้ไม่มีผล → ซ่อน กันเจ้าของร้านสับสน */ ''}
+        <label class="field" id="limit-field" ${bday ? 'hidden' : ''}><span>จำกัดต่อคน</span><input name="limitPerMember" value="${esc(v.limitPerMember)}" inputmode="numeric" placeholder="ว่าง = ไม่จำกัด"></label>
       </div>
       ${imageField(v.image, 'reward-preview')}
       <div class="form-grid">
@@ -1146,11 +1161,25 @@ function formValues(form, names) {
   return o;
 }
 
+// เปลี่ยนประเภทของรางวัล → แต้มไม่บังคับ (ของขวัญวันเกิดให้ฟรีได้) และอายุคูปองค่าตั้งต้นเป็นสิ้นเดือนเกิด
+function onRewardType(radio) {
+  const form = radio.closest('form');
+  const bday = form.elements.type.value === 'BIRTHDAY';
+  form.querySelector('#bday-hint').hidden = !bday;
+  form.querySelector('#quota-hint').hidden = !bday;
+  form.querySelector('#limit-field').hidden = bday;
+  form.querySelector('#points-req').hidden = bday;
+  form.elements.points.placeholder = bday ? 'ว่าง = ฟรี' : 'เช่น 80';
+  form.elements.validDays.placeholder = bday ? 'ว่าง = ถึงสิ้นเดือนเกิด' : `ว่าง = ${fmtNum(S.couponDays)} วัน (ค่าร้าน)`;
+}
+
 async function saveReward(form) {
   const reward = formValues(form, ['name', 'description', 'points', 'image', 'validDays', 'quota', 'limitPerMember', 'startDate', 'endDate', 'sort', 'status']);
   reward.id = form.dataset.id;
+  reward.type = form.elements.type.value;
+  if (reward.type === 'BIRTHDAY') reward.limitPerMember = ''; // ช่องถูกซ่อน ไม่ส่งค่าเก่าที่ค้างอยู่
   if (!reward.name) return toast('กรุณากรอกชื่อของรางวัล', 'err');
-  if (!reward.points) return toast(`กรุณากรอกจำนวน${unit()}ที่ใช้แลก`, 'err');
+  if (!reward.points && reward.type !== 'BIRTHDAY') return toast(`กรุณากรอกจำนวน${unit()}ที่ใช้แลก`, 'err');
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
   try {
@@ -1228,6 +1257,94 @@ async function savePromo(form) {
     closeModal();
     toast(`${r.created ? 'เพิ่ม' : 'บันทึก'} "${r.promo.title}" แล้ว · ${STATE_LABEL[r.promo.state]}`, 'ok');
     loadPromos();
+  } catch (e) {
+    setBusy(btn, false);
+    toast(e.message, 'err');
+  }
+}
+
+/* =====================================================
+ * แต้มพิเศษ (2.8.0): กติกาคูณแต้ม — เจ้าของร้านตั้ง / ผู้จัดการดูได้ / Apps Script คิดแต้มเองตอนบันทึกยอด
+ * ===================================================== */
+const DAYS = [['MON', 'จ'], ['TUE', 'อ'], ['WED', 'พ'], ['THU', 'พฤ'], ['FRI', 'ศ'], ['SAT', 'ส'], ['SUN', 'อา']];
+const MULTS = [1.5, 2, 3];
+const RULE_STATE = { TODAY: ['active', 'มีผลวันนี้'], ACTIVE: ['active', 'ใช้อยู่'], SCHEDULED: ['state-scheduled', 'ยังไม่ถึงวันเริ่ม'], ENDED: ['state-ended', 'หมดเขตแล้ว'], INACTIVE: ['inactive', 'ปิดอยู่'] };
+
+function loadRules() {
+  fetchView('adminRules', {}, renderRules);
+}
+
+const daysHtml = on => `<div class="days">${DAYS.map(([k, t]) => `<span class="${on.includes(k) ? 'on' : ''}" title="${t}">${t}</span>`).join('')}</div>`;
+
+function renderRules(r) {
+  S.rules = r.items;
+  const owner = isOwner();
+  document.getElementById('view').innerHTML = `
+    ${pageHead('แต้มพิเศษ', 'กติกาให้แต้มเพิ่ม ระบบคิดให้เองตอนพนักงานบันทึกยอด · ตรงหลายกติกาพร้อมกัน ใช้อันที่ให้แต้มมากสุดอันเดียว',
+      owner ? `<button class="btn btn-sm btn-primary" data-act="rule-edit" data-id="">+ เพิ่มกติกา</button>` : '')}
+    <section class="card adm-card flush"><div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>กติกา</th><th>ได้แต้ม</th><th>วัน</th><th>ช่วงวันที่</th>${hasBranches() ? '<th>สาขา</th>' : ''}<th class="num">ยอดขั้นต่ำ</th><th>สถานะ</th><th></th></tr></thead>
+      <tbody>${r.items.length ? r.items.map(x => `
+        <tr>
+          <td><b>${esc(x.name)}</b>${x.showBadge ? '<div class="m-sub">แสดงป้ายที่หน้าลูกค้า</div>' : ''}</td>
+          <td><span class="mult">×${x.multiplier}</span></td>
+          <td>${daysHtml(x.days)}</td>
+          <td class="nowrap">${esc(periodText(x.startDate, x.endDate))}</td>
+          ${hasBranches() ? `<td>${x.branch ? esc(branchName(x.branch)) : 'ทุกสาขา'}</td>` : ''}
+          <td class="num">${x.minAmount ? '฿' + fmtMoney(x.minAmount) : '-'}</td>
+          <td>${statusChip(...(RULE_STATE[x.state] || ['inactive', x.state]))}</td>
+          <td class="actions">${owner ? `<button class="btn btn-sm" data-act="rule-edit" data-id="${esc(x.id)}">${icon('edit', 16)} แก้ไข</button>` : ''}</td>
+        </tr>`).join('') : emptyRow(8, owner ? 'ยังไม่มีกติกา กด "เพิ่มกติกา" เช่น แต้ม x2 ทุกวันพุธ' : 'ยังไม่มีกติกา')}
+      </tbody></table></div></section>
+    <p class="muted small">ตัวอย่าง: บิลที่ปกติได้ 20 ${esc(unit())} วันที่มีกติกา ×2 จะได้ 40 (คูณจาก${esc(unit())}ปกติแล้วปัดเศษลง) · กติกาที่ไม่ใช้แล้ว กดแก้ไขแล้วเลือก "ปิด"${owner ? '' : ' · เจ้าของร้านเป็นคนตั้งกติกา'}</p>`;
+}
+
+function openRuleEdit(id) {
+  if (!isOwner()) return;
+  const x = id ? S.rules.find(r => r.id === id) : null;
+  if (id && !x) return;
+  // กติกาใหม่ยังไม่เลือกวัน ให้เจ้าของร้านเลือกเอง (ผู้ใช้ขอ 4 พ.ย. 2569 — กันเผลอได้แต้มพิเศษทุกวัน)
+  const v = x || { name: '', multiplier: 2, days: [], startDate: '', endDate: '', branch: '', minAmount: '', showBadge: true, status: 'ACTIVE' };
+  openModal(`
+    <div class="modal-head"><h2>${x ? 'แก้ไขกติกาแต้มพิเศษ' : 'เพิ่มกติกาแต้มพิเศษ'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <form class="form" data-form="rule" data-id="${esc(x ? x.id : '')}" autocomplete="off">
+      <label class="field"><span>ชื่อกติกา <em>*</em> <small>(ลูกค้าเห็นในประวัติ${esc(unit())})</small></span><input name="name" value="${esc(v.name)}" maxlength="60" placeholder="เช่น แต้ม x2 ทุกวันพุธ"></label>
+      <div class="field"><span>ได้${esc(unit())}กี่เท่า</span>
+        <div class="pick-row">${MULTS.map(m => `<label class="pick"><input type="radio" name="multiplier" value="${m}" ${Number(v.multiplier) === m ? 'checked' : ''}><span>×${m}</span></label>`).join('')}</div></div>
+      <div class="field"><span>วันที่มีผล</span>
+        <div class="day-picks">${DAYS.map(([k, t]) => `<label><input type="checkbox" name="days" value="${k}" ${v.days.includes(k) ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div></div>
+      <div class="form-grid">
+        <label class="field"><span>วันเริ่ม</span><input type="date" name="startDate" value="${esc(v.startDate)}"></label>
+        <label class="field"><span>วันสิ้นสุด</span><input type="date" name="endDate" value="${esc(v.endDate)}"></label>
+        <label class="field"><span>ยอดขั้นต่ำต่อบิล (บาท)</span><input name="minAmount" value="${esc(v.minAmount || '')}" inputmode="decimal" placeholder="ว่าง = ทุกบิล"></label>
+        ${hasBranches() ? `<label class="field"><span>สาขา</span><select name="branch" class="select"><option value="">ทุกสาขา</option>${S.branches.filter(b => b.status === 'ACTIVE' || b.id === v.branch).map(b => `<option value="${esc(b.id)}" ${b.id === v.branch ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select></label>` : ''}
+      </div>
+      <label class="check"><input type="checkbox" name="showBadge" ${v.showBadge ? 'checked' : ''}><span>แสดงป้าย "วันนี้ …" ที่หน้าลูกค้า เฉพาะวันที่มีผล</span></label>
+      ${statusField(v.status, 'เปิดใช้')}
+      <div class="modal-actions">
+        <button class="btn" type="button" data-act="close">ยกเลิก</button>
+        <button class="btn btn-primary" type="submit">บันทึก</button>
+      </div>
+    </form>`);
+}
+
+async function saveRule(form) {
+  const f = form.elements;
+  const rule = {
+    id: form.dataset.id, name: f.name.value.trim(), multiplier: Number(f.multiplier.value),
+    days: [...form.querySelectorAll('input[name="days"]:checked')].map(x => x.value),
+    startDate: f.startDate.value, endDate: f.endDate.value, minAmount: f.minAmount.value.trim(),
+    branch: f.branch ? f.branch.value : '', showBadge: f.showBadge.checked, status: f.status.value
+  };
+  if (!rule.name) return toast('กรุณากรอกชื่อกติกา', 'err');
+  if (!rule.days.length) return toast('เลือกวันที่มีผลอย่างน้อย 1 วัน', 'err');
+  const btn = form.querySelector('button[type="submit"]');
+  setBusy(btn, true);
+  try {
+    const r = await withRequestId('rule|' + JSON.stringify(rule), rid => S.api.call('adminRuleSave', { rule, requestId: rid }));
+    closeModal();
+    toast(`${r.created ? 'เพิ่ม' : 'บันทึก'} "${r.rule.name}" แล้ว · ${(RULE_STATE[r.rule.state] || [])[1] || ''}`, 'ok');
+    loadRules();
   } catch (e) {
     setBusy(btn, false);
     toast(e.message, 'err');
