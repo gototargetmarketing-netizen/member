@@ -176,7 +176,7 @@ document.addEventListener('input', e => {
   const input = e.target.closest('[data-preview]');
   if (input) {
     const box = document.getElementById(input.dataset.preview);
-    if (box) box.innerHTML = previewHtml(input.value);
+    if (box) box.innerHTML = previewHtml(input.value, box.dataset.kind);
   }
   if (e.target.closest('form[data-form="brand"]')) onBrandInput(e.target);
 });
@@ -939,12 +939,41 @@ function driveImage(url) {
   return m ? `https://drive.google.com/thumbnail?id=${m[1]}&sz=w1000` : s;
 }
 
-function previewHtml(url) {
+// ขนาดรูปที่แนะนำ + สัดส่วนที่หน้าลูกค้าแสดงจริง (ผู้ใช้ขอ 5 พ.ย. 2569)
+// ratio วัดจากหน้าลูกค้าบนมือถือ (กว้าง 390px): แบนเนอร์โปรโมชัน ~335×150 / การ์ดของรางวัล ~173×118 / โลโก้ จัตุรัส
+// แก้ขนาดการ์ดใน themes/base.css (.promo-card / .reward-img) แล้วต้องแก้ ratio ที่นี่ + .img-frame-* ด้วย
+const IMAGE_SPECS = {
+  promo: { w: 1200, h: 500, ratio: 335 / 150, shape: 'แนวนอนยาว', tip: 'วางของสำคัญไว้กลาง-ขวา ด้านซ้ายมีข้อความโปรโมชันทับ ขอบบน-ล่างอาจถูกตัด' },
+  reward: { w: 1200, h: 800, ratio: 173 / 118, shape: 'แนวนอน', tip: 'วางของสำคัญไว้กลางภาพ ขอบอาจถูกตัดเล็กน้อย' },
+  logo: { w: 500, h: 500, ratio: 1, shape: 'สี่เหลี่ยมจัตุรัส', tip: 'โลโก้อยู่กลางภาพ เว้นขอบนิดหน่อย' }
+};
+// รูปที่ถูกตัดออกเกินเท่านี้ → เตือน (เช่น รูปแนวตั้งในแบนเนอร์ ถูกตัดเกินครึ่ง) แค่เตือน ยังบันทึกได้
+const CROP_WARN = 0.4;
+
+function previewHtml(url, kind = 'reward') {
   const src = driveImage(url);
   if (!src) return '<span class="muted small">ยังไม่มีรูป</span>';
   if (!/^https:\/\/[^\s"'<>]+$/i.test(src)) return '<span class="form-error small">ลิงก์ต้องขึ้นต้นด้วย https://</span>';
-  return `<img src="${esc(src)}" alt="" referrerpolicy="no-referrer"><span class="muted small">ถ้าไม่เห็นรูป ลองอัปโหลดใหม่ หรือใช้ลิงก์รูปอื่น</span>`;
+  // กรอบทรงเดียวกับที่ลูกค้าเห็น → เจ้าของร้านรู้ทันทีว่ารูปถูกตัดตรงไหน
+  return `<div class="img-frame img-frame-${esc(kind)}"><img src="${esc(src)}" alt="" referrerpolicy="no-referrer" data-kind="${esc(kind)}"></div>
+    <span class="muted small img-note">ตัวอย่างนี้ตัดขอบแบบเดียวกับหน้าลูกค้า · ถ้าไม่เห็นรูป ลองอัปโหลดใหม่ หรือใช้ลิงก์รูปอื่น</span>
+    <span class="img-warn small" hidden></span>`;
 }
+
+// รูปในกรอบตัวอย่างโหลดเสร็จ → ดูสัดส่วนจริง ถ้าทรงต่างจากที่ลูกค้าเห็นมาก ขึ้นคำเตือน
+// (ใช้ load แบบดักทั้งหน้า เพราะรูปถูกสร้างใหม่ทุกครั้งที่เปลี่ยนลิงก์ และห้ามใช้ onload ในข้อความ HTML)
+document.addEventListener('load', e => {
+  const img = e.target;
+  if (!(img instanceof HTMLImageElement) || !img.matches('.img-frame img')) return;
+  const warn = img.closest('.img-preview') && img.closest('.img-preview').querySelector('.img-warn');
+  const spec = IMAGE_SPECS[img.dataset.kind];
+  if (!warn || !spec || !img.naturalWidth || !img.naturalHeight) return;
+  const r = img.naturalWidth / img.naturalHeight;
+  const cut = 1 - Math.min(r, spec.ratio) / Math.max(r, spec.ratio);
+  const shape = r < 0.9 ? 'แนวตั้ง' : r > 1.1 ? 'แนวนอน' : 'จัตุรัส';
+  warn.hidden = cut < CROP_WARN;
+  warn.textContent = warn.hidden ? '' : `⚠️ รูปนี้เป็น${shape} (${img.naturalWidth} × ${img.naturalHeight} px) จะถูกตัดออกประมาณ ${Math.round(cut * 100)}% ดูกรอบตัวอย่างด้านบน — แนะนำ ${spec.w} × ${spec.h} px (${spec.shape}) · ใช้รูปนี้ต่อก็ได้`;
+}, true);
 
 const imageHint = 'วางลิงก์รูปที่ขึ้นต้นด้วย https://';
 
@@ -1031,21 +1060,24 @@ function openRewardEdit(id) {
     </form>`);
 }
 
-function imageField(value, previewId, name = 'image', label = 'รูป', disabled = false) {
+// kind = promo / reward / logo → ขนาดแนะนำ + ทรงกรอบตัวอย่าง (IMAGE_SPECS)
+function imageField(value, previewId, name = 'image', label = 'รูป', disabled = false, kind = 'reward') {
+  const spec = IMAGE_SPECS[kind] || IMAGE_SPECS.reward;
   return `
     <div class="field"><span>${esc(label)} <small>(ไม่บังคับ)</small></span>
       ${disabled ? '' : `<div class="img-upload">
         <label class="btn btn-sm upload-btn">${icon('upload', 16)} อัปโหลดรูป
           <input type="file" accept="image/jpeg,image/png,image/webp,image/*" data-upload="${name}" hidden></label>
         <button type="button" class="link" data-act="image-clear" data-id="${name}">ลบรูป</button>
-      </div>`}
+      </div>
+      <small class="hint img-size">ขนาดแนะนำ <b>${spec.w} × ${spec.h} px</b> (${esc(spec.shape)}) · ${esc(spec.tip)}</small>`}
       <!-- ลิงก์ของรูปที่อัปโหลดไม่ต้องโชว์ (เจ้าของร้านไม่ต้องรู้ว่ารูปเก็บที่ไหน) — ซ่อนไว้ในหัวข้อพับได้ ใช้เมื่ออยากใช้รูปจากเว็บอื่น -->
       <details class="img-link">
         <summary>ใช้ลิงก์รูปจากเว็บอื่นแทน</summary>
         <input name="${name}" value="${esc(value)}" placeholder="https://..." data-preview="${previewId}" aria-label="ลิงก์รูป" ${disabled ? 'disabled' : ''}>
         <small>${esc(imageHint)}</small>
       </details></div>
-    <div class="img-preview" id="${previewId}">${previewHtml(value)}</div>`;
+    <div class="img-preview" id="${previewId}" data-kind="${esc(kind)}">${previewHtml(value, kind)}</div>`;
 }
 
 function clearImage(btn, name) {
@@ -1234,7 +1266,7 @@ function openPromoEdit(id) {
         <label class="field"><span>วันเริ่ม</span><input type="date" name="startDate" value="${esc(v.startDate)}"></label>
         <label class="field"><span>วันสิ้นสุด</span><input type="date" name="endDate" value="${esc(v.endDate)}"></label>
       </div>
-      ${imageField(v.image, 'promo-preview')}
+      ${imageField(v.image, 'promo-preview', 'image', 'รูป', false, 'promo')}
       <div class="form-grid">
         <label class="field"><span>ลำดับที่แสดง</span><input name="sort" value="${esc(v.sort)}" inputmode="numeric" placeholder="เลขน้อยขึ้นก่อน"></label>
         ${statusField(v.status, 'แสดงให้ลูกค้าเห็น')}
@@ -1395,7 +1427,7 @@ function renderBrand(r) {
       <form class="card adm-card form brand-form" data-form="brand" autocomplete="off">
         <h2 class="form-section">ชื่อและโลโก้</h2>
         ${text('SHOP_NAME', 'ชื่อร้าน', base.name || '', 60)}
-        ${imageField(v.LOGO_URL, 'logo-preview', 'LOGO_URL', 'โลโก้ (รูปสี่เหลี่ยมจัตุรัส)', !owner)}
+        ${imageField(v.LOGO_URL, 'logo-preview', 'LOGO_URL', 'โลโก้ (รูปสี่เหลี่ยมจัตุรัส)', !owner, 'logo')}
         <h2 class="form-section">สไตล์และสี</h2>
         <label class="field"><span>สไตล์</span>
           <select name="THEME" class="select" ${dis}>

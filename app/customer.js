@@ -490,11 +490,24 @@ async function doSaveProfile(btn) {
  * แต้มพิเศษวันนี้ + ของขวัญวันเกิด (2.8.0)
  * Apps Script ตัดสินทั้งหมด (เดือนเกิด / สมาชิกครบ 30 วัน / ปีละครั้ง) หน้านี้แค่แสดงตามที่ได้มา
  * ===================================================== */
+// การ์ดแต้มพิเศษวันนี้ (ผู้ใช้เลือกแบบมีแสงวิ่ง 5 พ.ย. 2569)
+// หัวข้อเขียนจำนวนเท่าเอง ไม่พึ่งชื่อกติกา เพราะเจ้าของร้านตั้งชื่ออะไรก็ได้ (เช่น "แต้มพิเศษ ลอยกระทง" ไม่บอกว่ากี่เท่า)
 function badgesHtml() {
   const list = S.data.badges || [];
   if (!list.length) return '';
-  return `<div class="today-badges">${list.map(b => `
-    <div class="today-badge">${icon('bolt', 16)}<span><b>วันนี้ ${esc(b.name)}</b>${b.branchName ? ` · เฉพาะ${esc(b.branchName)}` : ''}${b.minAmount ? ` · ซื้อครบ ฿${fmtNum(b.minAmount)}` : ''}</span></div>`).join('')}</div>`;
+  return `<div class="bonus-cards">${list.map(b => {
+    const mult = '×' + esc(String(b.multiplier));
+    const cond = [b.branchName ? 'เฉพาะ' + esc(b.branchName) : '', b.minAmount ? 'ซื้อครบ ฿' + fmtNum(b.minAmount) : ''].filter(Boolean).join(' · ');
+    return `
+    <section class="bonus-card">
+      <div class="bonus-mult" aria-hidden="true">${mult}</div>
+      <div class="grow">
+        <div class="bonus-title">วันนี้ได้${esc(unit())} ${mult} ${icon('bolt', 17)}</div>
+        <div class="bonus-name">${esc(b.name)}</div>
+        ${cond ? `<div class="bonus-cond">${cond}</div>` : ''}
+      </div>
+    </section>`;
+  }).join('')}</div>`;
 }
 
 function birthdayCard() {

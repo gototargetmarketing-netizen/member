@@ -69,12 +69,12 @@ async function seed() {
     await b.eval(asUser('U_ADM_OWNER', 'เจ้าของร้าน'));
     const slowBoot = await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => { const f = window.fetch; window.fetch = async (...a) => { await new Promise(r => setTimeout(r, 1500)); return f(...a); }; })()` }); // หน่วงคำขอ ให้ทันเห็นหน้าโหลด
     await b.nav(`${WEB}/khamwan/admin`);
-    await b.waitFor(`document.querySelector('.boot-screen .boot-ring') && /กำลังเข้าสู่ระบบ/.test(document.querySelector('.boot-screen .boot-msg').innerText) && /Design by GoToTarget/.test(document.querySelector('.boot-screen .credit').innerText) && !document.querySelector('.boot-name')`, 3000, 'หน้าโหลดสีกลางของหลังบ้าน');
-    ok(true, 'หลังบ้านเปิดด้วยหน้าโหลดสีกลาง (ไม่มีชื่อ/สีร้าน) + เครดิต GoToTarget');
+    await b.waitFor(`document.querySelector('.boot-screen .boot-ring') && /กำลังเข้าสู่ระบบ/.test(document.querySelector('.boot-screen .boot-msg').innerText) && /Design by Go To Target/.test(document.querySelector('.boot-screen .credit').innerText) && !document.querySelector('.boot-name')`, 3000, 'หน้าโหลดสีกลางของหลังบ้าน');
+    ok(true, 'หลังบ้านเปิดด้วยหน้าโหลดสีกลาง (ไม่มีชื่อ/สีร้าน) + เครดิต Go To Target');
     await b.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: slowBoot.identifier });
     await b.waitFor(`document.querySelectorAll('.kpi').length === 8`, 10000, 'ตัวเลขสรุป 8 ช่อง');
     ok(/เจ้าของร้าน/.test(await b.text('.adm-me')), 'เมนูซ้ายแสดงชื่อ + บทบาท');
-    await b.waitFor(`(() => { const c = document.querySelector('.credit-side'); const i = c && c.querySelector('img'); return !!c && c.offsetParent !== null && /Design by GoToTarget/.test(c.innerText) && i.complete && i.naturalWidth > 0; })()`, 5000, 'เครดิตในเมนูข้าง');
+    await b.waitFor(`(() => { const c = document.querySelector('.credit-side'); const i = c && c.querySelector('img'); return !!c && c.offsetParent !== null && /Design by Go To Target/.test(c.innerText) && i.complete && i.naturalWidth > 0; })()`, 5000, 'เครดิตในเมนูข้าง');
     ok(!(await b.eval(`document.querySelector('.credit-foot').offsetParent !== null`)), 'คอม: เครดิตอยู่ในเมนูข้าง ไม่ซ้ำท้ายหน้า');
     ok((await b.eval(`document.querySelectorAll('.bar-col').length`)) === 30, 'ค่าเริ่มต้น 30 วัน → กราฟ 30 แท่ง');
     const kpiSales = await b.eval(`[...document.querySelectorAll('.kpi')].find(k => /ยอดซื้อรวม/.test(k.innerText)).querySelector('.kpi-value').innerText`);
@@ -211,6 +211,18 @@ async function seed() {
     const upFile = drive.files[drive.files.length - 1];
     ok(upFile.mime === 'image/png' && upFile.sharing === 'ANYONE_WITH_LINK:VIEW' && upFile.size < 200000, 'เก็บใน Drive เป็น PNG ที่ย่อแล้ว แชร์แบบทุกคนที่มีลิงก์ (' + upFile.size + ' bytes)', upFile);
     await b.eval(`window.__slow = 0`);
+
+    // ขนาดรูปแนะนำ + กรอบตัวอย่างทรงเดียวกับหน้าลูกค้า + เตือนเมื่อทรงผิดมาก (ผู้ใช้ขอ 5 พ.ย. 2569)
+    ok(/1200 × 800 px/.test(await b.text('.modal .img-size')), 'ของรางวัล: บอกขนาดแนะนำ 1200 × 800 px', await b.text('.modal .img-size'));
+    ok(await b.eval(`(() => { const f = document.querySelector('.modal .img-frame-reward'); const r = f.getBoundingClientRect(); return Math.abs(r.width / r.height - 173 / 118) < 0.05; })()`), 'ของรางวัล: กรอบตัวอย่างทรงเดียวกับการ์ดหน้าลูกค้า');
+    // ใส่รูปทดสอบลงกรอบตัวอย่างเอง (รูปจากลิงก์ Drive โหลดไม่ได้ในเครื่องทดสอบ) — แนวตั้ง 650×1000 ต้องเตือน / แนวนอน 1200×800 ไม่เตือน
+    const fakeImg = (w, h) => `(() => { const c = document.createElement('canvas'); c.width = ${w}; c.height = ${h}; const f = document.querySelector('.modal .img-frame'); const old = f.querySelector('img'); const i = document.createElement('img'); i.dataset.kind = old.dataset.kind; i.src = c.toDataURL(); old.replaceWith(i); return true; })()`;
+    await b.eval(fakeImg(650, 1000));
+    await b.waitFor(`!document.querySelector('.modal .img-warn').hidden`, 3000, 'เตือนรูปแนวตั้ง');
+    ok(/แนวตั้ง \(650 × 1000 px\).*1200 × 800/.test(await b.text('.modal .img-warn')), 'รูปแนวตั้ง 650×1000 → เตือนว่าถูกตัดเยอะ + แนะนำขนาด', await b.text('.modal .img-warn'));
+    await b.eval(fakeImg(1200, 800));
+    await b.waitFor(`document.querySelector('.modal .img-warn').hidden`, 3000, 'รูปทรงถูก ไม่เตือน');
+    ok(true, 'รูป 1200×800 → ไม่เตือน');
     await b.eval(`document.querySelector('.modal form').requestSubmit()`);
     await b.waitFor(`!document.querySelector('.modal')`, 8000, 'บันทึกรูป');
     const withImg = (await api('adminRewards', 'U_ADM_OWNER')).items.find(x => x.id === rwId);
@@ -222,6 +234,11 @@ async function seed() {
     await b.waitFor(`document.querySelector('[data-act=promo-edit][data-id=""]') && document.querySelector('.tbl')`, 8000, 'หน้าโปรโมชัน');
     await b.click('[data-act=promo-edit][data-id=""]');
     await b.waitFor(`document.querySelector('.modal form[data-form=promo]')`, 3000);
+    ok(/1200 × 500 px/.test(await b.text('.modal .img-size')) && /ด้านซ้ายมีข้อความ/.test(await b.text('.modal .img-size')), 'โปรโมชัน: บอกขนาดแนะนำ 1200 × 500 px + ด้านซ้ายมีข้อความทับ', await b.text('.modal .img-size'));
+    await b.type('.modal input[name=image]', 'https://example.com/banner.jpg');
+    ok(await b.eval(`(() => { const f = document.querySelector('.modal .img-frame-promo'); const r = f.getBoundingClientRect(); return Math.abs(r.width / r.height - 335 / 150) < 0.05 && getComputedStyle(f, '::after').backgroundImage.includes('gradient'); })()`), 'โปรโมชัน: กรอบตัวอย่างทรงแบนเนอร์ + เงาด้านซ้ายแบบหน้าลูกค้า');
+    await b.shot(path.join(OUT, 'a26-promo-image-hint.png'));
+    await b.type('.modal input[name=image]', '');
     await b.type('.modal input[name=title]', PR);
     await b.type('.modal input[name=tag]', 'ใหม่');
     await b.type('.modal input[name=link]', 'javascript:alert(1)');
@@ -350,7 +367,7 @@ async function seed() {
     await b.waitFor(`document.querySelectorAll('.kpi').length === 8`, 10000);
     const overflow = await b.eval(`document.documentElement.scrollWidth - document.documentElement.clientWidth`);
     ok(overflow <= 0, 'มือถือไม่มีเลื่อนซ้ายขวาทั้งหน้า', overflow);
-    await b.waitFor(`(() => { const c = document.querySelector('.credit-foot'); const i = c && c.querySelector('img'); return !!c && c.offsetParent !== null && /Design by GoToTarget/.test(c.innerText) && i.complete && i.naturalWidth > 0; })()`, 5000, 'เครดิตท้ายหน้ามือถือ');
+    await b.waitFor(`(() => { const c = document.querySelector('.credit-foot'); const i = c && c.querySelector('img'); return !!c && c.offsetParent !== null && /Design by Go To Target/.test(c.innerText) && i.complete && i.naturalWidth > 0; })()`, 5000, 'เครดิตท้ายหน้ามือถือ');
     ok(!(await b.eval(`document.querySelector('.credit-side').offsetParent !== null`)), 'มือถือ: เครดิตย้ายไปท้ายเนื้อหา');
     await sleep(300);
     await b.send('Page.captureScreenshot', { format: 'png' }).then(r => fs.writeFileSync(path.join(OUT, 'a09-mobile-overview.png'), Buffer.from(r.data, 'base64')));
@@ -401,8 +418,14 @@ async function seed() {
     await b.eval(asUser('U_ADM_C1', 'ลูกค้า'));
     await b.nav('about:blank');
     await b.nav(`${WEB}/khamwan#home`);
-    await b.waitFor(`document.querySelector('.today-badge')`, 10000, 'ป้ายแต้มพิเศษ');
-    ok((await b.text('.today-badges')).includes(RULE), 'หน้าลูกค้า: ป้าย "วันนี้ ' + RULE + '"');
+    await b.waitFor(`document.querySelector('.bonus-card')`, 10000, 'การ์ดแต้มพิเศษ');
+    {
+      const t = await b.text('.bonus-cards');
+      ok(t.includes(RULE) && /วันนี้ได้\S* ×2/.test(t) && (await b.text('.bonus-mult')).trim() === '×2', 'หน้าลูกค้า: การ์ด "วันนี้ได้…×2" + กล่อง ×2 + ชื่อกติกา', t);
+      const anim = await b.eval(`getComputedStyle(document.querySelector('.bonus-mult'), '::after').animationName`);
+      ok(anim === 'bonus-shine', 'กล่อง ×2 มีแสงวิ่ง', anim);
+    }
+    await b.shot(path.join(OUT, 'a25-bonus-card.png'));
 
     console.log('\n[ของขวัญวันเกิด]');
     await b.eval(asUser('U_ADM_OWNER', 'เจ้าของร้าน'));

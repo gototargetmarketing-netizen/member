@@ -76,18 +76,18 @@ const adminOp = (op) => fetch(API + '/__admin', { method: 'POST', body: JSON.str
     console.log('\n[พนักงาน] ขอสิทธิ์ → อนุมัติ → บันทึกยอดซื้อ');
     const slowBoot = await b.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => { const f = window.fetch; window.fetch = async (...a) => { await new Promise(r => setTimeout(r, 1500)); return f(...a); }; })()` }); // หน่วงคำขอ ให้ทันเห็นหน้าโหลด
     await b.nav(`${WEB}/khamwan/staff?user=U_TEST_STAFF&name=${encodeURIComponent('น้องบีม')}`);
-    await b.waitFor(`document.querySelector('.boot-screen .boot-ring') && /กำลังเปิดหน้าพนักงาน/.test(document.querySelector('.boot-screen .boot-msg').innerText) && /Design by GoToTarget/.test(document.querySelector('.boot-screen .credit').innerText) && !document.querySelector('.boot-name')`, 3000, 'หน้าโหลดสีกลางของหน้าพนักงาน');
-    ok(true, 'หน้าพนักงานเปิดด้วยหน้าโหลดสีกลาง (ไม่มีชื่อ/สีร้าน) + เครดิต GoToTarget');
+    await b.waitFor(`document.querySelector('.boot-screen .boot-ring') && /กำลังเปิดหน้าพนักงาน/.test(document.querySelector('.boot-screen .boot-msg').innerText) && /Design by Go To Target/.test(document.querySelector('.boot-screen .credit').innerText) && !document.querySelector('.boot-name')`, 3000, 'หน้าโหลดสีกลางของหน้าพนักงาน');
+    ok(true, 'หน้าพนักงานเปิดด้วยหน้าโหลดสีกลาง (ไม่มีชื่อ/สีร้าน) + เครดิต Go To Target');
     await b.send('Page.removeScriptToEvaluateOnNewDocument', { identifier: slowBoot.identifier });
     await b.waitFor(`/ส่งคำขอสิทธิ์/.test(document.body.innerText)`, 10000, 'หน้ารออนุมัติ');
     ok(/U_TEST_STAFF/.test(await b.text()), 'หน้ารออนุมัติแสดงรหัส LINE');
-    ok(/Design by GoToTarget/.test(await b.text('.state-page .credit')), 'หน้ารออนุมัติมีเครดิต GoToTarget');
+    ok(/Design by Go To Target/.test(await b.text('.state-page .credit')), 'หน้ารออนุมัติมีเครดิต Go To Target');
     await b.shot(path.join(OUT, '05-staff-pending.png'));
     await adminOp({ userId: 'U_TEST_STAFF', status: 'ACTIVE', role: 'OWNER' });
     await b.click('[data-act=reload]');
     await b.waitFor(`document.querySelector('#lookup')`, 10000, 'หน้าพนักงาน');
     ok(/เจ้าของร้าน/.test(await b.text('.staff-head')), 'อนุมัติแล้ว เห็นบทบาท เจ้าของร้าน');
-    ok(/Design by GoToTarget/.test(await b.text('.staff-main > .credit:last-child')), 'หน้าพนักงานมีเครดิตท้ายหน้า');
+    ok(/Design by Go To Target/.test(await b.text('.staff-main > .credit:last-child')), 'หน้าพนักงานมีเครดิตท้ายหน้า');
     await b.type('#lookup input', '0812345678');
     await b.eval(`document.querySelector('#lookup').requestSubmit()`);
     await b.waitFor(`document.querySelector('#purchase')`, 8000, 'ฟอร์มยอดซื้อ');

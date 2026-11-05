@@ -48,7 +48,7 @@ export function icon(name, size = 20) {
 // เหมือนกันทุกร้านและทุกหน้า (ลูกค้า พนักงาน หลังบ้าน) เก็บไว้ที่เดียว เปลี่ยนข้อความ/โลโก้จะได้แก้จุดเดียว
 // cls บอกตำแหน่ง: credit-boot (หน้าโหลด) / credit-page (ท้ายหน้า) / credit-side (เมนูข้างหลังบ้าน) / credit-foot (ท้ายหลังบ้านบนมือถือ)
 export function creditHtml(cls = '') {
-  return `<div class="credit ${cls}"><img src="/assets/gototarget-logo.png" alt="" width="24" height="16">Design by GoToTarget</div>`;
+  return `<div class="credit ${cls}"><img src="/assets/gototarget-logo.png" alt="" width="24" height="16">Design by Go To Target</div>`;
 }
 
 /* ---------- หน้าโหลดเต็มจอ (ใช้ร่วมกันทุกหน้า: ลูกค้า พนักงาน หลังบ้าน) ----------
