@@ -26,6 +26,7 @@ const ACTIONS = {
   whoami: { shop: true, auth: true, run: actWhoami },
   // วัดความเร็วขั้น 2 (ร้าน demo เท่านั้น) — ลบพร้อม speed.js และ speed.html ก่อนรวมเข้าเว็บจริง
   speedCard: { shop: true, auth: false, run: speed.card },
+  storageCheck: { shop: true, auth: false, run: speed.storageCheck }, // ชั่วคราว: ลบทันทีหลังตรวจที่เก็บรูป
 
   // ลูกค้า (ขั้น 3 รอบ 1)
   bootstrap: { shop: true, auth: true, run: customer.bootstrap },
