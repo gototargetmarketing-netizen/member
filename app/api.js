@@ -87,7 +87,8 @@ export function createApi(shop, line, options = {}) {
         res = await fetch(url, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: JSON.stringify({ ...data, action, idToken }),
+          // shop: ระบบใหม่ (ตัวกลาง /api) ใช้ตัวเดียวทุกร้าน จึงต้องบอกร้าน / Apps Script แยกตัวต่อร้าน ไม่อ่านช่องนี้ (ส่งได้ไม่กระทบ)
+          body: JSON.stringify({ ...data, action, idToken, shop: shop.id }),
           signal: ctrl.signal
         });
       } catch (e) {

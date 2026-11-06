@@ -51,13 +51,16 @@ insert into members (shop_id, id, line_user_id, name, first_name, last_name, pho
 select 'demo',
        'DM-' || lpad(i::text, 6, '0'),
        'U_DEMO_' || i,
-       'ลูกค้า' || i || ' ทดลอง', 'ลูกค้า' || i, 'ทดลอง',
+       -- ชื่อห้ามมีตัวเลข (กฎเดียวกับตอนสมัคร) → สลับชื่อ-นามสกุลจากรายการ ไม่ใช่ "ลูกค้า1"
+       fn || ' ' || ln, fn, ln,
        '08' || lpad(i::text, 8, '0'),
        date '1965-01-01' + (random() * 14000)::int,
        now() - interval '760 days' - random() * interval '30 days',  -- สมัครก่อนรายการซื้อทุกรายการ (ซื้อภายใน 730 วัน)
        'B0' || (1 + floor(random() * 6)::int),
        1, now() - interval '760 days', random() < 0.6
-from generate_series(1, 2000) i;
+from generate_series(1, 2000) i,
+     lateral (select (array['สมชาย','สมหญิง','มานะ','มานี','ปิติ','ชูใจ','วีระ','ดวงใจ','กมล','สุดา'])[1 + i % 10] as fn,
+                     (array['ใจดี','รักเรียน','มีสุข','ทองดี','ศรีสุข','แสงทอง','บุญมา'])[1 + (i / 10) % 7] as ln) n;
 
 -- แต้มต้อนรับตอนสมัคร
 insert into transactions (shop_id, id, created_at, member_id, type, amount, points, balance_after, detail, branch)

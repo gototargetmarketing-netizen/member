@@ -301,8 +301,9 @@ function fakeLine() {
   }
 
   console.log('\n[6] ข้อความถึงผู้ใช้');
-  const sources = ['index.js', '_lib/router.js', '_lib/line.js', '_lib/db.js', '_lib/speed.js', '_lib/errors.js']
-    .map(f => fs.readFileSync(path.join(ROOT, 'api', f), 'utf8')).join('\n');
+  // ทุกไฟล์ใน api/ (ไฟล์ใหม่ถูกตรวจเองโดยไม่ต้องเพิ่มชื่อ)
+  const apiFiles = ['index.js'].concat(fs.readdirSync(path.join(ROOT, 'api', '_lib')).filter(f => f.endsWith('.js')).map(f => '_lib/' + f));
+  const sources = apiFiles.map(f => fs.readFileSync(path.join(ROOT, 'api', f), 'utf8')).join('\n');
   const msgs = [...sources.matchAll(/userError\('([^']*)'/g)].map(m => m[1]);
   const leaks = msgs.filter(m => /google|drive|ชีต|apps ?script|supabase|vercel|postgres|ฐานข้อมูล/i.test(m));
   ok(msgs.length >= 8 && leaks.length === 0, 'ข้อความ ' + msgs.length + ' ข้อความที่ผู้ใช้เห็น ไม่พูดถึงที่เก็บข้อมูล', leaks);

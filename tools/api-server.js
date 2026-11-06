@@ -3,8 +3,12 @@
 //
 // รัน: node tools/api-server.js   (ติดตั้งครั้งแรก: cd tools/test && npm install)
 // แล้วเปิด http://localhost:8105/speed.html
+// หรือใช้กับเว็บทดสอบพอร์ต 8002: http://localhost:8002/demo?api=http://localhost:8105/api&user=U_DEMO_1&name=ทดสอบ
+//   (U_DEMO_1 … U_DEMO_2000 = สมาชิกในข้อมูลทดลอง / รหัสอื่น = ยังไม่เป็นสมาชิก)
 //
-// พิเศษสำหรับทดสอบ: /__fake-old = แทนระบบเดิม (ตอบช้า 300ms) ให้หน้าวัดความเร็วไม่ต้องเรียกระบบจริงของร้าน
+// พิเศษสำหรับทดสอบ (เปิดเฉพาะในเครื่องนี้ 127.0.0.1):
+//   /__fake-old = แทนระบบเดิม (ตอบช้า 300ms) ให้หน้าวัดความเร็วไม่ต้องเรียกระบบจริงของร้าน
+//   /__sql      = ชุดทดสอบแก้ข้อมูลจำลองตรงๆ (เช่น ย้อนวันสมัคร) — ฐานข้อมูลอยู่ในหน่วยความจำ ปิดแล้วหายหมด
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
@@ -39,7 +43,22 @@ function serveStatic(req, res) {
 
   http.createServer(async (req, res) => {
     const pathname = new URL(req.url, 'http://x').pathname;
+    // เว็บทดสอบพอร์ต 8002 เรียกข้ามพอร์ตมา → อนุญาต (เฉพาะเครื่องทดสอบ / บน Vercel หน้าเว็บกับ /api อยู่โดเมนเดียวกัน ไม่ต้องใช้)
+    res.setHeader('Access-Control-Allow-Origin', '*');
     if (pathname === '/api' || pathname === '/api/') return api(req, res);
+    if (pathname === '/__sql' && req.method === 'POST') {
+      let body = '';
+      for await (const c of req) body += c;
+      try {
+        const { sql, params } = JSON.parse(body);
+        const r = await db.query(sql, params || []);
+        res.setHeader('Content-Type', 'application/json');
+        return res.end(JSON.stringify({ ok: true, rows: r.rows }));
+      } catch (e) {
+        res.statusCode = 400;
+        return res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    }
     if (pathname === '/__fake-old') {
       req.resume();
       setTimeout(() => {
@@ -50,5 +69,5 @@ function serveStatic(req, res) {
       return;
     }
     serveStatic(req, res);
-  }).listen(PORT, () => console.log(`ตัวกลางทดสอบ (ฐานข้อมูลจำลอง + ร้าน demo) → http://localhost:${PORT}/speed.html`));
+  }).listen(PORT, '127.0.0.1', () => console.log(`ตัวกลางทดสอบ (ฐานข้อมูลจำลอง + ร้าน demo) → http://localhost:${PORT}/speed.html`));
 })();

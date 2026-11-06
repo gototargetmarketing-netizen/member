@@ -4,10 +4,13 @@
 //
 // ทุกอย่างที่ต่อโลกภายนอก (ฐานข้อมูล / LINE) รับมาทาง deps → ชุดทดสอบใส่ตัวจำลองแทนได้
 const { userError } = require('./errors');
-const { InvalidToken, cleanLineName } = require('./line');
+const { InvalidToken } = require('./line');
+const { cleanLineName } = require('./util');
+const { SHOP_SQL, publicBrand } = require('./shop');
+const customer = require('./customer');
 const speed = require('./speed');
 
-const API_VERSION = '0.1.0';
+const API_VERSION = '0.2.0'; // 0.2 = คำสั่งของลูกค้า (ขั้น 3 รอบ 1)
 const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/; // ตรงกับเงื่อนไขในตาราง shops
 const SHOP_TTL_MS = 60 * 1000;               // ค่าร้านจำไว้ 1 นาที (แก้ค่าร้านแล้วมีผลภายใน 1 นาที)
 
@@ -18,7 +21,14 @@ const ACTIONS = {
   // ตรวจรหัส LINE อย่างเดียว — ไว้ลองการเข้าสู่ระบบบนลิงก์ทดสอบ
   whoami: { shop: true, auth: true, run: actWhoami },
   // วัดความเร็วขั้น 2 (ร้าน demo เท่านั้น) — ลบพร้อม speed.js และ speed.html ก่อนรวมเข้าเว็บจริง
-  speedCard: { shop: true, auth: false, run: speed.card }
+  speedCard: { shop: true, auth: false, run: speed.card },
+
+  // ลูกค้า (ขั้น 3 รอบ 1)
+  bootstrap: { shop: true, auth: true, run: customer.bootstrap },
+  register: { shop: true, auth: true, run: customer.register },
+  redeem: { shop: true, auth: true, run: customer.redeem },
+  claimBirthday: { shop: true, auth: true, run: customer.claimBirthday },
+  updateProfile: { shop: true, auth: true, run: customer.updateProfile }
 };
 
 const ms = (t0) => Math.round((performance.now() - t0) * 10) / 10;
@@ -44,11 +54,11 @@ function createApp(deps) {
     if (hit && hit.until > Date.now()) {
       shop = hit.shop;
     } else {
-      const r = await deps.db().query(
-        'select id, name, liff_id, status, history_limit from shops where id = $1', [shopId]);
+      const r = await deps.db().query(SHOP_SQL, [shopId]);
       shop = r.rows[0];
       if (!shop) throw userError('ไม่พบร้านนี้', 'NO_SHOP');
-      shops.set(shopId, { shop, until: Date.now() + SHOP_TTL_MS });
+      // ชุดทดสอบตั้ง shopTtlMs = 0 (แก้ค่าร้านแล้วเห็นผลทันที)
+      shops.set(shopId, { shop, until: Date.now() + (deps.shopTtlMs != null ? deps.shopTtlMs : SHOP_TTL_MS) });
     }
     if (shop.status !== 'ACTIVE') throw userError('ร้านนี้ปิดใช้งานระบบสะสมแต้มแล้ว', 'SHOP_INACTIVE');
     return shop;
@@ -100,8 +110,12 @@ function createApp(deps) {
       const def = Object.prototype.hasOwnProperty.call(ACTIONS, action) ? ACTIONS[action] : null;
       if (!def) throw userError('ไม่รู้จักคำสั่งนี้', 'UNKNOWN_ACTION');
 
-      const ctx = { deps, cold, t0, region: deps.region || 'local' };
-      if (def.shop) ctx.shop = await loadShop(body.shop);
+      // now: เวลาเดียวกันทั้งคำสั่ง (ชุดทดสอบใส่นาฬิกาปลอมได้)
+      const ctx = { deps, cold, t0, region: deps.region || 'local', now: new Date(deps.now ? deps.now() : Date.now()) };
+      if (def.shop) {
+        ctx.shop = await loadShop(body.shop);
+        ctx.db = deps.db();
+      }
       if (def.auth) {
         const r = await requireUser(body.idToken, ctx.shop);
         ctx.user = r.user;
@@ -110,17 +124,22 @@ function createApp(deps) {
 
       const result = (await def.run(body, ctx)) || {};
       const out = { ok: true };
+      if (deps.allowTestTokens) out.testMode = true; // หน้าเว็บขึ้นแถบ "โหมดทดสอบ" (เหมือน Apps Script ที่เปิดโหมดทดสอบ)
+      // หน้าตาร้านล่าสุด ส่งไปพร้อมคำสั่งแรกของทุกหน้า — ค่าร้านอ่านมาแล้วตอนหาร้าน จึงไม่เพิ่มเวลา
+      if (body.withBrand === true && ctx.shop) out.brand = publicBrand(ctx.shop);
       Object.keys(result).forEach(k => { out[k] = result[k]; });
       return out;
     } catch (err) {
       // ข้อความที่ตั้งใจบอกผู้ใช้ → ส่งกลับตามนั้น / ข้อผิดพลาดอื่น → ไม่ส่งรายละเอียดภายในออกไป (จดลง log ของ Vercel แทน)
       const known = err && err.userMessage;
       if (!known) console.error(err && err.stack ? err.stack : err);
-      return {
+      const out = {
         ok: false,
         error: known ? err.userMessage : 'ระบบขัดข้อง กรุณาลองใหม่อีกครั้ง',
         code: known ? (err.code || 'INVALID') : 'ERROR'
       };
+      if (!known && deps.allowTestTokens) out.debug = String(err && err.message ? err.message : err); // ดูสาเหตุได้เฉพาะตอนทดสอบในเครื่อง
+      return out;
     }
   }
 

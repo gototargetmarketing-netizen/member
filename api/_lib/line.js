@@ -8,6 +8,7 @@
 //   ลายเซ็นถูก · ออกโดย LINE (iss) · ออกให้ร้านนี้ (aud = รหัส channel ของร้าน — กันเอารหัสร้านอื่นมาใช้)
 //   · ยังไม่หมดอายุ (exp) · มีรหัสผู้ใช้ (sub)
 const crypto = require('crypto');
+const { cleanLineName, safeUrl } = require('./util');
 
 const ISSUER = 'https://access.line.me';
 const CERTS_URL = 'https://api.line.me/oauth2/v2.1/certs';
@@ -23,16 +24,6 @@ class InvalidToken extends Error {}
 
 function b64json(part) {
   return JSON.parse(Buffer.from(part, 'base64url').toString('utf8'));
-}
-
-// ชื่อจาก LINE ตั้งได้อิสระ → ตัดอักขระควบคุมและ < > ทิ้ง (เหมือน cleanLineName_ ใน code.gs)
-function cleanLineName(v) {
-  return String(v == null ? '' : v).replace(/[\u0000-\u001f<>]/g, '').trim().replace(/\s+/g, ' ').slice(0, 60);
-}
-// รับเฉพาะลิงก์ https (เหมือน safeUrl_ ใน code.gs)
-function safeUrl(v) {
-  const s = String(v == null ? '' : v).trim();
-  return /^https:\/\/[^\s"'<>]+$/i.test(s) && s.length <= 1000 ? s : '';
 }
 
 function toUser(sub, name, picture) {

@@ -83,7 +83,10 @@ node tools/test/e2e-branches.js
 node tools/test/db-schema-test.js
 # ตัวกลางรุ่นใหม่ (api/) + ข้อมูลร้านทดลอง (db/002_demo_seed.sql) — ติดตั้งครั้งแรกเพิ่ม: npm install (ที่โฟลเดอร์หลัก)
 node tools/test/api-test.js
-node tools/api-server.js             # ลองเองในเครื่อง: http://localhost:8105/speed.html
+node tools/test/api-diff-test.js     # ส่งคำสั่งเดียวกันให้ระบบเดิม (code.gs) กับระบบใหม่ แล้วเทียบคำตอบทุกช่อง
+node tools/api-server.js &           # ระบบใหม่ในเครื่อง (ฐานข้อมูลจำลอง + ร้าน demo) พอร์ต 8105
+node tools/test/e2e-api.js           # หน้าเว็บร้าน demo กับระบบใหม่ (เปิด dev-server 8002 ไว้ด้วย)
+# ลองเอง: http://localhost:8002/demo?api=http://localhost:8105/api&user=U_DEMO_1&name=ทดสอบ
 ```
 
 ---
