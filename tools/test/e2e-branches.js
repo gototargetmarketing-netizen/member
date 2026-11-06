@@ -13,7 +13,8 @@ fs.rmSync(DL, { recursive: true, force: true });
 fs.mkdirSync(DL, { recursive: true });
 
 const WEB = 'http://localhost:8002';
-const API = 'http://localhost:8104';
+// API=... = รันกับระบบใหม่ (COMPAT=1 node tools/api-server.js) / ไม่ตั้ง = ระบบเดิมจำลอง (gas-server)
+const API = process.env.API || 'http://localhost:8104';
 let pass = 0, fail = 0;
 const ok = (c, m, x) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ ' + m + (x !== undefined ? '  → ' + JSON.stringify(x).slice(0, 300) : '')); } };
 const api = (action, user, data = {}) => fetch(API, { method: 'POST', body: JSON.stringify({ ...data, action, idToken: `TEST:${user}:${user}` }) }).then(r => r.json());

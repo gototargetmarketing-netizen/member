@@ -90,11 +90,13 @@ function diff(a, b, p, out) {
 
   // ส่งคำสั่งเดียวกันให้ทั้งสองระบบ แล้วเทียบ
   // body เป็นฟังก์ชัน (side) => {...} ได้ — ใช้เมื่อต้องอ้างรหัสสมาชิก/คูปองซึ่งแต่ละระบบสุ่มคนละค่า
-  async function both(label, body, expect) {
+  // tweak(คำตอบ, side) = ปรับก่อนเทียบ (เช่น ตัดช่องที่ระบบใหม่ตั้งใจไม่มี / เรียงแถวที่ลำดับไม่มีความหมาย)
+  async function both(label, body, expect, tweak) {
     const mk = (side) => Object.assign({ shop: SHOP }, typeof body === 'function' ? body(side) : body);
     const a = call(W, mk('A'));
     const b = await app.handle(JSON.parse(JSON.stringify(mk('B'))));
-    const d = diff(norm(a, 'A'), norm(b, 'B'), '', []);
+    const fix = (o, side) => (tweak && o && o.ok ? tweak(JSON.parse(JSON.stringify(o)), side) : o);
+    const d = diff(norm(fix(a, 'A'), 'A'), norm(fix(b, 'B'), 'B'), '', []);
     const codeOk = !expect || (expect === 'ok' ? a.ok : a.code === expect);
     ok(d.length === 0 && codeOk, label + (expect && expect !== 'ok' ? ' → ' + expect : ''),
       d.length ? { ต่างกัน: d.slice(0, 6), เดิม: a.code || a.ok, ใหม่: b.code || b.ok, debug: b.debug } : { เดิม: a.code, ใหม่: b.code });
@@ -247,9 +249,10 @@ function diff(a, b, p, out) {
   addRow('Point_Rules', { Rule_ID: 'PR001', Name: 'วันนี้แต้ม 2 เท่า', Multiplier: '2', Days: day, Show_Badge: 'YES', Status: 'ACTIVE', Created_At: now });
   addRow('Point_Rules', { Rule_ID: 'PR002', Name: 'ไม่แสดงป้าย', Multiplier: '3', Days: day, Show_Badge: 'NO', Status: 'ACTIVE', Created_At: now });
   addRow('Point_Rules', { Rule_ID: 'PR003', Name: 'หมดเขตแล้ว', Multiplier: '3', Days: day, Show_Badge: 'YES', End_Date: dayOffset(-1), Status: 'ACTIVE', Created_At: now });
-  await db.query(`insert into point_rules (shop_id, id, name, multiplier, days, show_badge, end_date) values
-    ($1, 'PR001', 'วันนี้แต้ม 2 เท่า', 2, array[$2], true, null), ($1, 'PR002', 'ไม่แสดงป้าย', 3, array[$2], false, null),
-    ($1, 'PR003', 'หมดเขตแล้ว', 3, array[$2], true, $3::date)`, [SHOP, day, dayOffset(-1)]);
+  // เวลาสร้างต้องเรียงเหมือนลำดับแถวในชีต (หลังบ้านแสดงกติกาตามลำดับที่สร้าง)
+  await db.query(`insert into point_rules (shop_id, id, name, multiplier, days, show_badge, end_date, created_at) values
+    ($1, 'PR001', 'วันนี้แต้ม 2 เท่า', 2, array[$2], true, null, $4), ($1, 'PR002', 'ไม่แสดงป้าย', 3, array[$2], false, null, $4),
+    ($1, 'PR003', 'หมดเขตแล้ว', 3, array[$2], true, $3::date, $4)`, [SHOP, day, dayOffset(-1), now]);
   addRow('Promotions', { Promo_ID: 'P002', Title: 'หมดแล้ว', End_Date: dayOffset(-1), Sort: 2, Status: 'ACTIVE' });
   addRow('Promotions', { Promo_ID: 'P003', Title: 'เริ่มพรุ่งนี้', Start_Date: dayOffset(1), Sort: 3, Status: 'ACTIVE' });
   addRow('Promotions', { Promo_ID: 'P004', Title: 'ลิงก์อันตราย', Link: 'javascript:alert(1)', Sort: 0, Status: 'ACTIVE' });
@@ -323,8 +326,9 @@ function diff(a, b, p, out) {
   await setRule('PR001', 'Status', 'status', 'INACTIVE');
   await setRule('PR002', 'Status', 'status', 'INACTIVE');
   await both('ปิดแต้มพิเศษ → ยอด 1,250 ได้ 62 แต้มปกติ', buy('U1', 1250), 'ok');
-  addRow('Point_Rules', { Rule_ID: 'PR004', Name: 'ซื้อครบพันได้ 2 เท่า', Multiplier: '2', Days: '', Min_Amount: 1000, Show_Badge: 'NO', Status: 'ACTIVE', Created_At: now });
-  await db.query(`insert into point_rules (shop_id, id, name, multiplier, days, min_amount, created_at) values ($1, 'PR004', 'ซื้อครบพันได้ 2 เท่า', 2, $2, 1000, $3)`, [SHOP, U.DAY_CODES, now]);
+  const later = new Date(); // เวลาจริงตอนนี้ (หลัง PR001–003 และก่อนกติกาที่หลังบ้านจะเพิ่มทีหลัง)
+  addRow('Point_Rules', { Rule_ID: 'PR004', Name: 'ซื้อครบพันได้ 2 เท่า', Multiplier: '2', Days: '', Min_Amount: 1000, Show_Badge: 'NO', Status: 'ACTIVE', Created_At: later });
+  await db.query(`insert into point_rules (shop_id, id, name, multiplier, days, min_amount, created_at) values ($1, 'PR004', 'ซื้อครบพันได้ 2 เท่า', 2, $2, 1000, $3)`, [SHOP, U.DAY_CODES, later]);
   await both('ยอด 999 (ไม่ถึงขั้นต่ำของแต้มพิเศษ)', buy('U1', 999), 'ok');
   await both('ยอด 1,000 (ถึงขั้นต่ำ ×2)', buy('U1', 1000), 'ok');
   const prq = rid();
@@ -404,6 +408,173 @@ function diff(a, b, p, out) {
   await setRule('PR004', 'Show_Badge', 'show_badge', 'YES', true);
   await both('ป้ายแต้มพิเศษเฉพาะสาขา (มีชื่อสาขา)', { action: 'bootstrap', idToken: tok('U1') }, 'ok');
   await both('แต้มพิเศษเฉพาะสาขา: บันทึกที่สาขาอื่นไม่ได้ ×2', buy('U1', 1000, { branchId: 'B001' }), 'ok');
+
+  // ===================== รอบ 3: หลังบ้าน =====================
+  const O = tok('S2', 'เจ้าของร้าน');
+  const A3 = tok('S3', 'ผู้จัดการ');
+  await both('ผู้จัดการขอสิทธิ์', { action: 'staffMe', idToken: A3 }, 'ok');
+  await setStaff('S3', 'ACTIVE', 'ADMIN');
+  const ago = (n) => dayOffset(-n);
+  const range = { from: ago(60), to: today };
+  // ระบบใหม่ไม่มีช่องโฟลเดอร์ Google Drive แล้ว (รูปย้ายไปที่เก็บรูปของ Supabase) → ตัดออกจากคำตอบระบบเดิมก่อนเทียบ
+  const noDrive = (o) => { if (o.items) o.items = o.items.filter((x) => x.key !== 'IMAGE_FOLDER_ID'); return o; };
+  // ลิงก์อันตรายของ P004 อยู่ได้แค่ในชีต (ฐานข้อมูลไม่ยอมบันทึกลิงก์ที่ไม่ใช่ https ตั้งแต่ต้น) → ให้สองฝั่งตั้งต้นเหมือนกัน
+  setCell('Promotions', 'Promo_ID', 'P004', 'Link', '');
+
+  console.log('\n[16] หลังบ้าน: เข้าใช้ / สิทธิ์');
+  await both('แคชเชียร์เข้าหลังบ้านไม่ได้', { action: 'adminMe', idToken: S1 }, 'NO_ROLE');
+  await both('เจ้าของร้านเปิดหลังบ้าน', { action: 'adminMe', idToken: O }, 'ok');
+  await both('เปิดครั้งแรกพร้อมข้อมูลผู้ใช้ + สาขา + หน้าตาร้าน (withMe/withBrand)', { action: 'adminDashboard', idToken: A3, ...range, withMe: true, withBrand: true }, 'ok');
+  await both('ผู้จัดการส่งออกไฟล์ไม่ได้', { action: 'adminExport', idToken: A3, kind: 'members' }, 'NO_ROLE');
+  await both('ผู้จัดการแก้ตั้งค่าร้านไม่ได้', { action: 'adminSettingsSave', idToken: A3, values: { WELCOME_POINTS: 5 } }, 'NO_ROLE');
+
+  console.log('\n[17] ภาพรวม');
+  await both('ภาพรวม 60 วัน (ทุกสาขา + ตารางเทียบสาขา)', { action: 'adminDashboard', idToken: O, ...range }, 'ok');
+  await both('ภาพรวม สาขา B001', { action: 'adminDashboard', idToken: O, ...range, branch: 'b001' }, 'ok');
+  await both('ภาพรวม 7 วัน (กราฟรายวัน)', { action: 'adminDashboard', idToken: O, from: ago(6), to: today }, 'ok');
+  await both('ภาพรวม 1 ปี (กราฟรายเดือน)', { action: 'adminDashboard', idToken: O, from: ago(364), to: today }, 'ok');
+  await both('ช่วงวันผิด', { action: 'adminDashboard', idToken: O, from: today, to: ago(1) }, 'BAD_DATE');
+  await both('ช่วงเกิน 366 วัน', { action: 'adminDashboard', idToken: O, from: ago(400), to: today }, 'BAD_DATE');
+  await both('วันที่ไม่มีจริง', { action: 'adminDashboard', idToken: O, from: '2026-02-30', to: today }, 'BAD_DATE');
+  await both('สาขาผิดรูปแบบ', { action: 'adminDashboard', idToken: O, ...range, branch: 'b-1!' }, 'BAD_BRANCH');
+
+  console.log('\n[18] สมาชิก');
+  for (const sort of ['joined', 'points', 'spend', 'lastVisit', 'name']) {
+    await both('รายชื่อเรียงตาม ' + sort + ' (เจ้าของร้านเห็นเบอร์เต็ม)', { action: 'adminMembers', idToken: O, sort }, 'ok');
+  }
+  await both('ผู้จัดการเห็นเบอร์ 4 ตัวท้าย', { action: 'adminMembers', idToken: A3 }, 'ok');
+  await both('ค้นชื่อ', { action: 'adminMembers', idToken: O, q: 'สมชาติ' }, 'ok');
+  await both('ค้นรหัสสมาชิกบางส่วน', (s) => ({ action: 'adminMembers', idToken: O, q: ids.U2[s].slice(0, 5).toLowerCase() }), 'ok');
+  await both('เจ้าของร้านค้นเบอร์บางส่วน', { action: 'adminMembers', idToken: O, q: '0898' }, 'ok');
+  await both('ผู้จัดการค้นเบอร์บางส่วน → ไม่เจอ', { action: 'adminMembers', idToken: A3, q: '0898' }, 'ok');
+  await both('ผู้จัดการค้นเบอร์เต็ม → เจอ', { action: 'adminMembers', idToken: A3, q: '089-876-5432' }, 'ok');
+  await both('กรองสาขาที่สมัคร', { action: 'adminMembers', idToken: O, branch: 'B002' }, 'ok');
+  await both('กรองเกิดเดือนนี้ (เจ้าของร้าน)', { action: 'adminMembers', idToken: O, birthMonth: true }, 'ok');
+  await both('กรองเกิดเดือนนี้ (ผู้จัดการ → ไม่มีผล)', { action: 'adminMembers', idToken: A3, birthMonth: true }, 'ok');
+  await setMember('U5', 'Status', 'status', 'BLOCKED');
+  await both('กรองสมาชิกที่ถูกระงับ', { action: 'adminMembers', idToken: O, status: 'blocked' }, 'ok');
+  await setMember('U5', 'Status', 'status', 'ACTIVE');
+  await both('หน้าที่เกิน → หน้าสุดท้าย', { action: 'adminMembers', idToken: O, page: 99 }, 'ok');
+  await both('สมาชิกรายคน (เจ้าของร้าน: วันเกิด ประวัติ คูปอง สาขาประจำ)', (s) => ({ action: 'adminMember', idToken: O, memberId: ids.U1[s] }), 'ok');
+  await both('สมาชิกรายคน (ผู้จัดการ: ไม่เห็นวันเกิด/เบอร์เต็ม)', (s) => ({ action: 'adminMember', idToken: A3, memberId: ids.U2[s] }), 'ok');
+  await both('ไม่พบสมาชิก', { action: 'adminMember', idToken: O, memberId: 'KW-ZZZZZZ' }, 'NOT_FOUND');
+
+  console.log('\n[19] รายการแต้ม / คูปอง');
+  await both('รายการแต้ม 60 วัน + สรุป + ชื่อพนักงาน', { action: 'adminTransactions', idToken: O, ...range }, 'ok');
+  for (const type of ['EARN', 'REDEEM', 'ADJUST', 'WELCOME']) await both('กรองประเภท ' + type, { action: 'adminTransactions', idToken: O, ...range, type }, 'ok');
+  await both('กรองพนักงาน', { action: 'adminTransactions', idToken: O, ...range, staff: 'แคชเชียร์ หนึ่ง' }, 'ok');
+  await both('ค้นชื่อลูกค้า', { action: 'adminTransactions', idToken: O, ...range, q: 'สมหญิง' }, 'ok');
+  await both('กรองสาขา', { action: 'adminTransactions', idToken: O, ...range, branch: 'B002' }, 'ok');
+  await both('หน้าที่ 2', { action: 'adminTransactions', idToken: O, ...range, page: 2 }, 'ok');
+  await both('คูปอง 60 วัน + นับตามสถานะ', { action: 'adminCoupons', idToken: O, ...range }, 'ok');
+  for (const status of ['ACTIVE', 'USED', 'EXPIRED', 'CANCELLED']) await both('คูปองสถานะ ' + status, { action: 'adminCoupons', idToken: O, ...range, status }, 'ok');
+  await both('คูปองที่ใช้ที่สาขา B001', { action: 'adminCoupons', idToken: O, ...range, branch: 'B001' }, 'ok');
+
+  console.log('\n[20] พนักงาน');
+  await both('รายชื่อพนักงาน (รออนุมัติขึ้นก่อน)', { action: 'adminStaff', idToken: O }, 'ok');
+  await both('แก้สิทธิ์ตัวเอง', { action: 'adminStaffUpdate', idToken: O, userId: 'S2', role: 'CASHIER', status: 'ACTIVE' }, 'SELF_EDIT');
+  await both('รหัสพนักงานผิด', { action: 'adminStaffUpdate', idToken: O, userId: '../x', role: 'CASHIER', status: 'ACTIVE' }, 'BAD_STAFF');
+  await both('บทบาทผิด', { action: 'adminStaffUpdate', idToken: O, userId: 'S9', role: 'BOSS', status: 'ACTIVE' }, 'BAD_ROLE');
+  await both('สถานะผิด', { action: 'adminStaffUpdate', idToken: O, userId: 'S9', role: 'CASHIER', status: 'X' }, 'BAD_STATUS');
+  await both('ไม่พบพนักงาน', { action: 'adminStaffUpdate', idToken: O, userId: 'S404', role: 'CASHIER', status: 'ACTIVE' }, 'NOT_FOUND');
+  await both('เจ้าของร้านอนุมัติ + ตั้งชื่อ + สาขา', { action: 'adminStaffUpdate', idToken: O, userId: 'S9', role: 'CASHIER', status: 'ACTIVE', name: 'น้องเก้า <x>', branches: ['b002', 'B002'] }, 'ok');
+  await both('สาขาที่ไม่มี', { action: 'adminStaffUpdate', idToken: O, userId: 'S9', role: 'CASHIER', status: 'ACTIVE', branches: ['B999'] }, 'BAD_BRANCH');
+  await both('ไม่เลือกสาขาเลย', { action: 'adminStaffUpdate', idToken: O, userId: 'S9', role: 'CASHIER', status: 'ACTIVE', branches: [] }, 'BAD_BRANCH');
+  await both('ทุกสาขา (ALL)', { action: 'adminStaffUpdate', idToken: O, userId: 'S9', role: 'CASHIER', status: 'ACTIVE', branches: ['ALL'] }, 'ok');
+  await both('ผู้จัดการตั้งคนเป็นผู้จัดการไม่ได้', { action: 'adminStaffUpdate', idToken: A3, userId: 'S9', role: 'ADMIN', status: 'ACTIVE' }, 'NO_ROLE');
+  await both('ผู้จัดการแก้เจ้าของร้านไม่ได้', { action: 'adminStaffUpdate', idToken: A3, userId: 'S2', role: 'CASHIER', status: 'ACTIVE' }, 'NO_ROLE');
+  await both('ผู้จัดการปิดสิทธิ์แคชเชียร์ได้', { action: 'adminStaffUpdate', idToken: A3, userId: 'S9', role: 'CASHIER', status: 'DISABLED' }, 'ok');
+  await both('รายชื่อพนักงานหลังแก้', { action: 'adminStaff', idToken: A3 }, 'ok');
+
+  console.log('\n[21] ของรางวัล / โปรโมชัน');
+  const rw = (extra) => ({ action: 'adminRewardSave', idToken: O, requestId: rid(), reward: Object.assign({ name: 'ของรางวัลใหม่', points: 150, status: 'ACTIVE' }, extra) });
+  await both('รายการของรางวัล (สถานะที่ลูกค้าเห็น)', { action: 'adminRewards', idToken: A3 }, 'ok');
+  await both('ไม่ใส่ชื่อ', rw({ name: ' ' }), 'BAD_INPUT');
+  await both('แต้ม 0 (ไม่ใช่ของขวัญวันเกิด)', rw({ points: 0 }), 'BAD_INPUT');
+  await both('แต้มทศนิยม', rw({ points: '1.5' }), 'BAD_INPUT');
+  await both('ลิงก์รูปไม่ใช่ https', rw({ image: 'http://x.com/a.png' }), 'BAD_IMAGE');
+  await both('สถานะผิด', rw({ status: 'ON' }), 'BAD_STATUS');
+  await both('วันสิ้นสุดก่อนวันเริ่ม', rw({ startDate: today, endDate: ago(1) }), 'BAD_DATE');
+  await both('จำกัดต่อคนเกิน 1000', rw({ limitPerMember: 1001 }), 'BAD_INPUT');
+  await both('เพิ่มของรางวัล (รหัสถัดไป + ลิงก์ Drive แปลงเป็นรูป)', rw({ image: 'https://drive.google.com/file/d/AAAAAAAAAAAAAAAAAAAAAAAAA/view', quota: '1,000', validDays: 7, startDate: today, sort: 5 }), 'ok');
+  await both('เพิ่มของขวัญวันเกิด (แต้มว่าง = ฟรี)', rw({ name: 'เค้กปีหน้า', type: 'birthday', points: '', startDate: dayOffset(30) }), 'ok');
+  await both('แก้ของรางวัล R001', { action: 'adminRewardSave', idToken: A3, requestId: rid(), reward: { id: 'R001', name: 'เครื่องดื่มเย็น', points: 90, status: 'ACTIVE', description: 'แก้แล้ว' } }, 'ok');
+  await both('ลดจำนวนทั้งหมดต่ำกว่าที่แลกไปแล้ว', { action: 'adminRewardSave', idToken: O, requestId: rid(), reward: { id: 'R002', name: 'ขนม', points: 120, status: 'ACTIVE', quota: 1 } }, 'BAD_QUOTA');
+  await both('แก้รางวัลที่ไม่มี', { action: 'adminRewardSave', idToken: O, requestId: rid(), reward: { id: 'R404', name: 'x', points: 1, status: 'ACTIVE' } }, 'NOT_FOUND');
+  await both('รายการของรางวัลหลังแก้', { action: 'adminRewards', idToken: O }, 'ok');
+  await both('เปิดหน้าลูกค้า: เห็นของรางวัลที่แก้ (ไม่เห็นที่ยังไม่ถึงวัน)', { action: 'bootstrap', idToken: tok('U2') }, 'ok');
+  const pr = (extra) => ({ action: 'adminPromoSave', idToken: O, requestId: rid(), promo: Object.assign({ title: 'โปรใหม่', status: 'ACTIVE' }, extra) });
+  await both('โปรโมชัน: ลิงก์อันตราย', pr({ link: 'javascript:alert(1)' }), 'BAD_LINK');
+  await both('โปรโมชัน: ป้ายยาวเกิน', pr({ tag: 'x'.repeat(31) }), 'BAD_INPUT');
+  await both('เพิ่มโปรโมชัน', pr({ subtitle: 'ทุกวันศุกร์', tag: 'ใหม่', link: 'https://example.com/promo', endDate: dayOffset(10) }), 'ok');
+  await both('แก้โปรโมชัน P002 (เปิดอีกครั้ง)', pr({ id: 'P002', title: 'กลับมาแล้ว', endDate: '' }), 'ok');
+  await both('รายการโปรโมชัน', { action: 'adminPromos', idToken: A3 }, 'ok');
+
+  console.log('\n[22] ระงับ / แก้ข้อมูลสมาชิก');
+  await both('ระงับโดยไม่มีเหตุผล', (s) => ({ action: 'adminMemberStatus', idToken: A3, memberId: ids.U6[s], status: 'BLOCKED' }), 'NO_REASON');
+  await both('สถานะผิด', (s) => ({ action: 'adminMemberStatus', idToken: A3, memberId: ids.U6[s], status: 'X' }), 'BAD_STATUS');
+  await both('ระงับสมาชิก (จดว่าใคร เมื่อไร เพราะอะไร)', (s) => ({ action: 'adminMemberStatus', idToken: A3, memberId: ids.U6[s], status: 'BLOCKED', reason: 'ทุจริตแต้ม' }), 'ok');
+  await both('เปิดใช้อีกครั้ง', (s) => ({ action: 'adminMemberStatus', idToken: O, memberId: ids.U6[s], status: 'ACTIVE' }), 'ok');
+  const mu = (user, extra) => (s) => Object.assign({ action: 'adminMemberUpdate', idToken: O, memberId: ids[user][s], firstName: 'มานี', lastName: 'มีนา', birthDate: '1990-05-05', phone: '0855555555' }, extra);
+  await both('ผู้จัดการแก้ข้อมูลลูกค้าไม่ได้', (s) => Object.assign(mu('U6')(s), { idToken: A3 }), 'NO_ROLE');
+  await both('เจ้าของร้านแก้ชื่อ + วันเกิด (ไม่จำกัดครั้ง)', mu('U6'), 'ok');
+  await both('แก้วันเกิดอีกครั้ง', mu('U6', { birthDate: '1991-06-06' }), 'ok');
+  await both('เบอร์ซ้ำกับคนอื่น', mu('U6', { phone: '0866666666' }), 'PHONE_TAKEN');
+  await both('ส่งรับข่าวสารมา → ไม่มีผล (ลูกค้าเลือกเองเท่านั้น)', mu('U6', { birthDate: '1991-06-06', consentMarketing: true }), 'ok');
+  await both('สมาชิกรายคนหลังแก้ (ประวัติการแก้ + หมายเหตุ)', (s) => ({ action: 'adminMember', idToken: O, memberId: ids.U6[s] }), 'ok');
+
+  console.log('\n[23] ตั้งค่าร้าน / หน้าตาร้าน');
+  await both('ค่าร้านทั้งหมด', { action: 'adminSettings', idToken: A3 }, 'ok', noDrive);
+  await both('ไม่มีค่าที่แก้ได้', { action: 'adminSettingsSave', idToken: O, values: { LIFF_ID: '1-x' } }, 'BAD_INPUT');
+  await both('อัตราแต้มเป็น 0', { action: 'adminSettingsSave', idToken: O, values: { POINT_RATE_BAHT: 0 } }, 'BAD_INPUT');
+  await both('แต้มต้อนรับทศนิยม', { action: 'adminSettingsSave', idToken: O, values: { WELCOME_POINTS: '1.5' } }, 'BAD_INPUT');
+  await both('แก้อัตราแต้ม + แต้มต้อนรับ (ค่าเดิมไม่นับ)', { action: 'adminSettingsSave', idToken: O, values: { POINT_RATE_BAHT: '25.50', WELCOME_POINTS: '30', COUPON_DAYS: 30 } }, 'ok', noDrive);
+  await both('บิลถัดไปใช้อัตราใหม่ทันที (25.5 บาท/แต้ม)', buy('U2', 1000, { branchId: 'B001' }), 'ok');
+  await both('ตั้งค่ากลับ', { action: 'adminSettingsSave', idToken: O, values: { POINT_RATE_BAHT: '20', WELCOME_POINTS: '20' } }, 'ok', noDrive);
+  await both('หน้าตาร้าน', { action: 'adminBrand', idToken: A3 }, 'ok');
+  await both('ผู้จัดการแก้หน้าตาร้านไม่ได้', { action: 'adminBrandSave', idToken: A3, values: { SHOP_NAME: 'x' } }, 'NO_ROLE');
+  await both('สีผิดรูปแบบ', { action: 'adminBrandSave', idToken: O, values: { COLOR_BUTTON: 'red' } }, 'BAD_INPUT');
+  await both('สไตล์ที่ไม่มี', { action: 'adminBrandSave', idToken: O, values: { THEME: 'neon' } }, 'BAD_INPUT');
+  await both('ชื่อร้านยาวเกิน', { action: 'adminBrandSave', idToken: O, values: { SHOP_NAME: 'ก'.repeat(61) } }, 'BAD_INPUT');
+  await both('แก้ชื่อ สี โลโก้ (ไม่แก้นโยบาย → ฉบับเดิม)', { action: 'adminBrandSave', idToken: O, values: { SHOP_NAME: 'ร้านใหม่', COLOR_BUTTON: '#00aa00', LOGO_URL: 'https://example.com/logo.png', TEXT_GREETING: 'ยินดีต้อนรับ' } }, 'ok');
+  await both('แก้นโยบาย → ฉบับที่ 2', { action: 'adminBrandSave', idToken: O, values: { PRIVACY_TEXT: 'บรรทัดแรก\r\n\r\n\r\nบรรทัด <สอง>' } }, 'ok');
+  await both('บันทึกค่าเดิมซ้ำ → ฉบับไม่เพิ่ม', { action: 'adminBrandSave', idToken: O, values: { PRIVACY_TEXT: 'บรรทัดแรก\n\nบรรทัด  สอง ' } }, 'ok');
+  await both('ลูกค้าเห็นหน้าตาร้านใหม่ + ฉบับนโยบาย', { action: 'bootstrap', idToken: tok('U1'), withBrand: true }, 'ok');
+  remember('U8', await both('ลูกค้าใหม่สมัคร → ยอมรับนโยบายฉบับที่ 2', reg('U8', { phone: '0877777777' }), 'ok'));
+
+  console.log('\n[24] สาขา / แต้มพิเศษ (หลังบ้าน)');
+  await both('รายชื่อสาขา + จำนวนพนักงาน/สมาชิก', { action: 'adminBranches', idToken: A3 }, 'ok');
+  await both('ชื่อสาขาซ้ำ (ไม่สนตัวพิมพ์)', { action: 'adminBranchSave', idToken: O, requestId: rid(), branch: { name: 'สาขาสยาม' } }, 'DUP_BRANCH');
+  await both('เพิ่มสาขา (รหัสถัดไป B004)', { action: 'adminBranchSave', idToken: O, requestId: rid(), branch: { name: 'สาขาใหม่' } }, 'ok');
+  await both('แก้ชื่อ + ปิดสาขา', { action: 'adminBranchSave', idToken: O, requestId: rid(), branch: { id: 'b002', name: 'สาขาอารีย์ (ปิดปรับปรุง)', status: 'INACTIVE', sort: 9 } }, 'ok');
+  await both('แก้สาขาที่ไม่มี', { action: 'adminBranchSave', idToken: O, requestId: rid(), branch: { id: 'B404', name: 'x' } }, 'NOT_FOUND');
+  await both('ผู้จัดการเพิ่มสาขาไม่ได้', { action: 'adminBranchSave', idToken: A3, requestId: rid(), branch: { name: 'x' } }, 'NO_ROLE');
+  await both('กติกาแต้มพิเศษทั้งหมด (สถานะวันนี้)', { action: 'adminRules', idToken: A3 }, 'ok');
+  const rs = (extra) => ({ action: 'adminRuleSave', idToken: O, requestId: rid(), rule: Object.assign({ name: 'กติกาใหม่', multiplier: 2, days: ['MON'], status: 'ACTIVE' }, extra) });
+  await both('ตัวคูณที่ไม่มี', rs({ multiplier: 5 }), 'BAD_INPUT');
+  await both('ไม่เลือกวัน', rs({ days: ['XYZ'] }), 'BAD_INPUT');
+  await both('สาขาที่ไม่มี', rs({ branch: 'B999' }), 'BAD_BRANCH');
+  await both('ยอดขั้นต่ำติดลบ', rs({ minAmount: -1 }), 'BAD_INPUT');
+  await both('เพิ่มกติกา (วันซ้ำ/เรียงวันให้ + ยอดขั้นต่ำ)', rs({ days: ['sun', 'MON', 'mon'], minAmount: '1,500', showBadge: true, branch: 'b001', endDate: dayOffset(5) }), 'ok');
+  await both('แก้กติกา PR004 (ยอดขั้นต่ำ 0 = ทุกบิล)', rs({ id: 'PR004', name: 'ทุกบิล ×1.5', multiplier: 1.5, days: [day], minAmount: 0 }), 'ok');
+  await both('กติกาหลังแก้', { action: 'adminRules', idToken: O }, 'ok');
+  await both('แก้กติกาที่ไม่มี', rs({ id: 'PR404' }), 'NOT_FOUND');
+
+  console.log('\n[25] ส่งออก / อัปโหลดรูป');
+  // ลำดับแถวในไฟล์ไม่มีความหมาย (ชีตเรียงตามลำดับที่เพิ่ม / ฐานข้อมูลเรียงตามวันสมัคร ซึ่งชุดทดสอบย้อนไว้บางคน) → เรียงก่อนเทียบ
+  // เรียงด้วยช่องที่เหมือนกันทั้งสองระบบ (ไม่ใช้รหัสสุ่ม) / รหัสรายการ (สุ่ม ไม่เคยเห็นมาก่อน) ตัดทิ้ง
+  const sortBy = (keyOf) => (o) => { o.rows.sort((x, y) => (keyOf(x) < keyOf(y) ? -1 : keyOf(x) > keyOf(y) ? 1 : 0)); return o; };
+  await both('ส่งออกสมาชิก (เบอร์มีขีด + คอลัมน์สาขา)', { action: 'adminExport', idToken: O, kind: 'members' }, 'ok', sortBy((r) => r[3]));
+  await both('ส่งออกรายการแต้ม 60 วัน', { action: 'adminExport', idToken: O, kind: 'transactions', ...range }, 'ok', (o) => {
+    o.columns.shift();
+    o.rows = o.rows.map((r) => r.slice(1));
+    return sortBy((r) => JSON.stringify([r[0]].concat(r.slice(2))))(o);
+  });
+  await both('ส่งออกแบบที่ไม่มี', { action: 'adminExport', idToken: O, kind: 'staff' }, 'BAD_EXPORT');
+  await both('อัปโหลด: ชนิดไฟล์ไม่รองรับ', { action: 'adminUploadImage', idToken: A3, mime: 'image/gif', data: 'R0lGOD' }, 'BAD_IMAGE');
+  await both('อัปโหลด: ข้อมูลเสีย', { action: 'adminUploadImage', idToken: A3, mime: 'image/png', data: '!!!' }, 'BAD_IMAGE');
+  await both('อัปโหลด: ไม่ใช่รูปจริง (หัวไฟล์ไม่ตรง)', { action: 'adminUploadImage', idToken: A3, mime: 'image/png', data: Buffer.from('hello world, not a png').toString('base64') }, 'BAD_IMAGE');
+  await both('อัปโหลด: ใหญ่เกิน 2MB', { action: 'adminUploadImage', idToken: A3, mime: 'image/jpeg', data: Buffer.alloc(2 * 1024 * 1024 + 10, 0xFF).toString('base64') }, 'BAD_IMAGE');
 
   console.log('\n[15] ข้อมูลที่บันทึกจริงในสองระบบตรงกัน (ไม่ใช่แค่คำตอบ)');
   const sheetRows = (n) => { const s = sheet(n); const h = s.data[0]; return s.data.slice(1).filter((r) => r[0] !== '' && r[0] != null).map((r) => Object.fromEntries(h.map((k, i) => [k, r[i] === undefined ? '' : r[i]]))); };

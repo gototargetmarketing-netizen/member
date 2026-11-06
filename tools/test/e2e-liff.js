@@ -12,7 +12,8 @@ require('fs').mkdirSync(OUT, { recursive: true });
 
 const WEB = 'http://crm.test:8002';
 const OLD_WEB = process.env.OLD_WEB || '';
-const API = 'http://localhost:8103';
+// API=... = รันกับระบบใหม่ (COMPAT=1 node tools/api-server.js) / ไม่ตั้ง = ระบบเดิมจำลอง (gas-server)
+const API = process.env.API || 'http://localhost:8103';
 let pass = 0, fail = 0;
 const ok = (c, m, x) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ ' + m + (x !== undefined ? '  → ' + JSON.stringify(x).slice(0, 300) : '')); } };
 const adminOp = (op) => fetch(API + '/__admin', { method: 'POST', body: JSON.stringify(op) }).then(r => r.json());

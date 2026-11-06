@@ -9,12 +9,13 @@ const { cleanLineName } = require('./util');
 const { SHOP_SQL, publicBrand } = require('./shop');
 const customer = require('./customer');
 const staff = require('./staff');
+const admin = require('./admin');
 const speed = require('./speed');
 
-const API_VERSION = '0.3.0'; // 0.2 = คำสั่งของลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2)
+const API_VERSION = '0.4.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3)
 const { ALL_STAFF, MANAGERS } = staff;
+const OWNER = ['OWNER'];
 const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/; // ตรงกับเงื่อนไขในตาราง shops
-const SHOP_TTL_MS = 60 * 1000;               // ค่าร้านจำไว้ 1 นาที (แก้ค่าร้านแล้วมีผลภายใน 1 นาที)
 
 // shop: ต้องบอกร้าน / auth: ต้องมีรหัส LINE ที่ตรวจผ่าน / roles: บทบาทพนักงานที่ใช้ได้ (ไม่มี = ลูกค้าทั่วไป)
 // ตรวจบทบาทที่นี่ทุกคำสั่ง อย่าเชื่อการซ่อนปุ่มในหน้าเว็บ
@@ -39,7 +40,37 @@ const ACTIONS = {
   addPurchase: { shop: true, auth: true, roles: ALL_STAFF, run: staff.addPurchase },
   useCoupon: { shop: true, auth: true, roles: ALL_STAFF, run: staff.useCoupon },
   adjustPoints: { shop: true, auth: true, roles: MANAGERS, run: staff.adjustPoints },
-  staffRecent: { shop: true, auth: true, roles: ALL_STAFF, run: staff.staffRecent }
+  staffRecent: { shop: true, auth: true, roles: ALL_STAFF, run: staff.staffRecent },
+
+  // หลังบ้าน (ขั้น 3 รอบ 3) — บทบาทตรงกับ ACTIONS ใน code.gs ทุกคำสั่ง
+  adminMe: { shop: true, auth: true, roles: MANAGERS, run: admin.adminMe },
+  adminDashboard: { shop: true, auth: true, roles: MANAGERS, run: admin.adminDashboard },
+  adminMembers: { shop: true, auth: true, roles: MANAGERS, run: admin.adminMembers },
+  adminMember: { shop: true, auth: true, roles: MANAGERS, run: admin.adminMember },
+  adminTransactions: { shop: true, auth: true, roles: MANAGERS, run: admin.adminTransactions },
+  adminCoupons: { shop: true, auth: true, roles: MANAGERS, run: admin.adminCoupons },
+  adminStaff: { shop: true, auth: true, roles: MANAGERS, run: admin.adminStaff },
+  adminStaffUpdate: { shop: true, auth: true, roles: MANAGERS, run: admin.adminStaffUpdate },
+  // ไฟล์ที่ส่งออกไปแล้วร้านควบคุมไม่ได้ (PDPA) → เจ้าของร้านเท่านั้น
+  adminExport: { shop: true, auth: true, roles: OWNER, run: admin.adminExport },
+  adminRewards: { shop: true, auth: true, roles: MANAGERS, run: admin.adminRewards },
+  adminRewardSave: { shop: true, auth: true, roles: MANAGERS, run: admin.adminRewardSave },
+  adminPromos: { shop: true, auth: true, roles: MANAGERS, run: admin.adminPromos },
+  adminPromoSave: { shop: true, auth: true, roles: MANAGERS, run: admin.adminPromoSave },
+  adminMemberStatus: { shop: true, auth: true, roles: MANAGERS, run: admin.adminMemberStatus },
+  // แก้ชื่อ/เบอร์/วันเกิดให้ลูกค้า: เจ้าของร้านเท่านั้น (คนเดียวที่เห็นเบอร์เต็มและวันเกิดอยู่แล้ว)
+  adminMemberUpdate: { shop: true, auth: true, roles: OWNER, run: admin.adminMemberUpdate },
+  adminSettings: { shop: true, auth: true, roles: MANAGERS, run: admin.adminSettings },
+  // อัตราแต้มมีผลกับทุกบิลถัดไป → เจ้าของร้านเท่านั้น
+  adminSettingsSave: { shop: true, auth: true, roles: OWNER, run: admin.adminSettingsSave },
+  adminUploadImage: { shop: true, auth: true, roles: MANAGERS, run: admin.adminUploadImage },
+  // หน้าตาร้าน: ผู้จัดการดูได้ / แก้ได้เฉพาะเจ้าของร้าน (ภาพลักษณ์ร้าน + นโยบาย PDPA)
+  adminBrand: { shop: true, auth: true, roles: MANAGERS, run: admin.adminBrand },
+  adminBrandSave: { shop: true, auth: true, roles: OWNER, run: admin.adminBrandSave },
+  adminBranches: { shop: true, auth: true, roles: MANAGERS, run: admin.adminBranches },
+  adminBranchSave: { shop: true, auth: true, roles: OWNER, run: admin.adminBranchSave },
+  adminRules: { shop: true, auth: true, roles: MANAGERS, run: admin.adminRules },
+  adminRuleSave: { shop: true, auth: true, roles: OWNER, run: admin.adminRuleSave }
 };
 
 const ms = (t0) => Math.round((performance.now() - t0) * 10) / 10;
@@ -52,25 +83,17 @@ function actWhoami(body, ctx) {
   return { userId: ctx.user.userId, name: ctx.user.name, via: ctx.via, region: ctx.region, ms: ms(ctx.t0) };
 }
 
-// deps: { db(): {query, tx}, verifier: {verify}, allowTestTokens, region }
+// deps: { db(): {query, tx}, verifier: {verify}, storage(): {upload}, allowTestTokens, region, now() }
 function createApp(deps) {
-  const shops = new Map();
   let served = 0;
 
+  // อ่านค่าร้านใหม่ทุกคำขอ (ไม่จำไว้): คำสั่งเดียว ~1–2 ms และเจ้าของร้านแก้อัตราแต้มแล้วต้องมีผลกับบิลถัดไปทันที
+  // (เคยจำไว้ 1 นาที แต่ Vercel เปิดหลายเครื่อง เครื่องอื่นจะใช้ค่าเก่าอยู่ จนกว่าจะครบเวลา)
   async function loadShop(id) {
     const shopId = String(id || '');
     if (!SHOP_ID.test(shopId)) throw userError('ไม่พบร้านนี้', 'NO_SHOP');
-    let shop;
-    const hit = shops.get(shopId);
-    if (hit && hit.until > Date.now()) {
-      shop = hit.shop;
-    } else {
-      const r = await deps.db().query(SHOP_SQL, [shopId]);
-      shop = r.rows[0];
-      if (!shop) throw userError('ไม่พบร้านนี้', 'NO_SHOP');
-      // ชุดทดสอบตั้ง shopTtlMs = 0 (แก้ค่าร้านแล้วเห็นผลทันที)
-      shops.set(shopId, { shop, until: Date.now() + (deps.shopTtlMs != null ? deps.shopTtlMs : SHOP_TTL_MS) });
-    }
+    const shop = (await deps.db().query(SHOP_SQL, [shopId])).rows[0];
+    if (!shop) throw userError('ไม่พบร้านนี้', 'NO_SHOP');
     if (shop.status !== 'ACTIVE') throw userError('ร้านนี้ปิดใช้งานระบบสะสมแต้มแล้ว', 'SHOP_INACTIVE');
     return shop;
   }

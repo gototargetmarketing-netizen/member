@@ -86,9 +86,14 @@ node tools/test/api-test.js
 node tools/test/api-diff-test.js     # ส่งคำสั่งเดียวกันให้ระบบเดิม (code.gs) กับระบบใหม่ แล้วเทียบคำตอบทุกช่อง
 node tools/api-server.js &           # ระบบใหม่ในเครื่อง (ฐานข้อมูลจำลอง + ร้าน demo) พอร์ต 8105
 node tools/test/e2e-api.js           # หน้าเว็บร้าน demo กับระบบใหม่ (เปิด dev-server 8002 ไว้ด้วย)
-# ชุดทดสอบหน้าเว็บเดิม รันกับระบบใหม่ (โหมดเลียนแบบ gas-server พอร์ต 8106)
-COMPAT=1 node tools/api-server.js &
+# ชุดทดสอบหน้าเว็บเดิมทั้ง 4 ชุด รันกับระบบใหม่ (โหมดเลียนแบบ gas-server)
+COMPAT=1 PORT=8106 node tools/api-server.js &
+COMPAT=1 PORT=8107 node tools/api-server.js &              # หลายสาขา (ข้อมูลแยกชุด เหมือน gas-server 8104)
+COMPAT=1 MOCK_LINE=1 PORT=8108 node tools/api-server.js &  # LINE จำลอง (เหมือน gas-server 8103)
 API=http://localhost:8106 node tools/test/e2e.js
+API=http://localhost:8106 node tools/test/e2e-admin.js     # รันต่อจาก e2e.js บนเซิร์ฟเวอร์เดิม
+API=http://localhost:8107 node tools/test/e2e-branches.js
+API=http://localhost:8108 node tools/test/e2e-liff.js
 # ลองเอง: http://localhost:8002/demo?api=http://localhost:8105/api&user=U_DEMO_1&name=ทดสอบ
 ```
 

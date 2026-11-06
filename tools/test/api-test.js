@@ -300,6 +300,43 @@ function fakeLine() {
     server.close();
   }
 
+  console.log('\n[5.5] ที่เก็บรูป (Supabase Storage) + อัปโหลดรูปจากหลังบ้าน');
+  const { createStorage, StorageNotConfigured } = require(path.join(ROOT, 'api', '_lib', 'storage.js'));
+  const calls = [];
+  const fakeFetch = (replies) => async (url, opts) => { calls.push({ url, opts }); const r = replies.shift(); return { ok: r.status < 300, status: r.status, text: async () => r.body || '' }; };
+  try { await createStorage({ url: '', key: '' }).upload('a.png', Buffer.from('x'), 'image/png'); ok(false, 'ยังไม่ตั้งค่า → ต้อง error'); }
+  catch (e) { ok(e instanceof StorageNotConfigured, 'ยังไม่ได้ตั้ง SUPABASE_URL / กุญแจ → แจ้งชัดเจน (ไม่ส่งไปที่ไหน)'); }
+  calls.length = 0;
+  let st = createStorage({ url: 'https://abc.supabase.co/', key: 'sb_secret_TEST', fetch: fakeFetch([{ status: 200 }]) });
+  let url = await st.upload('demo/reward-x.png', Buffer.from('img'), 'image/png');
+  ok(url === 'https://abc.supabase.co/storage/v1/object/public/images/demo/reward-x.png', 'อัปโหลดสำเร็จ → ได้ลิงก์สาธารณะของรูป', url);
+  ok(calls[0].url === 'https://abc.supabase.co/storage/v1/object/images/demo/reward-x.png' && calls[0].opts.method === 'POST' &&
+    calls[0].opts.headers.apikey === 'sb_secret_TEST' && calls[0].opts.headers.Authorization === 'Bearer sb_secret_TEST' &&
+    calls[0].opts.headers['Content-Type'] === 'image/png' && calls[0].opts.headers['x-upsert'] === 'false', 'ส่งไปถังรูป images พร้อมกุญแจ + ชนิดไฟล์ + ไม่ทับไฟล์เดิม');
+  calls.length = 0;
+  st = createStorage({ url: 'https://abc.supabase.co', key: 'k', fetch: fakeFetch([{ status: 400, body: '{"statusCode":"404","error":"Bucket not found"}' }, { status: 200 }, { status: 200 }]) });
+  url = await st.upload('demo/a.png', Buffer.from('img'), 'image/png');
+  const bucketBody = JSON.parse(calls[1].opts.body);
+  ok(calls.length === 3 && /\/storage\/v1\/bucket$/.test(calls[1].url) && bucketBody.public === true && bucketBody.file_size_limit === 2 * 1024 * 1024 && /images\/demo\/a\.png$/.test(calls[2].url),
+    'ยังไม่มีถังรูป → สร้างให้ (เปิดดูได้ จำกัดเฉพาะรูป 2MB) แล้วอัปโหลดซ้ำ', calls.map((c) => c.url));
+  st = createStorage({ url: 'https://abc.supabase.co', key: 'k', fetch: fakeFetch([{ status: 500, body: 'boom' }]) });
+  try { await st.upload('demo/a.png', Buffer.from('x'), 'image/png'); ok(false, 'ล่ม → ต้อง error'); } catch (e) { ok(/500/.test(e.message), 'ที่เก็บรูปล่ม → แจ้ง error (ไม่เงียบ)'); }
+
+  const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]), Buffer.alloc(64, 1)]).toString('base64');
+  const stored = [];
+  const upApp = createApp({ db: () => db, verifier: createVerifier({ fetch: fakeLine().fetch }), allowTestTokens: true, region: 'test',
+    storage: () => ({ upload: async (p2, bytes, mime) => { stored.push({ p: p2, n: bytes.length, mime }); return 'https://x.supabase.co/storage/v1/object/public/images/' + p2; } }) });
+  r = await upApp.handle({ action: 'adminUploadImage', shop: 'demo', idToken: 'TEST:U_DEMO_OWNER:เจ้าของ', mime: 'image/png', data: PNG, kind: 'promo' });
+  ok(r.ok && /\/images\/demo\/promo-\d{4}-\d{2}-\d{2}-[A-Z2-9]{6}\.png$/.test(r.url) && stored[0].n === 72, 'อัปโหลดจากหลังบ้าน → แยกโฟลเดอร์ร้าน + ชื่อไฟล์สุ่ม + ได้ลิงก์กลับ', r);
+  r = await upApp.handle({ action: 'adminUploadImage', shop: 'demo', idToken: 'TEST:U_DEMO_CASHIER:แคชเชียร์', mime: 'image/png', data: PNG });
+  ok(!r.ok && r.code === 'NO_ROLE', 'แคชเชียร์อัปโหลดรูปไม่ได้', r);
+  const badApp = createApp({ db: () => db, verifier: createVerifier({ fetch: fakeLine().fetch }), allowTestTokens: true, region: 'test',
+    storage: () => ({ upload: async () => { throw new Error('connect ECONNREFUSED abc.supabase.co'); } }) });
+  const ce3 = console.error; console.error = () => {};
+  r = await badApp.handle({ action: 'adminUploadImage', shop: 'demo', idToken: 'TEST:U_DEMO_OWNER:เจ้าของ', mime: 'image/png', data: PNG });
+  console.error = ce3;
+  ok(!r.ok && r.code === 'STORAGE_ERROR' && /ติดต่อผู้ดูแลระบบ/.test(r.error) && !/supabase|ECONN/i.test(JSON.stringify(r)), 'ที่เก็บรูปล่ม → ข้อความกลางๆ ไม่บอกว่ารูปเก็บที่ไหน', r);
+
   console.log('\n[6] ข้อความถึงผู้ใช้');
   // ทุกไฟล์ใน api/ (ไฟล์ใหม่ถูกตรวจเองโดยไม่ต้องเพิ่มชื่อ)
   const apiFiles = ['index.js'].concat(fs.readdirSync(path.join(ROOT, 'api', '_lib')).filter(f => f.endsWith('.js')).map(f => '_lib/' + f));

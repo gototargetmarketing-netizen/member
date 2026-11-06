@@ -13,7 +13,11 @@ fs.rmSync(DL, { recursive: true, force: true });
 fs.mkdirSync(DL, { recursive: true });
 
 const WEB = 'http://localhost:8002';
-const API = 'http://localhost:8102';
+// API=... = รันกับระบบใหม่ (COMPAT=1 node tools/api-server.js) / ไม่ตั้ง = ระบบเดิมจำลอง (gas-server)
+const API = process.env.API || 'http://localhost:8102';
+// ระบบใหม่เก็บรูปที่ Supabase Storage (ระบบเดิม: Google Drive) → ข้อตรวจเรื่องลิงก์รูปที่อัปโหลดต่างกันตามระบบ
+const NEW_API = !!process.env.API;
+const UPLOADED = NEW_API ? '/storage/v1/object/public/images/khamwan/reward-' : 'thumbnail?id=FILE';
 let pass = 0, fail = 0;
 const ok = (c, m, x) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ ' + m + (x !== undefined ? '  → ' + JSON.stringify(x).slice(0, 300) : '')); } };
 const api = (action, user, data = {}) => fetch(API, { method: 'POST', body: JSON.stringify({ ...data, action, idToken: `TEST:${user}:${user}` }) }).then(r => r.json());
@@ -205,11 +209,17 @@ async function seed() {
     ok(/กำลัง(อัปโหลด|เตรียม)รูป/.test(await b.text('#loading-pop')), 'ระหว่างอัปโหลดมีป๊อปอัป "กำลังอัปโหลดรูป..." (' + (await b.text('#loading-pop')).trim() + ')');
     ok(await b.eval(`!!document.elementFromPoint(innerWidth / 2, innerHeight - 40).closest('#loading-pop')`), 'ระหว่างรอ กดปุ่มอื่นไม่ได้ (ป๊อปอัปบังทั้งจอ)');
     await b.shot(path.join(OUT, 'a16-uploading.png'));
-    await b.waitFor(`/thumbnail\\?id=FILE/.test(document.querySelector('.modal input[name=image]').value) && !document.querySelector('#loading-pop.active')`, 15000, 'ลิงก์รูปจาก Drive');
-    ok(true, 'อัปโหลดเสร็จ → ช่องรูปได้ลิงก์ Google Drive และป๊อปอัปหายไป');
-    const drive = await (await fetch(API + '/__drive')).json();
-    const upFile = drive.files[drive.files.length - 1];
-    ok(upFile.mime === 'image/png' && upFile.sharing === 'ANYONE_WITH_LINK:VIEW' && upFile.size < 200000, 'เก็บใน Drive เป็น PNG ที่ย่อแล้ว แชร์แบบทุกคนที่มีลิงก์ (' + upFile.size + ' bytes)', upFile);
+    await b.waitFor(`document.querySelector('.modal input[name=image]').value.includes(${JSON.stringify(UPLOADED)}) && !document.querySelector('#loading-pop.active')`, 15000, 'ลิงก์รูปที่อัปโหลด');
+    ok(true, 'อัปโหลดเสร็จ → ช่องรูปได้ลิงก์รูป' + (NEW_API ? ' (ที่เก็บรูปของระบบใหม่)' : ' Google Drive') + ' และป๊อปอัปหายไป');
+    if (NEW_API) {
+      const ups = await (await fetch(API + '/__uploads')).json();
+      const up = ups[ups.length - 1];
+      ok(up && up.mime === 'image/png' && up.size < 200000 && /^khamwan\/reward-\d{4}-\d{2}-\d{2}-[A-Z2-9]{6}\.png$/.test(up.path), 'เก็บเป็น PNG ที่ย่อแล้ว แยกโฟลเดอร์ตามร้าน ชื่อไฟล์สุ่ม (' + (up && up.size) + ' bytes)', up);
+    } else {
+      const drive = await (await fetch(API + '/__drive')).json();
+      const upFile = drive.files[drive.files.length - 1];
+      ok(upFile.mime === 'image/png' && upFile.sharing === 'ANYONE_WITH_LINK:VIEW' && upFile.size < 200000, 'เก็บใน Drive เป็น PNG ที่ย่อแล้ว แชร์แบบทุกคนที่มีลิงก์ (' + upFile.size + ' bytes)', upFile);
+    }
     await b.eval(`window.__slow = 0`);
 
     // ขนาดรูปแนะนำ + กรอบตัวอย่างทรงเดียวกับหน้าลูกค้า + เตือนเมื่อทรงผิดมาก (ผู้ใช้ขอ 5 พ.ย. 2569)
@@ -226,7 +236,7 @@ async function seed() {
     await b.eval(`document.querySelector('.modal form').requestSubmit()`);
     await b.waitFor(`!document.querySelector('.modal')`, 8000, 'บันทึกรูป');
     const withImg = (await api('adminRewards', 'U_ADM_OWNER')).items.find(x => x.id === rwId);
-    ok(/thumbnail\?id=FILE/.test(withImg.image), 'บันทึกของรางวัลพร้อมรูปที่อัปโหลด');
+    ok(withImg.image.includes(UPLOADED), 'บันทึกของรางวัลพร้อมรูปที่อัปโหลด');
 
     console.log('\n[โปรโมชัน]');
     const PR = 'โปรทดสอบ ' + STAMP;
@@ -377,7 +387,8 @@ async function seed() {
     await b.send('Page.captureScreenshot', { format: 'png' }).then(r => fs.writeFileSync(path.join(OUT, 'a10-mobile-members.png'), Buffer.from(r.data, 'base64')));
     ok(true, 'ภาพมือถือ a09, a10');
 
-    const errors = b.logs.filter(l => /EXCEPTION|console\.error|log\.error/.test(l) && !/favicon/.test(l));
+    // รูปจากที่เก็บรูปจำลองของระบบใหม่ (storage.test ไม่มีจริง — ระบบบังคับลิงก์รูป https จึงใช้เซิร์ฟเวอร์ในเครื่องแทนไม่ได้) โหลดไม่ได้เป็นเรื่องปกติ
+    const errors = b.logs.filter(l => /EXCEPTION|console\.error|log\.error/.test(l) && !/favicon/.test(l) && !(NEW_API && /storage\.test/.test(l)));
     ok(errors.length === 0, 'ไม่มี error ใน console', errors);
 
     console.log('\n[แต้มพิเศษ] เจ้าของร้านตั้งกติกา → พนักงานเห็นตัวอย่างแต้ม → ลูกค้าเห็นป้าย');
