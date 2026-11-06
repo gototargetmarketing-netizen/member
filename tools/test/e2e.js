@@ -7,7 +7,8 @@ const OUT = path.join(__dirname, 'shots');
 require('fs').mkdirSync(OUT, { recursive: true });
 
 const WEB = 'http://localhost:8002';
-const API = 'http://localhost:8102';
+// API=http://localhost:8106 = รันกับระบบใหม่ (COMPAT=1 node tools/api-server.js) / ไม่ตั้ง = ระบบเดิมจำลอง (gas-server)
+const API = process.env.API || 'http://localhost:8102';
 let pass = 0, fail = 0;
 const ok = (c, m, x) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ ' + m + (x !== undefined ? '  → ' + JSON.stringify(x).slice(0, 300) : '')); } };
 const adminOp = (op) => fetch(API + '/__admin', { method: 'POST', body: JSON.stringify(op) }).then(r => r.json());

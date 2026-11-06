@@ -87,6 +87,42 @@ function cleanKey(v, label) {
   return s;
 }
 
+// หมายเหตุ/เหตุผลจากพนักงาน (ยาวได้ 200 ตัว)
+function cleanNote(v) {
+  return String(v == null ? '' : v).replace(/[\u0000-\u001f<>]/g, ' ').trim().replace(/\s+/g, ' ').slice(0, 200);
+}
+
+// เบอร์ที่พนักงานพิมพ์ค้น (รับเบอร์บ้านด้วย สมาชิกรุ่นแรกอาจใช้) — '' = ไม่ใช่เบอร์
+function normalizePhone(v) {
+  let digits = String(v == null ? '' : v).replace(/\D/g, '');
+  if (digits.indexOf('66') === 0 && digits.length >= 11) digits = '0' + digits.slice(2);
+  return /^0\d{8,9}$/.test(digits) ? digits : '';
+}
+
+function cleanMemberId(v) {
+  const id = String(v == null ? '' : v).trim().toUpperCase();
+  if (!/^[A-Z]{1,4}-[A-Z0-9]{4,12}$/.test(id)) throw userError('รหัสสมาชิกไม่ถูกต้อง', 'BAD_MEMBER_ID');
+  return id;
+}
+
+const round2 = (n) => Math.round(n * 100) / 100;
+
+// 1,250 / 1,250.5 (ตัด .00 ทิ้ง)
+function fmtMoney(n) {
+  const parts = (Math.round(n * 100) / 100).toFixed(2).replace(/\.00$/, '').split('.');
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return parts.join('.');
+}
+
+// 6/11/2026 21:05 (เวลาไทย) — '-' เมื่อไม่มีวันที่
+function fmtDateTime(v) {
+  const d = toDate(v);
+  if (!d) return '-';
+  const t = new Date(d.getTime() + THAI_OFFSET_MS);
+  const p2 = (n) => String(n).padStart(2, '0');
+  return t.getUTCDate() + '/' + (t.getUTCMonth() + 1) + '/' + t.getUTCFullYear() + ' ' + p2(t.getUTCHours()) + ':' + p2(t.getUTCMinutes());
+}
+
 function cleanRequestId(v) {
   const s = String(v || '');
   if (!/^[A-Za-z0-9-]{8,64}$/.test(s)) throw userError('คำขอไม่ถูกต้อง กรุณาลองใหม่', 'BAD_REQUEST_ID');
@@ -145,5 +181,6 @@ function endOfMonth(now) {
 module.exports = {
   ID_CHARS, DAY_CODES, DAY_MS, randomCode, upper, toNum, toInt, fmtNum, safeUrl, driveImage,
   cleanLineName, cleanText, cleanLongText, cleanNamePart, cleanMobile, cleanBirthDate, cleanKey, cleanRequestId,
+  cleanNote, normalizePhone, cleanMemberId, round2, fmtMoney, fmtDateTime,
   thaiDay, dayCode, toDate, iso, inWindow, endOfDayAfter, endOfMonth
 };

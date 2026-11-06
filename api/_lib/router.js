@@ -8,13 +8,16 @@ const { InvalidToken } = require('./line');
 const { cleanLineName } = require('./util');
 const { SHOP_SQL, publicBrand } = require('./shop');
 const customer = require('./customer');
+const staff = require('./staff');
 const speed = require('./speed');
 
-const API_VERSION = '0.2.0'; // 0.2 = คำสั่งของลูกค้า (ขั้น 3 รอบ 1)
+const API_VERSION = '0.3.0'; // 0.2 = คำสั่งของลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2)
+const { ALL_STAFF, MANAGERS } = staff;
 const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/; // ตรงกับเงื่อนไขในตาราง shops
 const SHOP_TTL_MS = 60 * 1000;               // ค่าร้านจำไว้ 1 นาที (แก้ค่าร้านแล้วมีผลภายใน 1 นาที)
 
-// shop: ต้องบอกร้าน / auth: ต้องมีรหัส LINE ที่ตรวจผ่าน
+// shop: ต้องบอกร้าน / auth: ต้องมีรหัส LINE ที่ตรวจผ่าน / roles: บทบาทพนักงานที่ใช้ได้ (ไม่มี = ลูกค้าทั่วไป)
+// ตรวจบทบาทที่นี่ทุกคำสั่ง อย่าเชื่อการซ่อนปุ่มในหน้าเว็บ
 const ACTIONS = {
   // ตัวกลางยังทำงานไหม (ไม่แตะฐานข้อมูล ไม่ต้องเข้าสู่ระบบ) — ใช้วัดเวลาเดินทางเปล่าๆ
   ping: { shop: false, auth: false, run: actPing },
@@ -28,7 +31,15 @@ const ACTIONS = {
   register: { shop: true, auth: true, run: customer.register },
   redeem: { shop: true, auth: true, run: customer.redeem },
   claimBirthday: { shop: true, auth: true, run: customer.claimBirthday },
-  updateProfile: { shop: true, auth: true, run: customer.updateProfile }
+  updateProfile: { shop: true, auth: true, run: customer.updateProfile },
+
+  // พนักงาน (ขั้น 3 รอบ 2) — staffMe ไม่ระบุบทบาท: คนที่ยังไม่ได้รับสิทธิ์ต้องเปิดได้ เพื่อส่งคำขอสิทธิ์
+  staffMe: { shop: true, auth: true, run: staff.staffMe },
+  staffLookup: { shop: true, auth: true, roles: ALL_STAFF, run: staff.staffLookup },
+  addPurchase: { shop: true, auth: true, roles: ALL_STAFF, run: staff.addPurchase },
+  useCoupon: { shop: true, auth: true, roles: ALL_STAFF, run: staff.useCoupon },
+  adjustPoints: { shop: true, auth: true, roles: MANAGERS, run: staff.adjustPoints },
+  staffRecent: { shop: true, auth: true, roles: ALL_STAFF, run: staff.staffRecent }
 };
 
 const ms = (t0) => Math.round((performance.now() - t0) * 10) / 10;
@@ -121,10 +132,16 @@ function createApp(deps) {
         ctx.user = r.user;
         ctx.via = r.via;
       }
+      if (def.roles) ctx.staff = await staff.requireStaff(ctx, def.roles);
 
       const result = (await def.run(body, ctx)) || {};
       const out = { ok: true };
       if (deps.allowTestTokens) out.testMode = true; // หน้าเว็บขึ้นแถบ "โหมดทดสอบ" (เหมือน Apps Script ที่เปิดโหมดทดสอบ)
+      // หลังบ้านเปิดครั้งแรก: ส่งข้อมูลผู้ใช้ + รายชื่อสาขามาพร้อมข้อมูลหน้าเลย ไม่ต้องเรียก 2 รอบ
+      if (body.withMe === true && ctx.staff) {
+        out.me = { userId: ctx.user.userId, name: ctx.staff.name, role: ctx.staff.role };
+        out.branches = await staff.branchList(ctx.db, ctx.shop.id);
+      }
       // หน้าตาร้านล่าสุด ส่งไปพร้อมคำสั่งแรกของทุกหน้า — ค่าร้านอ่านมาแล้วตอนหาร้าน จึงไม่เพิ่มเวลา
       if (body.withBrand === true && ctx.shop) out.brand = publicBrand(ctx.shop);
       Object.keys(result).forEach(k => { out[k] = result[k]; });

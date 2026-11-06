@@ -41,6 +41,22 @@ function publicMember(m) {
   };
 }
 
+// พนักงานเห็นเบอร์แค่ 4 ตัวท้าย (พอให้ถามยืนยันตัวตนลูกค้าได้)
+function staffMember(m) {
+  const phone = String(m.phone || '');
+  return {
+    memberId: String(m.id || ''),
+    name: String(m.name || ''),
+    phoneMasked: phone ? 'xxx-xxx-' + phone.slice(-4) : '',
+    points: U.toInt(m.points),
+    totalSpend: U.toNum(m.total_spend),
+    visitCount: U.toInt(m.visit_count),
+    tier: '', // ระดับสมาชิก — เปิดใช้ในขั้น 4
+    status: U.upper(m.status) || 'ACTIVE',
+    lastVisitAt: U.iso(m.last_visit_at)
+  };
+}
+
 function publicTx(t) {
   return {
     id: String(t.id || ''),
@@ -148,5 +164,5 @@ function publicRule(r, names) {
 
 module.exports = {
   REWARD_BIRTHDAY, BIRTH_SELF_EDITS, RULE_MULTIPLIERS, BRANCH_ONLINE, BRANCH_ADMIN, MEMBER_COLS, REWARD_COLS, COUPON_COLS,
-  publicMember, publicTx, couponState, publicCoupon, listRewards, listPromos, ruleFromRow, rulesOn, branchNames, publicRule
+  publicMember, staffMember, publicTx, couponState, publicCoupon, listRewards, listPromos, ruleFromRow, rulesOn, branchNames, publicRule
 };

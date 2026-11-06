@@ -89,10 +89,11 @@ function diff(a, b, p, out) {
   const app = createApp({ db: () => db, verifier: { verify: async () => { throw new Error('ไม่ควรถูกเรียก'); } }, allowTestTokens: true, region: 'test', shopTtlMs: 0 });
 
   // ส่งคำสั่งเดียวกันให้ทั้งสองระบบ แล้วเทียบ
+  // body เป็นฟังก์ชัน (side) => {...} ได้ — ใช้เมื่อต้องอ้างรหัสสมาชิก/คูปองซึ่งแต่ละระบบสุ่มคนละค่า
   async function both(label, body, expect) {
-    const full = Object.assign({ shop: SHOP }, body);
-    const a = call(W, full);
-    const b = await app.handle(JSON.parse(JSON.stringify(full)));
+    const mk = (side) => Object.assign({ shop: SHOP }, typeof body === 'function' ? body(side) : body);
+    const a = call(W, mk('A'));
+    const b = await app.handle(JSON.parse(JSON.stringify(mk('B'))));
     const d = diff(norm(a, 'A'), norm(b, 'B'), '', []);
     const codeOk = !expect || (expect === 'ok' ? a.ok : a.code === expect);
     ok(d.length === 0 && codeOk, label + (expect && expect !== 'ok' ? ' → ' + expect : ''),
@@ -260,6 +261,182 @@ function diff(a, b, p, out) {
     .forEach(([k, , v]) => setCell('Settings', 'Key', k, 'Value', v));
   await db.query(`update shops set name = 'ร้านทดลอง', brand = jsonb_set(jsonb_set(jsonb_set(brand, '{colors,primary}', '"#aa0000"'), '{texts,pointUnit}', '"ดาว"'), '{theme}', '"luxury"') where id = $1`, [SHOP]);
   await both('หน้าตาร้าน (ชื่อ สี คำเรียกแต้ม สไตล์)', { action: 'bootstrap', idToken: tok('U1'), withBrand: true }, 'ok');
+
+  // ===================== รอบ 2: พนักงาน =====================
+  async function setStaff(id, status, role, branches) {
+    setCell('Staff', 'LINE_User_ID', id, 'Status', status);
+    setCell('Staff', 'LINE_User_ID', id, 'Role', role);
+    setCell('Staff', 'LINE_User_ID', id, 'Branches', (branches || []).join(','));
+    await db.query('update staff set status = $3, role = $4, branches = $5 where shop_id = $1 and line_user_id = $2',
+      [SHOP, id, status, role, branches && branches.length ? branches : null]);
+  }
+  async function setCoupon(codes, sheetCol, dbCol, val, dbVal) {
+    setCell('Coupons', 'Coupon_Code', codes.A, sheetCol, val);
+    await db.query(`update coupons set ${dbCol} = $3 where shop_id = $1 and code = $2`, [SHOP, codes.B, dbVal === undefined ? val : dbVal]);
+  }
+  async function setRule(id, sheetCol, dbCol, val, dbVal) {
+    setCell('Point_Rules', 'Rule_ID', id, sheetCol, val);
+    await db.query(`update point_rules set ${dbCol} = $3 where shop_id = $1 and id = $2`, [SHOP, id, dbVal === undefined ? val : dbVal]);
+  }
+  const mid = (user) => (side) => ids[user][side];
+  const S1 = tok('S1', 'แคชเชียร์ หนึ่ง');
+  const S2 = tok('S2', 'เจ้าของร้าน');
+  const buy = (user, amount, extra) => (side) => Object.assign({ action: 'addPurchase', idToken: S1, memberId: ids[user][side], amount, requestId: rid() }, extra);
+
+  console.log('\n[9] พนักงาน: ขอสิทธิ์ / อนุมัติ / บทบาท');
+  await both('เปิดหน้าพนักงานครั้งแรก → ส่งคำขอสิทธิ์ (รออนุมัติ)', { action: 'staffMe', idToken: S1 }, 'ok');
+  await both('เปิดซ้ำ → ยังรออนุมัติ (ไม่เพิ่มชื่อซ้ำ)', { action: 'staffMe', idToken: S1 }, 'ok');
+  await both('ยังไม่อนุมัติ → ค้นลูกค้าไม่ได้', { action: 'staffLookup', idToken: S1, query: '0898765432' }, 'NOT_STAFF');
+  await setStaff('S1', 'ACTIVE', 'CASHIER');
+  await both('อนุมัติแล้ว: ค่าร้าน + แต้มพิเศษวันนี้ (ยังไม่มีสาขา)', { action: 'staffMe', idToken: S1 }, 'ok');
+  await both('แคชเชียร์ปรับแต้มไม่ได้', (s) => ({ action: 'adjustPoints', idToken: S1, memberId: ids.U1[s], points: 5, reason: 'ทดสอบ', requestId: rid() }), 'NO_ROLE');
+  await both('คนที่ไม่ใช่พนักงาน', { action: 'staffRecent', idToken: tok('U1') }, 'NOT_STAFF');
+  // บทบาทสะกดผิด (เช่น BOSS) เกิดได้แค่ในชีต — ฐานข้อมูลใหม่ไม่ยอมบันทึกตั้งแต่ต้น จึงไม่ต้องเทียบ
+  await both('คนที่ 2 ขอสิทธิ์', { action: 'staffMe', idToken: tok('S9', 'x') }, 'ok');
+  await setStaff('S9', 'DISABLED', 'CASHIER');
+  await both('พนักงานที่ถูกปิด → ใช้ไม่ได้', { action: 'staffRecent', idToken: tok('S9') }, 'NOT_STAFF');
+  await both('พนักงานที่ถูกปิด → หน้าพนักงานบอกสถานะ', { action: 'staffMe', idToken: tok('S9') }, 'ok');
+
+  console.log('\n[10] ค้นลูกค้า / คูปอง');
+  await both('ค้นว่าง', { action: 'staffLookup', idToken: S1, query: '  ' }, 'BAD_QUERY');
+  await both('ค้นยาวเกิน', { action: 'staffLookup', idToken: S1, query: 'x'.repeat(41) }, 'BAD_QUERY');
+  await both('ค้นด้วยเบอร์ (เห็น 4 ตัวท้าย + คูปองที่ใช้ได้)', { action: 'staffLookup', idToken: S1, query: '089-876-5432' }, 'ok');
+  await both('ค้นด้วยเบอร์ +66', { action: 'staffLookup', idToken: S1, query: '+66898765432' }, 'ok');
+  await both('ค้นด้วยรหัสสมาชิก (ตัวเล็ก)', (s) => ({ action: 'staffLookup', idToken: S1, query: ids.U1[s].toLowerCase() }), 'ok');
+  await both('ไม่พบสมาชิก', { action: 'staffLookup', idToken: S1, query: '0800000000' }, 'NOT_FOUND');
+  const c1 = await both('U1 แลกของรางวัล (ไว้ทดสอบคูปอง)', { action: 'redeem', idToken: tok('U1'), rewardId: 'R001', requestId: rid() }, 'ok');
+  const code1 = { A: c1.a.coupon.code, B: c1.b.coupon.code };
+  await both('ค้นด้วยรหัสคูปอง', (s) => ({ action: 'staffLookup', idToken: S1, query: code1[s] }), 'ok');
+  await both('ไม่พบคูปอง', { action: 'staffLookup', idToken: S1, query: 'CP-ZZZZZZZZ' }, 'NOT_FOUND');
+
+  console.log('\n[11] บันทึกยอดซื้อ');
+  await both('รหัสสมาชิกผิดรูปแบบ', { action: 'addPurchase', idToken: S1, memberId: 'x', amount: 100, requestId: rid() }, 'BAD_MEMBER_ID');
+  await both('ยอด 0 บาท', buy('U1', 0), 'BAD_AMOUNT');
+  await both('ยอดเป็นข้อความ', buy('U1', 'abc'), 'BAD_AMOUNT');
+  await both('ยอดเกินต่อบิล', buy('U1', 20001), 'OVER_MAX');
+  await both('ไม่มีรหัสคำขอ', buy('U1', 100, { requestId: '' }), 'BAD_REQUEST_ID');
+  await both('ไม่พบสมาชิก', { action: 'addPurchase', idToken: S1, memberId: 'KW-ZZZZZZ', amount: 100, requestId: rid() }, 'NOT_FOUND');
+  await both('ยอด 1,250 + แต้มพิเศษ ×3 (กติกาที่ให้มากสุด)', buy('U1', 1250), 'ok');
+  await both('ยอด 10 บาท (ไม่ถึงเกณฑ์รับแต้ม)', buy('U1', 10), 'ok');
+  await both('ยอดทศนิยม 99.999 → ปัด 100', buy('U1', 99.999), 'ok');
+  await both('มีหมายเหตุ → ใช้หมายเหตุเป็นรายละเอียด', buy('U1', 300, { note: 'โต๊ะ 5 <b>' }), 'ok');
+  await setRule('PR001', 'Status', 'status', 'INACTIVE');
+  await setRule('PR002', 'Status', 'status', 'INACTIVE');
+  await both('ปิดแต้มพิเศษ → ยอด 1,250 ได้ 62 แต้มปกติ', buy('U1', 1250), 'ok');
+  addRow('Point_Rules', { Rule_ID: 'PR004', Name: 'ซื้อครบพันได้ 2 เท่า', Multiplier: '2', Days: '', Min_Amount: 1000, Show_Badge: 'NO', Status: 'ACTIVE', Created_At: now });
+  await db.query(`insert into point_rules (shop_id, id, name, multiplier, days, min_amount, created_at) values ($1, 'PR004', 'ซื้อครบพันได้ 2 เท่า', 2, $2, 1000, $3)`, [SHOP, U.DAY_CODES, now]);
+  await both('ยอด 999 (ไม่ถึงขั้นต่ำของแต้มพิเศษ)', buy('U1', 999), 'ok');
+  await both('ยอด 1,000 (ถึงขั้นต่ำ ×2)', buy('U1', 1000), 'ok');
+  const prq = rid();
+  await both('บันทึกยอด (เก็บรหัสคำขอไว้)', buy('U2', 500, { requestId: prq }), 'ok');
+  await both('ส่งรหัสคำขอเดิมซ้ำ → ผลเดิม ไม่บวกซ้ำ', buy('U2', 500, { requestId: prq }), 'ok');
+  await setMember('U2', 'Status', 'status', 'BLOCKED');
+  await both('สมาชิกถูกระงับ → บันทึกยอดไม่ได้', buy('U2', 100), 'MEMBER_BLOCKED');
+  await setMember('U2', 'Status', 'status', 'ACTIVE');
+  await both('เปิดหน้าลูกค้า: ประวัติซื้อ + ยอดสะสม + จำนวนครั้ง', { action: 'bootstrap', idToken: tok('U1') }, 'ok');
+
+  console.log('\n[12] ใช้คูปอง');
+  await both('รหัสคูปองผิดรูปแบบ', { action: 'useCoupon', idToken: S1, code: 'abc', requestId: rid() }, 'BAD_CODE');
+  await both('ไม่พบคูปอง', { action: 'useCoupon', idToken: S1, code: 'CP-ZZZZZZZZ', requestId: rid() }, 'NOT_FOUND');
+  const urq = rid();
+  await both('ใช้คูปอง (ตัวเล็กก็ได้)', (s) => ({ action: 'useCoupon', idToken: S1, code: code1[s].toLowerCase(), requestId: urq }), 'ok');
+  await both('ส่งรหัสคำขอเดิมซ้ำ → ผลเดิม', (s) => ({ action: 'useCoupon', idToken: S1, code: code1[s], requestId: urq }), 'ok');
+  await both('ใช้ซ้ำ → บอกเวลาที่ใช้ไปแล้ว', (s) => ({ action: 'useCoupon', idToken: S1, code: code1[s], requestId: rid() }), 'USED');
+  const c2 = await both('U1 แลกอีกใบ', { action: 'redeem', idToken: tok('U1'), rewardId: 'R001', requestId: rid() }, 'ok');
+  const code2 = { A: c2.a.coupon.code, B: c2.b.coupon.code };
+  await setCoupon(code2, 'Expires_At', 'expires_at', new Date(Date.now() - 60000));
+  await both('คูปองหมดอายุ', (s) => ({ action: 'useCoupon', idToken: S1, code: code2[s], requestId: rid() }), 'EXPIRED');
+  await both('ค้นคูปองหมดอายุ → สถานะ EXPIRED', (s) => ({ action: 'staffLookup', idToken: S1, query: code2[s] }), 'ok');
+  await setCoupon(code2, 'Status', 'status', 'CANCELLED');
+  await both('คูปองที่ยกเลิก', (s) => ({ action: 'useCoupon', idToken: S1, code: code2[s], requestId: rid() }), 'INVALID_COUPON');
+  const c3 = await both('U1 แลกอีกใบ', { action: 'redeem', idToken: tok('U1'), rewardId: 'R001', requestId: rid() }, 'ok');
+  const code3 = { A: c3.a.coupon.code, B: c3.b.coupon.code };
+  await setMember('U1', 'Status', 'status', 'BLOCKED');
+  await both('เจ้าของคูปองถูกระงับ → ใช้ไม่ได้', (s) => ({ action: 'useCoupon', idToken: S1, code: code3[s], requestId: rid() }), 'MEMBER_BLOCKED');
+  await setMember('U1', 'Status', 'status', 'ACTIVE');
+
+  console.log('\n[13] ปรับแต้ม (เจ้าของร้าน/ผู้จัดการ)');
+  await both('เจ้าของร้านเปิดหน้าพนักงาน', { action: 'staffMe', idToken: S2 }, 'ok');
+  await setStaff('S2', 'ACTIVE', 'OWNER');
+  const adj = (user, points, reason, extra) => (s) => Object.assign({ action: 'adjustPoints', idToken: S2, memberId: ids[user][s], points, reason, requestId: rid() }, extra);
+  await both('แต้ม 0', adj('U1', 0, 'ทดสอบ'), 'BAD_POINTS');
+  await both('แต้มทศนิยม', adj('U1', 1.5, 'ทดสอบ'), 'BAD_POINTS');
+  await both('แต้มเกินล้าน', adj('U1', 1000001, 'ทดสอบ'), 'BAD_POINTS');
+  await both('ไม่มีเหตุผล', adj('U1', 5, ' ab '), 'NO_REASON');
+  await both('ไม่พบสมาชิก', { action: 'adjustPoints', idToken: S2, memberId: 'KW-ZZZZZZ', points: 5, reason: 'ทดสอบ', requestId: rid() }, 'NOT_FOUND');
+  await both('ลดจนติดลบ', adj('U2', -999999, 'ทดสอบลด'), 'NEGATIVE');
+  await both('เพิ่ม 50 แต้ม', adj('U1', 50, 'ชดเชยบิลผิด'), 'ok');
+  await both('ลด 10 แต้ม', adj('U1', -10, 'แก้รายการซ้ำ'), 'ok');
+  await setMember('U2', 'Status', 'status', 'BLOCKED');
+  await both('สมาชิกถูกระงับ → ปรับแต้มได้ (เหมือนเดิม)', adj('U2', 1, 'ทดสอบระงับ'), 'ok');
+  await setMember('U2', 'Status', 'status', 'ACTIVE');
+  await both('รายการล่าสุด 15 รายการ (ชื่อลูกค้า + ชื่อพนักงาน)', { action: 'staffRecent', idToken: S1 }, 'ok');
+  await both('ค้นลูกค้าหลังมีรายการ (ยอดสะสม + มาครั้งล่าสุด)', (s) => ({ action: 'staffLookup', idToken: S1, query: ids.U1[s] }), 'ok');
+
+  console.log('\n[14] หลายสาขา');
+  for (const [id, name, st, sort] of [['B001', 'สาขาสยาม', 'ACTIVE', 1], ['B002', 'สาขาอารีย์', 'ACTIVE', 2], ['B003', 'สาขาปิด', 'INACTIVE', 3]]) {
+    addRow('Branches', { Branch_ID: id, Name: name, Status: st, Sort: sort, Created_At: now });
+    await db.query('insert into branches (shop_id, id, name, status, sort) values ($1, $2, $3, $4, $5)', [SHOP, id, name, st, sort]);
+  }
+  await setStaff('S1', 'ACTIVE', 'CASHIER', ['B001']);
+  await both('แคชเชียร์สาขาเดียว → เห็นแค่สาขาของตัวเอง', { action: 'staffMe', idToken: S1 }, 'ok');
+  await both('เจ้าของร้าน → เห็นทุกสาขาที่เปิด', { action: 'staffMe', idToken: S2 }, 'ok');
+  await both('ไม่เลือกสาขา', buy('U1', 100), 'NO_BRANCH');
+  await both('สาขาที่ไม่ได้อยู่', buy('U1', 100, { branchId: 'B002' }), 'BAD_BRANCH');
+  await both('สาขาที่ปิดแล้ว', buy('U1', 100, { branchId: 'B003' }), 'BAD_BRANCH');
+  await both('สาขาที่ไม่มีจริง', buy('U1', 100, { branchId: 'B999' }), 'BAD_BRANCH');
+  await both('บันทึกที่สาขาตัวเอง (ตัวเล็กก็ได้)', buy('U1', 200, { branchId: 'b001' }), 'ok');
+  await both('เจ้าของร้านบันทึกสาขาไหนก็ได้', (s) => ({ action: 'addPurchase', idToken: S2, memberId: ids.U2[s], amount: 300, branchId: 'B002', requestId: rid() }), 'ok');
+  await both('รายการล่าสุดเฉพาะสาขาที่เลือก', { action: 'staffRecent', idToken: S1, branchId: 'B001' }, 'ok');
+  await both('รายการล่าสุด สาขาที่ไม่ได้อยู่', { action: 'staffRecent', idToken: S1, branchId: 'B002' }, 'BAD_BRANCH');
+  await both('ปรับแต้มจากหน้าพนักงานไม่เลือกสาขา → บันทึกเป็น "หลังบ้าน"', adj('U1', 3, 'ทดสอบสาขา'), 'ok');
+  await both('ปรับแต้มเลือกสาขา', adj('U1', 2, 'ทดสอบสาขา', { branchId: 'B002' }), 'ok');
+  const c4 = await both('U1 แลกอีกใบ', { action: 'redeem', idToken: tok('U1'), rewardId: 'R001', requestId: rid() }, 'ok');
+  await both('ใช้คูปองที่สาขา', (s) => ({ action: 'useCoupon', idToken: S1, code: (s === 'A' ? c4.a : c4.b).coupon.code, branchId: 'B001', requestId: rid() }), 'ok');
+  await both('ใช้คูปองไม่เลือกสาขา', (s) => ({ action: 'useCoupon', idToken: S1, code: code3[s], requestId: rid() }), 'NO_BRANCH');
+  remember('U6', await both('ลูกค้าสมัครจาก QR สาขา B002', reg('U6', { phone: '0855555555', branch: 'b002' }), 'ok'));
+  remember('U7', await both('ลูกค้าสมัครจาก QR สาขาที่ปิด → ออนไลน์', reg('U7', { phone: '0866666666', branch: 'B003' }), 'ok'));
+  const joinedA = (u) => { const s = sheet('Members'); const h = s.data[0]; return s.data.find((r) => r[0] === ids[u].A)[h.indexOf('Joined_Branch')]; };
+  const joinedB = async (u) => (await db.query('select joined_branch from members where shop_id = $1 and id = $2', [SHOP, ids[u].B])).rows[0].joined_branch;
+  ok(joinedA('U6') === 'B002' && (await joinedB('U6')) === 'B002' && joinedA('U7') === 'ONLINE' && (await joinedB('U7')) === 'ONLINE',
+    'สาขาที่สมัคร: สองระบบบันทึกเหมือนกัน (B002 / ONLINE)');
+  await setRule('PR004', 'Branch', 'branch', 'B002');
+  await setRule('PR004', 'Show_Badge', 'show_badge', 'YES', true);
+  await both('ป้ายแต้มพิเศษเฉพาะสาขา (มีชื่อสาขา)', { action: 'bootstrap', idToken: tok('U1') }, 'ok');
+  await both('แต้มพิเศษเฉพาะสาขา: บันทึกที่สาขาอื่นไม่ได้ ×2', buy('U1', 1000, { branchId: 'B001' }), 'ok');
+
+  console.log('\n[15] ข้อมูลที่บันทึกจริงในสองระบบตรงกัน (ไม่ใช่แค่คำตอบ)');
+  const sheetRows = (n) => { const s = sheet(n); const h = s.data[0]; return s.data.slice(1).filter((r) => r[0] !== '' && r[0] != null).map((r) => Object.fromEntries(h.map((k, i) => [k, r[i] === undefined ? '' : r[i]]))); };
+  const summary = async (user) => {
+    const a = sheetRows('Members').find((r) => r.Member_ID === ids[user].A);
+    const txA = sheetRows('Transactions').filter((r) => r.Member_ID === ids[user].A);
+    const cpA = sheetRows('Coupons').filter((r) => r.Member_ID === ids[user].A);
+    const b = (await db.query('select points, total_spend::float8 as spend, visit_count, status, marketing_consent from members where shop_id = $1 and id = $2', [SHOP, ids[user].B])).rows[0];
+    const txB = (await db.query('select type, points, amount::float8 as amount, branch, staff, detail from transactions where shop_id = $1 and member_id = $2', [SHOP, ids[user].B])).rows;
+    const cpB = (await db.query('select status, used_branch from coupons where shop_id = $1 and member_id = $2', [SHOP, ids[user].B])).rows;
+    const txKey = (t) => [t.type, t.points, Number(t.amount), String(t.branch || ''), String(t.staff || ''), String(t.detail || '')].join('|');
+    return {
+      A: { points: Number(a.Points), spend: Number(a.Total_Spend), visits: Number(a.Visit_Count), status: a.Status, mk: a.Marketing_Consent === 'YES',
+        tx: txA.map((t) => txKey({ type: t.Type, points: Number(t.Points), amount: t.Amount, branch: t.Branch, staff: t.Staff, detail: t.Detail })).sort(),
+        cp: cpA.map((c) => c.Status + '|' + (c.Used_Branch || '')).sort() },
+      B: { points: b.points, spend: b.spend, visits: b.visit_count, status: b.status, mk: b.marketing_consent,
+        tx: txB.map(txKey).sort(), cp: cpB.map((c) => c.status + '|' + (c.used_branch || '')).sort() }
+    };
+  };
+  for (const user of Object.keys(ids)) {
+    const s = await summary(user);
+    const d = diff(s.A, s.B, user, []);
+    ok(d.length === 0, `${user}: แต้ม ${s.B.points} / ยอดซื้อ ${s.B.spend} / ${s.B.tx.length} รายการ / คูปอง ${s.B.cp.length} ใบ — ตรงกัน`, d.slice(0, 5));
+  }
+  const staffA = sheetRows('Staff').map((r) => [r.LINE_User_ID, r.Name, r.Role, r.Status].join('|')).sort();
+  const staffB = (await db.query('select line_user_id, name, role, status from staff where shop_id = $1', [SHOP])).rows.map((r) => [r.line_user_id, r.name, r.role, r.status].join('|')).sort();
+  ok(diff(staffA, staffB, 'staff', []).length === 0, 'รายชื่อพนักงาน + บทบาท + สถานะ ตรงกัน', { staffA, staffB });
+  const logA = sheetRows('Profile_Log').map((r) => r.Changed + '|' + r.By).sort();
+  const logB = (await db.query('select changed, by_name from profile_log where shop_id = $1', [SHOP])).rows.map((r) => r.changed + '|' + r.by_name).sort();
+  ok(diff(logA, logB, 'log', []).length === 0, 'ประวัติการแก้ข้อมูลสมาชิก ตรงกัน (' + logB.length + ' รายการ)', { logA, logB });
+  const issuedA = sheetRows('Rewards').map((r) => r.Reward_ID + ':' + Number(r.Issued)).sort();
+  const issuedB = (await db.query('select id, issued from rewards where shop_id = $1', [SHOP])).rows.map((r) => r.id + ':' + r.issued).sort();
+  ok(diff(issuedA, issuedB, 'issued', []).length === 0, 'จำนวนที่แลกไปของรางวัลแต่ละชิ้น ตรงกัน', { issuedA, issuedB });
 
   console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
   process.exit(fail ? 1 : 0);
