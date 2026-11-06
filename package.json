@@ -1,0 +1,8 @@
+{
+  "name": "line-crm",
+  "private": true,
+  "description": "LINE CRM สะสมแต้ม — หน้าเว็บเป็นไฟล์นิ่ง (ไม่ต้อง build) / โปรแกรมเสริมด้านล่างใช้เฉพาะตัวกลาง api/ บน Vercel",
+  "dependencies": {
+    "pg": "8.23.1"
+  }
+}

@@ -81,6 +81,9 @@ PORT=8104 node tools/test/gas-server.js &
 node tools/test/e2e-branches.js
 # แบบตารางฐานข้อมูลรุ่นใหม่ (db/001_schema.sql) บน PostgreSQL จำลองในเครื่อง — ติดตั้งครั้งแรก: cd tools/test && npm install
 node tools/test/db-schema-test.js
+# ตัวกลางรุ่นใหม่ (api/) + ข้อมูลร้านทดลอง (db/002_demo_seed.sql) — ติดตั้งครั้งแรกเพิ่ม: npm install (ที่โฟลเดอร์หลัก)
+node tools/test/api-test.js
+node tools/api-server.js             # ลองเองในเครื่อง: http://localhost:8105/speed.html
 ```
 
 ---

@@ -1,0 +1,130 @@
+// ตารางคำสั่งของตัวกลาง + ขั้นตอนที่ทุกคำสั่งผ่าน: อ่านคำขอ → หาร้าน → ตรวจ LINE → ทำงาน → ตอบ
+// รูปแบบคำขอ/คำตอบเหมือน doPost ใน code.gs: { action, idToken, shop, ... } → { ok: true, ... } / { ok: false, error, code }
+// ต่างจาก Apps Script ข้อเดียว: ต้องบอกร้าน (shop) มาด้วย เพราะตัวกลางตัวเดียวรับทุกร้าน (Apps Script แยกตัวต่อร้าน)
+//
+// ทุกอย่างที่ต่อโลกภายนอก (ฐานข้อมูล / LINE) รับมาทาง deps → ชุดทดสอบใส่ตัวจำลองแทนได้
+const { userError } = require('./errors');
+const { InvalidToken, cleanLineName } = require('./line');
+const speed = require('./speed');
+
+const API_VERSION = '0.1.0';
+const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/; // ตรงกับเงื่อนไขในตาราง shops
+const SHOP_TTL_MS = 60 * 1000;               // ค่าร้านจำไว้ 1 นาที (แก้ค่าร้านแล้วมีผลภายใน 1 นาที)
+
+// shop: ต้องบอกร้าน / auth: ต้องมีรหัส LINE ที่ตรวจผ่าน
+const ACTIONS = {
+  // ตัวกลางยังทำงานไหม (ไม่แตะฐานข้อมูล ไม่ต้องเข้าสู่ระบบ) — ใช้วัดเวลาเดินทางเปล่าๆ
+  ping: { shop: false, auth: false, run: actPing },
+  // ตรวจรหัส LINE อย่างเดียว — ไว้ลองการเข้าสู่ระบบบนลิงก์ทดสอบ
+  whoami: { shop: true, auth: true, run: actWhoami },
+  // วัดความเร็วขั้น 2 (ร้าน demo เท่านั้น) — ลบพร้อม speed.js และ speed.html ก่อนรวมเข้าเว็บจริง
+  speedCard: { shop: true, auth: false, run: speed.card }
+};
+
+const ms = (t0) => Math.round((performance.now() - t0) * 10) / 10;
+
+function actPing(body, ctx) {
+  return { service: 'LINE CRM', version: API_VERSION, region: ctx.region, cold: ctx.cold, ms: ms(ctx.t0) };
+}
+
+function actWhoami(body, ctx) {
+  return { userId: ctx.user.userId, name: ctx.user.name, via: ctx.via, region: ctx.region, ms: ms(ctx.t0) };
+}
+
+// deps: { db(): {query, tx}, verifier: {verify}, allowTestTokens, region }
+function createApp(deps) {
+  const shops = new Map();
+  let served = 0;
+
+  async function loadShop(id) {
+    const shopId = String(id || '');
+    if (!SHOP_ID.test(shopId)) throw userError('ไม่พบร้านนี้', 'NO_SHOP');
+    let shop;
+    const hit = shops.get(shopId);
+    if (hit && hit.until > Date.now()) {
+      shop = hit.shop;
+    } else {
+      const r = await deps.db().query(
+        'select id, name, liff_id, status, history_limit from shops where id = $1', [shopId]);
+      shop = r.rows[0];
+      if (!shop) throw userError('ไม่พบร้านนี้', 'NO_SHOP');
+      shops.set(shopId, { shop, until: Date.now() + SHOP_TTL_MS });
+    }
+    if (shop.status !== 'ACTIVE') throw userError('ร้านนี้ปิดใช้งานระบบสะสมแต้มแล้ว', 'SHOP_INACTIVE');
+    return shop;
+  }
+
+  async function requireUser(idToken, shop) {
+    const token = String(idToken || '');
+    if (!token) throw userError('กรุณาเปิดผ่าน LINE', 'NO_TOKEN');
+
+    // รหัสทดสอบ "TEST:<id>:<ชื่อ>" ใช้ได้เฉพาะเครื่องเราเอง (เปิดด้วย CRM_TEST_TOKENS=on และไม่ใช่เว็บจริง)
+    if (token.indexOf('TEST:') === 0) {
+      if (!deps.allowTestTokens) throw userError('ระบบนี้ไม่ได้เปิดโหมดทดสอบ', 'TEST_DISABLED');
+      const parts = token.split(':');
+      const userId = String(parts[1] || '');
+      if (!/^[A-Za-z0-9_-]{1,40}$/.test(userId)) throw userError('รหัสผู้ทดสอบไม่ถูกต้อง', 'TEST_DISABLED');
+      return { user: { userId, name: cleanLineName(parts.slice(2).join(':')) || 'ผู้ทดสอบ', picture: '' }, via: 'test' };
+    }
+
+    // รหัส channel ของร้าน = ตัวเลขหน้า "-" ใน LIFF ID (เหมือน Apps Script)
+    const channelId = String(shop.liff_id || '').split('-')[0];
+    if (!/^\d+$/.test(channelId)) {
+      console.error('ร้าน ' + shop.id + ' ยังไม่ได้ใส่ liff_id ในตาราง shops');
+      throw userError('ระบบของร้านยังตั้งค่าไม่ครบ กรุณาติดต่อผู้ดูแลระบบ', 'NO_LIFF');
+    }
+    try {
+      return await deps.verifier.verify(token, channelId);
+    } catch (e) {
+      if (e instanceof InvalidToken) {
+        console.warn('รหัส LINE ไม่ผ่าน: ' + e.message);
+        throw userError('การเข้าสู่ระบบ LINE หมดอายุ กรุณาปิดแล้วเปิดใหม่', 'TOKEN_INVALID');
+      }
+      throw e; // ติดต่อ LINE ไม่ได้ = ระบบขัดข้อง (ไม่ใช่รหัสเสีย → หน้าเว็บจะไม่พาเข้าสู่ระบบใหม่วนไปมา)
+    }
+  }
+
+  async function handle(raw) {
+    const t0 = performance.now();
+    const cold = served++ === 0; // คำขอแรกของเครื่องนี้ (เครื่องเพิ่งเปิด → ช้ากว่าปกติ)
+    let body;
+    try {
+      body = typeof raw === 'string' ? JSON.parse(raw || '{}') : raw;
+      if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('not object');
+    } catch (e) {
+      return { ok: false, error: 'คำขอไม่ถูกต้อง', code: 'BAD_REQUEST' };
+    }
+
+    try {
+      const action = String(body.action || '');
+      const def = Object.prototype.hasOwnProperty.call(ACTIONS, action) ? ACTIONS[action] : null;
+      if (!def) throw userError('ไม่รู้จักคำสั่งนี้', 'UNKNOWN_ACTION');
+
+      const ctx = { deps, cold, t0, region: deps.region || 'local' };
+      if (def.shop) ctx.shop = await loadShop(body.shop);
+      if (def.auth) {
+        const r = await requireUser(body.idToken, ctx.shop);
+        ctx.user = r.user;
+        ctx.via = r.via;
+      }
+
+      const result = (await def.run(body, ctx)) || {};
+      const out = { ok: true };
+      Object.keys(result).forEach(k => { out[k] = result[k]; });
+      return out;
+    } catch (err) {
+      // ข้อความที่ตั้งใจบอกผู้ใช้ → ส่งกลับตามนั้น / ข้อผิดพลาดอื่น → ไม่ส่งรายละเอียดภายในออกไป (จดลง log ของ Vercel แทน)
+      const known = err && err.userMessage;
+      if (!known) console.error(err && err.stack ? err.stack : err);
+      return {
+        ok: false,
+        error: known ? err.userMessage : 'ระบบขัดข้อง กรุณาลองใหม่อีกครั้ง',
+        code: known ? (err.code || 'INVALID') : 'ERROR'
+      };
+    }
+  }
+
+  return { handle };
+}
+
+module.exports = { createApp, API_VERSION, ACTIONS };
