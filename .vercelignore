@@ -6,3 +6,5 @@ code.gs
 *.command
 *.md
 .DS_Store
+# แบบตารางฐานข้อมูล (ใช้วางใน Supabase เอง ไม่ใช่ไฟล์ของเว็บ)
+db/

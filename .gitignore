@@ -9,3 +9,5 @@ CRM สะสมแต้ม/
 tools/test/shots/
 # ไฟล์ zip ที่ทำไว้ส่งน้อง (สร้างใหม่ได้ทุกเมื่อ ไม่ต้องเก็บใน GitHub)
 *.zip
+# โปรแกรมเสริมของชุดทดสอบ (ติดตั้งใหม่ได้ด้วย npm install ใน tools/test)
+node_modules/

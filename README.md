@@ -79,6 +79,8 @@ node tools/test/e2e-liff.js
 # หลายสาขา (ใช้ชีตจำลองแยก เพราะร้านที่มีสาขาจะบังคับพนักงานเลือกสาขา)
 PORT=8104 node tools/test/gas-server.js &
 node tools/test/e2e-branches.js
+# แบบตารางฐานข้อมูลรุ่นใหม่ (db/001_schema.sql) บน PostgreSQL จำลองในเครื่อง — ติดตั้งครั้งแรก: cd tools/test && npm install
+node tools/test/db-schema-test.js
 ```
 
 ---

@@ -1,0 +1,8 @@
+{
+  "name": "line-crm-tests",
+  "private": true,
+  "description": "โปรแกรมเสริมสำหรับชุดทดสอบเท่านั้น (ไม่ขึ้นเว็บ — tools/ อยู่ใน .vercelignore) / ติดตั้ง: cd tools/test && npm install",
+  "devDependencies": {
+    "@electric-sql/pglite": "0.2.17"
+  }
+}
