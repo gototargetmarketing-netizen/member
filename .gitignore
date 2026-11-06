@@ -11,3 +11,5 @@ tools/test/shots/
 *.zip
 # โปรแกรมเสริมของชุดทดสอบ (ติดตั้งใหม่ได้ด้วย npm install ใน tools/test)
 node_modules/
+# สิทธิ์ของ Claude Code เฉพาะเครื่องนี้ (เช่น อนุญาต push ขึ้น repo ของน้อง) — ไม่ขึ้น repo
+.claude/settings.local.json
