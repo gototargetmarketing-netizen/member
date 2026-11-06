@@ -14,12 +14,15 @@ function wrap(pg) {
   };
 }
 
-// สร้างฐานข้อมูลใหม่ในหน่วยความจำ + ตาราง (001) + ร้านทดลอง demo (002 ถ้า withDemo)
+// ไฟล์ปรับตารางตามลำดับ (เหมือนที่วางใน Supabase) — 002 เป็นข้อมูลทดลอง ไม่ใช่การปรับตาราง
+const MIGRATIONS = ['001_schema.sql', '003_delete_and_tiers.sql'];
+
+// สร้างฐานข้อมูลใหม่ในหน่วยความจำ + ตาราง (001, 003 …) + ร้านทดลอง demo (002 ถ้า withDemo)
 async function createTestDb({ withDemo = true } = {}) {
   const pg = new PGlite();
-  await pg.exec(fs.readFileSync(path.join(DB_DIR, '001_schema.sql'), 'utf8'));
+  for (const f of MIGRATIONS) await pg.exec(fs.readFileSync(path.join(DB_DIR, f), 'utf8'));
   if (withDemo) await pg.exec(fs.readFileSync(path.join(DB_DIR, '002_demo_seed.sql'), 'utf8'));
   return wrap(pg);
 }
 
-module.exports = { createTestDb, wrap, DB_DIR };
+module.exports = { createTestDb, wrap, DB_DIR, MIGRATIONS };

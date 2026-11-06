@@ -21,9 +21,9 @@ select json_build_object(
           order by created_at desc
           limit $3) t), '[]'::json),
   'rewards', coalesce((select json_agg(r order by r.sort, r.id) from rewards r
-          where r.shop_id = $1 and r.status = 'ACTIVE'), '[]'::json),
+          where r.shop_id = $1 and r.status = 'ACTIVE' and r.deleted_at is null), '[]'::json),
   'promos', coalesce((select json_agg(p order by p.sort, p.id) from promotions p, today
-          where p.shop_id = $1 and p.status = 'ACTIVE'
+          where p.shop_id = $1 and p.status = 'ACTIVE' and p.deleted_at is null
             and (p.start_date is null or p.start_date <= today.d)
             and (p.end_date is null or p.end_date >= today.d)), '[]'::json),
   'coupons', coalesce((select json_agg(c) from (
@@ -33,7 +33,7 @@ select json_build_object(
           order by issued_at desc
           limit 100) c), '[]'::json),
   'rules', coalesce((select json_agg(x) from point_rules x
-          where x.shop_id = $1 and x.status = 'ACTIVE'), '[]'::json),
+          where x.shop_id = $1 and x.status = 'ACTIVE' and x.deleted_at is null), '[]'::json),
   'branches', coalesce((select json_agg(b order by b.sort, b.id) from branches b
           where b.shop_id = $1 and b.status = 'ACTIVE'), '[]'::json)
 ) as data`;

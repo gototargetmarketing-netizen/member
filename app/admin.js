@@ -39,7 +39,7 @@ const RANGE_KEY = 'crm_admin_range';
 const BRANCH_KEY = 'crm_admin_branch';
 // ข้อความในป๊อปอัป "กำลังโหลด" ตามคำสั่ง (คำสั่งอ่านข้อมูลอื่นๆ = "กำลังโหลด...")
 const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave', 'adminMemberUpdate', 'adminRuleSave'];
-const LOADING_TEXT = { adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...' };
+const LOADING_TEXT = { adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...', adminRewardDelete: 'กำลังลบ...', adminPromoDelete: 'กำลังลบ...', adminRuleDelete: 'กำลังลบ...' };
 
 const app = document.getElementById('app');
 const S = {
@@ -48,6 +48,8 @@ const S = {
   // หลายสาขา: รายชื่อสาขาทั้งหมด (มาพร้อมคำขอแรก) + สาขาที่เลือกดูอยู่ ('' = ทุกสาขา) ใช้ร่วมกันทุกหน้า
   branches: [], branch: loadBranchFilter(),
   members: { q: '', sort: 'joined', status: '', birth: '', page: 1 },
+  // ระบบนี้ลบของรางวัล/โปรโมชัน/แต้มพิเศษได้ไหม (ระบบใหม่บอกมากับรายการ / ระบบเดิมไม่มี → ไม่แสดงปุ่มลบ)
+  canDelete: {},
   tx: { type: '', staff: '', q: '', page: 1 },
   coupons: { status: '', page: 1 },
   member: null, staffItems: [], pendingAdjust: null,
@@ -119,6 +121,8 @@ function onClick(e) {
     case 'reward-edit': openRewardEdit(id); break;
     case 'promo-edit': openPromoEdit(id); break;
     case 'rule-edit': openRuleEdit(id); break;
+    case 'item-delete': confirmDelete(el.dataset.kind, id); break;
+    case 'item-delete-confirm': doDelete(el.dataset.kind, id, el); break;
     case 'member-status': openMemberStatus(); break;
     case 'member-edit': openMemberEdit(); break;
     case 'settings-confirm': doSaveSettings(el); break;
@@ -1000,6 +1004,7 @@ function loadRewards() {
 function renderRewards(r) {
   S.rewards = r.items;
   S.couponDays = r.couponDays;
+  S.canDelete.reward = !!r.canDelete;
   document.getElementById('view').innerHTML = `
     ${pageHead('ของรางวัล', `ลูกค้าเห็นอยู่ ${fmtNum(r.items.filter(x => x.state === 'ACTIVE').length)} จาก ${fmtNum(r.items.length)} รายการ`,
       `<button class="btn btn-sm btn-primary" data-act="reward-edit" data-id="">+ เพิ่มของรางวัล</button>`)}
@@ -1019,7 +1024,9 @@ function renderRewards(r) {
           </tr>`).join('') : emptyRow(8, 'ยังไม่มีของรางวัล กด "เพิ่มของรางวัล" ได้เลย')}
         </tbody></table></div>
     </section>
-    <p class="muted small">ของรางวัลที่ไม่ใช้แล้วให้กดแก้ไขแล้วเลือก "ปิด" (ไม่ลบ เพราะคูปองที่ลูกค้าแลกไปแล้วยังอ้างถึงอยู่)</p>`;
+    <p class="muted small">${S.canDelete.reward
+      ? 'ของรางวัลที่ไม่ใช้แล้ว กดแก้ไข → ลบ (คูปองที่ลูกค้าแลกไปแล้วยังใช้ที่ร้านได้ตามปกติ) · ถ้าแค่พักไว้ชั่วคราว เลือก "ปิด" แทน'
+      : 'ของรางวัลที่ไม่ใช้แล้วให้กดแก้ไขแล้วเลือก "ปิด" (ไม่ลบ เพราะคูปองที่ลูกค้าแลกไปแล้วยังอ้างถึงอยู่)'}</p>`;
 }
 
 function openRewardEdit(id) {
@@ -1057,6 +1064,7 @@ function openRewardEdit(id) {
         <button class="btn" type="button" data-act="close">ยกเลิก</button>
         <button class="btn btn-primary" type="submit">บันทึก</button>
       </div>
+      ${deleteButton('reward', x)}
     </form>`);
 }
 
@@ -1231,6 +1239,7 @@ function loadPromos() {
 
 function renderPromos(r) {
   S.promos = r.items;
+  S.canDelete.promo = !!r.canDelete;
   document.getElementById('view').innerHTML = `
     ${pageHead('โปรโมชัน', `แบนเนอร์หน้าแรกของลูกค้า · แสดงอยู่ ${fmtNum(r.items.filter(x => x.state === 'ACTIVE').length)} จาก ${fmtNum(r.items.length)} รายการ`,
       `<button class="btn btn-sm btn-primary" data-act="promo-edit" data-id="">+ เพิ่มโปรโมชัน</button>`)}
@@ -1275,6 +1284,7 @@ function openPromoEdit(id) {
         <button class="btn" type="button" data-act="close">ยกเลิก</button>
         <button class="btn btn-primary" type="submit">บันทึก</button>
       </div>
+      ${deleteButton('promo', x)}
     </form>`);
 }
 
@@ -1310,6 +1320,7 @@ const daysHtml = on => `<div class="days">${DAYS.map(([k, t]) => `<span class="$
 
 function renderRules(r) {
   S.rules = r.items;
+  S.canDelete.rule = !!r.canDelete;
   const owner = isOwner();
   document.getElementById('view').innerHTML = `
     ${pageHead('แต้มพิเศษ', 'กติกาให้แต้มเพิ่ม ระบบคิดให้เองตอนพนักงานบันทึกยอด · ตรงหลายกติกาพร้อมกัน ใช้อันที่ให้แต้มมากสุดอันเดียว',
@@ -1328,7 +1339,7 @@ function renderRules(r) {
           <td class="actions">${owner ? `<button class="btn btn-sm" data-act="rule-edit" data-id="${esc(x.id)}">${icon('edit', 16)} แก้ไข</button>` : ''}</td>
         </tr>`).join('') : emptyRow(8, owner ? 'ยังไม่มีกติกา กด "เพิ่มกติกา" เช่น แต้ม x2 ทุกวันพุธ' : 'ยังไม่มีกติกา')}
       </tbody></table></div></section>
-    <p class="muted small">ตัวอย่าง: บิลที่ปกติได้ 20 ${esc(unit())} วันที่มีกติกา ×2 จะได้ 40 (คูณจาก${esc(unit())}ปกติแล้วปัดเศษลง) · กติกาที่ไม่ใช้แล้ว กดแก้ไขแล้วเลือก "ปิด"${owner ? '' : ' · เจ้าของร้านเป็นคนตั้งกติกา'}</p>`;
+    <p class="muted small">ตัวอย่าง: บิลที่ปกติได้ 20 ${esc(unit())} วันที่มีกติกา ×2 จะได้ 40 (คูณจาก${esc(unit())}ปกติแล้วปัดเศษลง) · กติกาที่ไม่ใช้แล้ว กดแก้ไข${S.canDelete.rule ? ' → ลบ (แต้มที่ลูกค้าได้ไปแล้วไม่เปลี่ยน)' : 'แล้วเลือก "ปิด"'}${owner ? '' : ' · เจ้าของร้านเป็นคนตั้งกติกา'}</p>`;
 }
 
 function openRuleEdit(id) {
@@ -1357,6 +1368,7 @@ function openRuleEdit(id) {
         <button class="btn" type="button" data-act="close">ยกเลิก</button>
         <button class="btn btn-primary" type="submit">บันทึก</button>
       </div>
+      ${deleteButton('rule', x)}
     </form>`);
 }
 
@@ -1377,6 +1389,54 @@ async function saveRule(form) {
     closeModal();
     toast(`${r.created ? 'เพิ่ม' : 'บันทึก'} "${r.rule.name}" แล้ว · ${(RULE_STATE[r.rule.state] || [])[1] || ''}`, 'ok');
     loadRules();
+  } catch (e) {
+    setBusy(btn, false);
+    toast(e.message, 'err');
+  }
+}
+
+/* =====================================================
+ * ลบ ของรางวัล / โปรโมชัน / แต้มพิเศษ (ผู้ใช้ขอ 7 พ.ย. 2569 — มีเฉพาะระบบใหม่)
+ * ลบแล้วหายจากทุกหน้า แต่ประวัติยังอยู่: คูปองที่แลกไปแล้วใช้ได้ต่อ / แต้มที่ได้ไปแล้วไม่เปลี่ยน
+ * ===================================================== */
+const DELETE_KIND = {
+  reward: { action: 'adminRewardDelete', label: 'ของรางวัล', list: () => S.rewards, name: x => x.name, after: 'คูปองที่ลูกค้าแลกไปแล้วยังใช้ที่ร้านได้ตามปกติ', reload: () => loadRewards() },
+  promo: { action: 'adminPromoDelete', label: 'โปรโมชัน', list: () => S.promos, name: x => x.title, after: 'ลูกค้าจะไม่เห็นแบนเนอร์นี้อีก', reload: () => loadPromos() },
+  rule: { action: 'adminRuleDelete', label: 'กติกาแต้มพิเศษ', list: () => S.rules, name: x => x.name, after: 'บิลถัดไปจะไม่ได้แต้มพิเศษจากกติกานี้ · แต้มที่ลูกค้าได้ไปแล้วไม่เปลี่ยน', reload: () => loadRules() }
+};
+
+function deleteButton(kind, x) {
+  if (!x || !S.canDelete[kind]) return '';
+  return `<div class="modal-delete"><button type="button" class="link link-danger" data-act="item-delete" data-kind="${kind}" data-id="${esc(x.id)}">${icon('x', 14)} ลบ${esc(DELETE_KIND[kind].label)}นี้</button></div>`;
+}
+
+function confirmDelete(kind, id) {
+  const k = DELETE_KIND[kind];
+  const x = k && (k.list() || []).find(r => r.id === id);
+  if (!x) return;
+  openModal(`
+    <div class="modal-head"><h2>ลบ${esc(k.label)}?</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <p><b>${esc(k.name(x))}</b></p>
+    <ul class="muted small">
+      <li>หายจากหลังบ้านและหน้าลูกค้าทันที</li>
+      <li>${esc(k.after)}</li>
+      <li>ลบแล้วกู้คืนเองไม่ได้ (ถ้าแค่พักไว้ ให้กดแก้ไขแล้วเลือก "ปิด" แทน)</li>
+    </ul>
+    <div class="modal-actions">
+      <button class="btn" type="button" data-act="close">ยกเลิก</button>
+      <button class="btn btn-danger" type="button" data-act="item-delete-confirm" data-kind="${kind}" data-id="${esc(id)}">ลบ</button>
+    </div>`);
+}
+
+async function doDelete(kind, id, btn) {
+  const k = DELETE_KIND[kind];
+  if (!k) return;
+  setBusy(btn, true);
+  try {
+    const r = await withRequestId('delete|' + kind + '|' + id, rid => S.api.call(k.action, { id, requestId: rid }));
+    closeModal();
+    toast(`ลบ "${r.name}" แล้ว`, 'ok');
+    k.reload();
   } catch (e) {
     setBusy(btn, false);
     toast(e.message, 'err');

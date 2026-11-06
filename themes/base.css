@@ -731,3 +731,7 @@ input.input-err { border-color: var(--danger); }
   .setting-row { flex-direction: column; align-items: stretch; gap: 8px; }
   .setting-input input { flex: 1; width: auto; }
 }
+
+/* ปุ่มลบในหน้าต่างแก้ไข (หลังบ้าน) — แยกจากปุ่มบันทึก กันกดพลาด */
+.modal-delete { text-align: center; margin-top: 14px; }
+.link-danger { color: var(--danger); }

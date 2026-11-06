@@ -23,15 +23,15 @@ select json_build_object(
       select ${V.COUPON_COLS} from coupons where shop_id = $1 and member_id = (select id from m)
       order by issued_at desc limit 200) c), '[]'::json),
   'rewards', coalesce((select json_agg(r) from (
-      select ${V.REWARD_COLS} from rewards where shop_id = $1 and status = 'ACTIVE' order by sort, id) r), '[]'::json),
+      select ${V.REWARD_COLS} from rewards where shop_id = $1 and status = 'ACTIVE' and deleted_at is null order by sort, id) r), '[]'::json),
   'promos', coalesce((select json_agg(p) from (
       select id, title, subtitle, tag, image, link, to_char(start_date, 'YYYY-MM-DD') as start_date,
              to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status
-      from promotions where shop_id = $1 and status = 'ACTIVE' order by sort, id) p), '[]'::json),
+      from promotions where shop_id = $1 and status = 'ACTIVE' and deleted_at is null order by sort, id) p), '[]'::json),
   'rules', coalesce((select json_agg(x) from (
       select id, name, multiplier, days, to_char(start_date, 'YYYY-MM-DD') as start_date,
              to_char(end_date, 'YYYY-MM-DD') as end_date, branch, min_amount, show_badge, status
-      from point_rules where shop_id = $1 and status = 'ACTIVE') x), '[]'::json),
+      from point_rules where shop_id = $1 and status = 'ACTIVE' and deleted_at is null) x), '[]'::json),
   'branches', coalesce((select json_agg(b) from (
       select id, name, status, sort from branches where shop_id = $1 order by sort, id) b), '[]'::json),
   'birthLog', coalesce((select json_agg(l) from (
@@ -205,7 +205,7 @@ async function redeem(p, ctx) {
     M.assertActiveMember(m);
 
     const now = ctx.now;
-    const reward = (await q.query(`select ${V.REWARD_COLS} from rewards where shop_id = $1 and id = $2 for update`, [shopId, rewardId])).rows[0];
+    const reward = (await q.query(`select ${V.REWARD_COLS} from rewards where shop_id = $1 and id = $2 and deleted_at is null for update`, [shopId, rewardId])).rows[0];
     if (!reward || U.upper(reward.status) !== 'ACTIVE' || !U.inWindow(reward.start_date, reward.end_date, now) ||
         U.upper(reward.type) === V.REWARD_BIRTHDAY) {
       throw userError('รางวัลนี้ไม่พร้อมให้แลกแล้ว', 'REWARD_UNAVAILABLE');
@@ -248,9 +248,9 @@ async function claimBirthday(p, ctx) {
                                 order by issued_at desc limit 1`, [shopId, m.id, year])).rows[0];
     if (got) return { already: true, coupon: V.publicCoupon(got, now) };
 
-    const list = (await q.query(`select ${V.REWARD_COLS} from rewards where shop_id = $1 and status = 'ACTIVE' and type = 'BIRTHDAY'`, [shopId])).rows;
+    const list = (await q.query(`select ${V.REWARD_COLS} from rewards where shop_id = $1 and status = 'ACTIVE' and type = 'BIRTHDAY' and deleted_at is null`, [shopId])).rows;
     const pick = birthdayReward(list, now);
-    const reward = pick && (await q.query(`select ${V.REWARD_COLS} from rewards where shop_id = $1 and id = $2 for update`, [shopId, pick.id])).rows[0];
+    const reward = pick && (await q.query(`select ${V.REWARD_COLS} from rewards where shop_id = $1 and id = $2 and deleted_at is null for update`, [shopId, pick.id])).rows[0];
     // ตรวจโควตาซ้ำหลังจองแถว (อีกคนอาจเพิ่งรับชิ้นสุดท้ายไป)
     if (!reward || !birthdayReward([reward], now)) throw userError('ตอนนี้ร้านยังไม่มีของขวัญวันเกิด', 'REWARD_UNAVAILABLE');
     const cost = U.toInt(reward.points);

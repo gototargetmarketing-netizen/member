@@ -95,7 +95,13 @@ function diff(a, b, p, out) {
     const mk = (side) => Object.assign({ shop: SHOP }, typeof body === 'function' ? body(side) : body);
     const a = call(W, mk('A'));
     const b = await app.handle(JSON.parse(JSON.stringify(mk('B'))));
-    const fix = (o, side) => (tweak && o && o.ok ? tweak(JSON.parse(JSON.stringify(o)), side) : o);
+    // canDelete = ระบบใหม่บอกหน้าเว็บว่าลบได้ (ระบบเดิมไม่มีปุ่มลบโดยตั้งใจ) → ไม่นับเป็นความต่าง
+    const fix = (o, side) => {
+      if (!o || !o.ok) return o;
+      o = JSON.parse(JSON.stringify(o));
+      delete o.canDelete;
+      return tweak ? tweak(o, side) : o;
+    };
     const d = diff(norm(fix(a, 'A'), 'A'), norm(fix(b, 'B'), 'B'), '', []);
     const codeOk = !expect || (expect === 'ok' ? a.ok : a.code === expect);
     ok(d.length === 0 && codeOk, label + (expect && expect !== 'ok' ? ' → ' + expect : ''),

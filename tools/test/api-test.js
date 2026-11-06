@@ -12,6 +12,7 @@ const { createApp } = require(path.join(ROOT, 'api', '_lib', 'router.js'));
 const { createVerifier, ISSUER } = require(path.join(ROOT, 'api', '_lib', 'line.js'));
 const { connectionConfig } = require(path.join(ROOT, 'api', '_lib', 'db.js'));
 const indexHandler = require(path.join(ROOT, 'api', 'index.js'));
+const U = require(path.join(ROOT, 'api', '_lib', 'util.js'));
 
 let pass = 0, fail = 0;
 const ok = (c, m, x) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ ' + m + (x !== undefined ? '  → ' + JSON.stringify(x).slice(0, 300) : '')); } };
@@ -336,6 +337,75 @@ function fakeLine() {
   r = await badApp.handle({ action: 'adminUploadImage', shop: 'demo', idToken: 'TEST:U_DEMO_OWNER:เจ้าของ', mime: 'image/png', data: PNG });
   console.error = ce3;
   ok(!r.ok && r.code === 'STORAGE_ERROR' && /ติดต่อผู้ดูแลระบบ/.test(r.error) && !/supabase|ECONN/i.test(JSON.stringify(r)), 'ที่เก็บรูปล่ม → ข้อความกลางๆ ไม่บอกว่ารูปเก็บที่ไหน', r);
+
+  console.log('\n[5.6] ลบ ของรางวัล / โปรโมชัน / แต้มพิเศษ (ซ่อน แต่ประวัติยังอยู่)');
+  {
+    const da = createApp({ db: () => db, verifier: createVerifier({ fetch: fakeLine().fetch }), allowTestTokens: true, region: 'test' });
+    const OW = 'TEST:U_DEMO_OWNER:เจ้าของ';
+    const CA = 'TEST:U_DEMO_CASHIER:แคชเชียร์';
+    await db.query(`insert into staff (shop_id, line_user_id, name, role, status) values ('demo', 'U_DEMO_ADMIN', 'ผู้จัดการ', 'ADMIN', 'ACTIVE') on conflict do nothing`);
+    const AD = 'TEST:U_DEMO_ADMIN:ผู้จัดการ';
+    const call = (body, tok) => da.handle(Object.assign({ shop: 'demo', idToken: tok || OW, requestId: crypto.randomUUID() }, body));
+    // ปิดบันทึกของระบบ (เช่น "ลบของรางวัล ...") แต่ยังแสดงผลทดสอบ ✓ ✗
+    const log = console.log; console.log = (...a) => { if (/^  [✓✗]/.test(String(a[0]))) log(...a); };
+    try {
+      r = await call({ action: 'adminRewards' });
+      ok(r.ok && r.canDelete === true && r.items.some((x) => x.id === 'R002'), 'รายการของรางวัลบอกหน้าเว็บว่าลบได้ (ระบบเดิมไม่มี → ไม่มีปุ่ม)');
+      // ลูกค้าแลก R002 ไว้ก่อน แล้วค่อยลบ → คูปองต้องใช้ได้ต่อ
+      const red = await call({ action: 'redeem', rewardId: 'R002' }, 'TEST:U_DEMO_3:ลูกค้า');
+      ok(red.ok && red.coupon && red.coupon.code, 'ลูกค้าแลก R002 ได้คูปองก่อนลบ', red);
+      r = await call({ action: 'adminRewardDelete', id: 'R002' }, CA);
+      ok(!r.ok && r.code === 'NO_ROLE', 'แคชเชียร์ลบไม่ได้', r);
+      r = await call({ action: 'adminRewardDelete', id: 'R002' }, AD);
+      ok(r.ok && r.deleted === 'R002' && r.name === 'ของหวาน 1 ที่', 'ผู้จัดการลบของรางวัลได้ (เหมือนสิทธิ์แก้)', r);
+      r = await call({ action: 'adminRewardDelete', id: 'R002' }, AD);
+      ok(r.ok, 'ลบซ้ำ (กดสองครั้ง) → สำเร็จเหมือนเดิม ไม่ error');
+      r = await call({ action: 'adminRewardDelete', id: 'R404' });
+      ok(!r.ok && r.code === 'NOT_FOUND', 'ลบสิ่งที่ไม่มี → NOT_FOUND');
+      r = await call({ action: 'adminRewardDelete', id: '../x' });
+      ok(!r.ok && r.code === 'BAD_KEY', 'รหัสผิดรูปแบบ → BAD_KEY');
+      r = await call({ action: 'adminRewards' });
+      ok(r.ok && !r.items.some((x) => x.id === 'R002'), 'หลังบ้านไม่เห็นของรางวัลที่ลบ');
+      r = await call({ action: 'bootstrap' }, 'TEST:U_DEMO_3:ลูกค้า');
+      ok(r.ok && !r.rewards.some((x) => x.id === 'R002') && r.coupons.some((c) => c.code === red.coupon.code && c.status === 'ACTIVE'),
+        'ลูกค้าไม่เห็นของรางวัลที่ลบ แต่คูปองที่แลกไว้ยังอยู่และใช้ได้');
+      r = await call({ action: 'redeem', rewardId: 'R002' }, 'TEST:U_DEMO_3:ลูกค้า');
+      ok(!r.ok && r.code === 'REWARD_UNAVAILABLE', 'แลกของรางวัลที่ลบไม่ได้ (ส่งรหัสมาเองก็ไม่ได้)', r);
+      r = await call({ action: 'useCoupon', code: red.coupon.code, branchId: 'B01' });
+      ok(r.ok && r.coupon.status === 'USED', 'พนักงานสแกนใช้คูปองของรางวัลที่ลบไปแล้วได้ตามปกติ', r);
+      r = await call({ action: 'adminRewardSave', reward: { id: 'R002', name: 'แก้', points: 1, status: 'ACTIVE' } });
+      ok(!r.ok && r.code === 'NOT_FOUND', 'แก้ของรางวัลที่ลบแล้วไม่ได้', r);
+      r = await call({ action: 'adminRewardSave', reward: { name: 'ของใหม่', points: 50, status: 'ACTIVE' } });
+      ok(r.ok && r.reward.id === 'R009', 'เพิ่มของรางวัลใหม่ได้รหัส R009 (ไม่เอารหัสที่ลบไปใช้ซ้ำ)', r.reward && r.reward.id);
+
+      r = await call({ action: 'adminPromoDelete', id: 'P002' }, CA);
+      ok(!r.ok && r.code === 'NO_ROLE', 'แคชเชียร์ลบโปรโมชันไม่ได้');
+      r = await call({ action: 'adminPromoDelete', id: 'P002' });
+      ok(r.ok && r.name === 'วันพุธแต้ม 2 เท่า', 'ลบโปรโมชัน', r);
+      r = await call({ action: 'adminPromos' });
+      ok(r.ok && r.canDelete === true && !r.items.some((x) => x.id === 'P002'), 'หลังบ้านไม่เห็นโปรโมชันที่ลบ');
+      r = await call({ action: 'bootstrap' }, 'TEST:U_DEMO_3:ลูกค้า');
+      ok(!r.promos.some((x) => x.id === 'P002'), 'ลูกค้าไม่เห็นโปรโมชันที่ลบ');
+
+      // กติกาแต้มพิเศษ: ทำให้มีผลทุกวัน แล้วลบ → บิลถัดไปไม่ได้ ×2
+      await db.query(`update point_rules set days = $1, branch = '' where shop_id = 'demo' and id = 'PR001'`, [U.DAY_CODES]);
+      const buy = async () => (await call({ action: 'addPurchase', memberId: 'DM-000005', amount: 200, branchId: 'B02' })).pointsAdded;
+      ok((await buy()) === 20, 'ก่อนลบ: ยอด 200 ได้ 20 แต้ม (×2)');
+      r = await call({ action: 'adminRuleDelete', id: 'PR001' }, AD);
+      ok(!r.ok && r.code === 'NO_ROLE', 'ผู้จัดการลบแต้มพิเศษไม่ได้ (แก้ก็ไม่ได้)', r);
+      r = await call({ action: 'adminRuleDelete', id: 'PR001' });
+      ok(r.ok, 'เจ้าของร้านลบแต้มพิเศษ');
+      ok((await buy()) === 10, 'หลังลบ: ยอด 200 ได้ 10 แต้มปกติ');
+      r = await call({ action: 'adminRules' });
+      ok(r.ok && r.canDelete === true && !r.items.some((x) => x.id === 'PR001'), 'หลังบ้านไม่เห็นกติกาที่ลบ');
+      r = await call({ action: 'staffMe' });
+      ok(r.ok && !r.rules.some((x) => x.id === 'PR001'), 'หน้าพนักงานไม่เห็นกติกาที่ลบ');
+      const kept = (await db.query(`select count(*)::int n from transactions where shop_id = 'demo' and ref = 'PR001'`)).rows[0].n;
+      ok(kept >= 1, 'ประวัติแต้มที่ได้จากกติกานี้ยังอยู่ครบ (' + kept + ' รายการ)');
+    } finally {
+      console.log = log;
+    }
+  }
 
   console.log('\n[6] ข้อความถึงผู้ใช้');
   // ทุกไฟล์ใน api/ (ไฟล์ใหม่ถูกตรวจเองโดยไม่ต้องเพิ่มชื่อ)

@@ -642,11 +642,11 @@ function adminPromo(r, now) {
 const bySortId = (a, b) => (a.sort - b.sort) || (a.id < b.id ? -1 : 1);
 
 async function adminRewards(p, ctx) {
-  const rows = (await ctx.db.query(`select ${V.REWARD_COLS} from rewards where shop_id = $1`, [ctx.shop.id])).rows;
-  return { items: rows.map((r) => adminReward(r, ctx.now)).sort(bySortId), couponDays: cfg(ctx.shop).couponDays };
+  const rows = (await ctx.db.query(`select ${V.REWARD_COLS} from rewards where shop_id = $1 and deleted_at is null`, [ctx.shop.id])).rows;
+  return { items: rows.map((r) => adminReward(r, ctx.now)).sort(bySortId), couponDays: cfg(ctx.shop).couponDays, canDelete: true };
 }
 
-// เพิ่ม (ไม่มี id) หรือแก้ — ไม่ลบ เพราะคูปองที่แลกไปแล้วยังอ้างถึงอยู่ (ใช้ "ปิด" แทน)
+// เพิ่ม (ไม่มี id) หรือแก้ — ลบใช้ adminRewardDelete (ซ่อน แต่แถวยังอยู่ เพราะคูปองที่แลกไปแล้วอ้างถึง)
 async function adminRewardSave(p, ctx) {
   const r = p.reward || {};
   const id = r.id ? U.cleanKey(r.id, 'รหัสรางวัล') : '';
@@ -671,7 +671,7 @@ async function adminRewardSave(p, ctx) {
 
   return once(ctx, 'rewardSave', p.requestId, async (q) => {
     if (id) {
-      const cur = (await q.query('select issued from rewards where shop_id = $1 and id = $2 for update', [shopId, id])).rows[0];
+      const cur = (await q.query('select issued from rewards where shop_id = $1 and id = $2 and deleted_at is null for update', [shopId, id])).rows[0];
       if (!cur) throw userError('ไม่พบของรางวัลนี้', 'NOT_FOUND');
       if (f.quota != null && f.quota < U.toInt(cur.issued)) {
         throw userError('จำนวนทั้งหมดต้องไม่น้อยกว่าที่แลกไปแล้ว (' + U.fmtNum(U.toInt(cur.issued)) + ')', 'BAD_QUOTA');
@@ -688,8 +688,8 @@ async function adminRewardSave(p, ctx) {
 }
 
 async function adminPromos(p, ctx) {
-  const rows = (await ctx.db.query(`select ${PROMO_COLS} from promotions where shop_id = $1`, [ctx.shop.id])).rows;
-  return { items: rows.map((r) => adminPromo(r, ctx.now)).sort(bySortId) };
+  const rows = (await ctx.db.query(`select ${PROMO_COLS} from promotions where shop_id = $1 and deleted_at is null`, [ctx.shop.id])).rows;
+  return { items: rows.map((r) => adminPromo(r, ctx.now)).sort(bySortId), canDelete: true };
 }
 
 async function adminPromoSave(p, ctx) {
@@ -711,7 +711,7 @@ async function adminPromoSave(p, ctx) {
 
   return once(ctx, 'promoSave', p.requestId, async (q) => {
     if (id) {
-      const cur = (await q.query('select 1 from promotions where shop_id = $1 and id = $2 for update', [shopId, id])).rows[0];
+      const cur = (await q.query('select 1 from promotions where shop_id = $1 and id = $2 and deleted_at is null for update', [shopId, id])).rows[0];
       if (!cur) throw userError('ไม่พบโปรโมชันนี้', 'NOT_FOUND');
       await q.query(`update promotions set ${cols.map((c, i) => c + ' = $' + (i + 3)).join(', ')} where shop_id = $1 and id = $2`,
         [shopId, id].concat(cols.map((c) => f[c])));
@@ -921,7 +921,7 @@ function adminRule(r, now, names) {
 
 async function adminRules(p, ctx) {
   const names = V.branchNames(await S.branchList(ctx.db, ctx.shop.id));
-  return { items: (await S.loadRules(ctx.db, ctx.shop.id)).map((r) => adminRule(r, ctx.now, names)) };
+  return { items: (await S.loadRules(ctx.db, ctx.shop.id)).map((r) => adminRule(r, ctx.now, names)), canDelete: true };
 }
 
 async function adminRuleSave(p, ctx) {
@@ -954,7 +954,7 @@ async function adminRuleSave(p, ctx) {
   return once(ctx, 'ruleSave', p.requestId, async (q) => {
     let ruleId = id;
     if (id) {
-      const cur = (await q.query('select 1 from point_rules where shop_id = $1 and id = $2 for update', [shopId, id])).rows[0];
+      const cur = (await q.query('select 1 from point_rules where shop_id = $1 and id = $2 and deleted_at is null for update', [shopId, id])).rows[0];
       if (!cur) throw userError('ไม่พบกติกานี้', 'NOT_FOUND');
       await q.query(`update point_rules set ${cols.map((c, i) => c + ' = $' + (i + 3)).join(', ')} where shop_id = $1 and id = $2`,
         [shopId, id].concat(cols.map((c) => f[c])));
@@ -969,9 +969,37 @@ async function adminRuleSave(p, ctx) {
   });
 }
 
+// ---------- ลบ ของรางวัล / โปรโมชัน / แต้มพิเศษ (ผู้ใช้ขอ 7 พ.ย. 2569) ----------
+// "ลบ" = จดเวลาที่ลบ + ปิด แล้วซ่อนจากทุกหน้า แต่แถวยังอยู่:
+// คูปองที่ลูกค้าแลกไปแล้วยังใช้ที่ร้านได้ / ประวัติแต้มเดิมยังอ่านได้ / รหัสไม่ถูกเอากลับมาใช้ซ้ำ (nextId นับรวมแถวที่ลบ)
+// ลบซ้ำ (กดสองครั้ง / เน็ตหลุดแล้วส่งใหม่) = สำเร็จเหมือนเดิม
+const DELETABLE = {
+  reward: { table: 'rewards', label: 'ของรางวัล', nameCol: 'name' },
+  promo: { table: 'promotions', label: 'โปรโมชัน', nameCol: 'title' },
+  rule: { table: 'point_rules', label: 'กติกาแต้มพิเศษ', nameCol: 'name' }
+};
+
+function deleter(kind) {
+  const d = DELETABLE[kind];
+  return async function (p, ctx) {
+    const id = U.cleanKey(p.id, 'รหัส' + d.label);
+    const shopId = ctx.shop.id;
+    return ctx.db.tx(async (q) => {
+      const row = (await q.query(`select ${d.nameCol} as name, deleted_at from ${d.table} where shop_id = $1 and id = $2 for update`, [shopId, id])).rows[0];
+      if (!row) throw userError('ไม่พบ' + d.label + 'นี้', 'NOT_FOUND');
+      if (!row.deleted_at) {
+        await q.query(`update ${d.table} set deleted_at = $3, status = 'INACTIVE' where shop_id = $1 and id = $2`, [shopId, id, ctx.now]);
+        console.log('ลบ' + d.label + ' ' + id + ' ' + row.name + ' ร้าน ' + shopId + ' โดย ' + ctx.staff.name);
+      }
+      return { deleted: id, name: String(row.name || '') };
+    });
+  };
+}
+
 module.exports = {
   adminMe, adminDashboard, adminMembers, adminMember: adminMemberDetail, adminTransactions, adminCoupons, adminStaff, adminStaffUpdate,
   adminExport, adminRewards, adminRewardSave, adminPromos, adminPromoSave, adminMemberStatus, adminMemberUpdate,
   adminSettings, adminSettingsSave, adminUploadImage, adminBrand, adminBrandSave, adminBranches, adminBranchSave, adminRules, adminRuleSave,
+  adminRewardDelete: deleter('reward'), adminPromoDelete: deleter('promo'), adminRuleDelete: deleter('rule'),
   looksLikeImage
 };

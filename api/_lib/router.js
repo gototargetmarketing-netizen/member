@@ -70,7 +70,11 @@ const ACTIONS = {
   adminBranches: { shop: true, auth: true, roles: MANAGERS, run: admin.adminBranches },
   adminBranchSave: { shop: true, auth: true, roles: OWNER, run: admin.adminBranchSave },
   adminRules: { shop: true, auth: true, roles: MANAGERS, run: admin.adminRules },
-  adminRuleSave: { shop: true, auth: true, roles: OWNER, run: admin.adminRuleSave }
+  adminRuleSave: { shop: true, auth: true, roles: OWNER, run: admin.adminRuleSave },
+  // ลบ (7 พ.ย. 2569): ใครแก้ได้ = ลบได้ (ของรางวัล/โปรโมชัน: เจ้าของร้าน+ผู้จัดการ / แต้มพิเศษ: เจ้าของร้าน)
+  adminRewardDelete: { shop: true, auth: true, roles: MANAGERS, run: admin.adminRewardDelete },
+  adminPromoDelete: { shop: true, auth: true, roles: MANAGERS, run: admin.adminPromoDelete },
+  adminRuleDelete: { shop: true, auth: true, roles: OWNER, run: admin.adminRuleDelete }
 };
 
 const ms = (t0) => Math.round((performance.now() - t0) * 10) / 10;

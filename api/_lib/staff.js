@@ -14,7 +14,7 @@ const MANAGERS = ['OWNER', 'ADMIN'];
 
 const RULES_SQL = `select id, name, multiplier, days, to_char(start_date, 'YYYY-MM-DD') as start_date,
   to_char(end_date, 'YYYY-MM-DD') as end_date, branch, min_amount::float8 as min_amount, show_badge, status
-  from point_rules where shop_id = $1 order by created_at, id`;
+  from point_rules where shop_id = $1 and deleted_at is null order by created_at, id`;
 
 // ---------- สาขา ----------
 // ทุกสาขาของร้าน (รวมที่ปิดแล้ว) เรียงตามลำดับที่ร้านตั้ง
