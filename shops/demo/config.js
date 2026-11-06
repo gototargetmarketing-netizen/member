@@ -4,7 +4,9 @@ export default {
   name: 'Demo Café',
   logoText: 'D',
   logo: '',
-  liffId: '',
+  // ช่อง LINE "Go To Target Demo" (ผู้ใช้เลือกแบบ A 6 พ.ย. 2569) — LIFF endpoint ชี้ลิงก์ทดสอบสาขา dev
+  // (member-git-dev-go-to-target.vercel.app/demo) ถ้าจะใช้ร้าน demo บนเว็บจริง ต้องเปลี่ยน endpoint หรือเพิ่ม LIFF อีกตัว
+  liffId: '2012434511-bQt38UpF',
   // ระบบใหม่ (ฐานข้อมูลจริง ขั้น 3): ร้าน demo ใช้ก่อน ร้านคำหวานยังใช้ระบบเดิมจนถึงขั้น 6
   // '/api' = ตัวกลางบนโดเมนเดียวกับหน้าเว็บ (ไม่ต้องตั้งค่าเรียกข้ามเว็บ)
   apiUrl: '/api',

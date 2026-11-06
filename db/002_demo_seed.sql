@@ -38,9 +38,9 @@ delete from shops        where id = 'demo';
 
 select setseed(0.42);  -- ตัวเลขสุ่มชุดเดิมทุกครั้งที่รัน
 
--- liff_id ว่าง: ลิงก์ทดสอบยังเข้าสู่ระบบ LINE ไม่ได้ (LINE อนุญาตเฉพาะที่อยู่เว็บจริง) — ใส่ตอนตั้ง LINE แยกให้ลิงก์ทดสอบ
+-- liff_id = ช่อง LINE "Go To Target Demo" (ตัวเลขหน้า "-" ใช้ตรวจว่ารหัส LINE ออกให้ร้านนี้จริง) — ต้องตรงกับ shops/demo/config.js
 insert into shops (id, name, liff_id, member_prefix, point_rate_baht, welcome_points)
-values ('demo', 'ร้านทดลอง (ข้อมูลปลอม)', '', 'DM', 20, 10);
+values ('demo', 'ร้านทดลอง (ข้อมูลปลอม)', '2012434511-bQt38UpF', 'DM', 20, 10);
 
 insert into branches (shop_id, id, name, sort)
 select 'demo', 'B0' || i, 'สาขาทดลอง ' || i, i
