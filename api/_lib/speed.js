@@ -67,17 +67,4 @@ async function card(body, ctx) {
   };
 }
 
-// ตรวจที่เก็บรูป (ชั่วคราว 7 พ.ย. 2569 — ลบทันทีหลังตรวจ): อัปโหลดรูป 1×1 จุด แล้วคืนลิงก์ ให้ตรวจว่าเปิดดูได้โดยไม่ล็อกอิน
-// ไม่ต้องเข้าสู่ระบบ จึงจำกัดเฉพาะร้าน demo และไม่ส่งรหัสลับออกไป (ข้อความ error มีแค่รหัสสถานะจากที่เก็บรูป)
-const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
-async function storageCheck(body, ctx) {
-  if (ctx.shop.id !== 'demo') throw userError('ใช้ได้เฉพาะร้านทดลอง', 'DEMO_ONLY');
-  try {
-    const url = await ctx.deps.storage().upload('demo/_check-' + require('./util').randomCode(6) + '.png', Buffer.from(TINY_PNG, 'base64'), 'image/png');
-    return { url };
-  } catch (e) {
-    return { url: '', detail: String(e && e.message || e).slice(0, 200) };
-  }
-}
-
-module.exports = { card, CARD_SQL, storageCheck };
+module.exports = { card, CARD_SQL };
