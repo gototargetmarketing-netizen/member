@@ -71,6 +71,7 @@ function fakeLine() {
   ok(spend === 0, 'ยอดซื้อรวมของสมาชิกตรงกับรายการ', spend);
 
   const seed = fs.readFileSync(path.join(DB_DIR, '002_demo_seed.sql'), 'utf8');
+  ok(!/create\s+(temp|temporary)\s/i.test(seed.replace(/--.*$/gm, '')), 'ไม่ใช้ตารางชั่วคราว (SQL Editor ของ Supabase ล้างทิ้งระหว่างคำสั่ง)');
   await db.pg.exec(seed);
   const tx2 = await count(db, `select count(*)::int n from transactions where shop_id='demo'`);
   ok(tx2 === tx, 'รันซ้ำได้ + ได้ข้อมูลชุดเดิม (' + tx2 + ' รายการ)');

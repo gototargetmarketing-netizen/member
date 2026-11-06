@@ -115,32 +115,33 @@ values ('demo', 'U_DEMO_OWNER', 'เจ้าของร้านทดลอ�
        ('demo', 'U_DEMO_CASHIER', 'แคชเชียร์ทดลอง', 'CASHIER', 'ACTIVE');
 
 -- แลกเครื่องดื่ม 1 ครั้ง ต่อสมาชิกที่แต้มถึง 100 — ต่อท้ายรายการล่าสุดของแต่ละคน แต้มจึงไม่ติดลบ
-create temp table demo_redeem on commit drop as
-select row_number() over (order by member_id) as n,
-       member_id,
-       created_at + interval '1 minute' as at,
-       balance_after
-from (select distinct on (member_id) member_id, created_at, balance_after
-      from transactions where shop_id = 'demo'
-      order by member_id, created_at desc, id desc) last
-where balance_after >= 100;
-
+-- ไม่ใช้ตารางชั่วคราว: SQL Editor ของ Supabase ล้างตารางชั่วคราวระหว่างคำสั่ง (เจอจริง 6 พ.ย. 2569:
+-- relation "demo_redeem" does not exist) → ทุกคำสั่งในไฟล์นี้ต้องอ่านจากตารางจริงเท่านั้น
 insert into transactions (shop_id, id, created_at, member_id, type, amount, points, balance_after, detail, ref)
 select 'demo', 'TX-R' || lpad(n::text, 7, '0'), at, member_id, 'REDEEM', 0, -100, balance_after - 100,
        'แลก: เครื่องดื่ม 1 แก้ว', 'CP-' || lpad(n::text, 6, '0')
-from demo_redeem;
+from (select row_number() over (order by member_id) as n,
+             member_id,
+             created_at + interval '1 minute' as at,
+             balance_after
+      from (select distinct on (member_id) member_id, created_at, balance_after
+            from transactions where shop_id = 'demo'
+            order by member_id, created_at desc, id desc) last
+      where balance_after >= 100) r;
 
--- คูปองจากการแลก: ราว 60% ใช้แล้ว ที่เหลือยังไม่ใช้ (บางใบหมดอายุไปแล้วตามวันที่)
+-- คูปองจากการแลก (สร้างจากรายการแลกด้านบน: รหัสคูปองอยู่ในช่อง ref)
+-- ราว 60% ใช้แล้ว ที่เหลือยังไม่ใช้ (บางใบหมดอายุไปแล้วตามวันที่)
 insert into coupons (shop_id, code, member_id, reward_id, name, points_used, issued_at, expires_at,
                      used_at, used_by, used_branch, status, tx_id)
-select 'demo', 'CP-' || lpad(n::text, 6, '0'), member_id, 'R001', 'เครื่องดื่ม 1 แก้ว', 100,
-       at, at + interval '30 days',
-       case when u then at + interval '1 day' end,
+select 'demo', ref, member_id, 'R001', 'เครื่องดื่ม 1 แก้ว', 100,
+       created_at, created_at + interval '30 days',
+       case when u then created_at + interval '1 day' end,
        case when u then 'แคชเชียร์ทดลอง' else '' end,
        case when u then 'B01' else '' end,
        case when u then 'USED' else 'ACTIVE' end,
-       'TX-R' || lpad(n::text, 7, '0')
-from (select *, random() < 0.6 as u from demo_redeem) r;
+       id
+from (select t.*, random() < 0.6 as u
+      from (select * from transactions where shop_id = 'demo' and type = 'REDEEM' order by id) t) r;
 
 -- ยอดสรุปของสมาชิกให้ตรงกับรายการ (แต้มคงเหลือ = รายการล่าสุด)
 update members m
