@@ -2,8 +2,7 @@
 // ไม่ต้องมีบัญชี Vercel / Supabase และไม่แตะข้อมูลจริง
 //
 // รัน: node tools/api-server.js   (ติดตั้งครั้งแรก: cd tools/test && npm install)
-// แล้วเปิด http://localhost:8105/speed.html
-// หรือใช้กับเว็บทดสอบพอร์ต 8002: http://localhost:8002/demo?api=http://localhost:8105/api&user=U_DEMO_1&name=ทดสอบ
+// แล้วใช้กับเว็บทดสอบพอร์ต 8002: http://localhost:8002/demo?api=http://localhost:8105/api&user=U_DEMO_1&name=ทดสอบ
 //   (U_DEMO_1 … U_DEMO_2000 = สมาชิกในข้อมูลทดลอง / รหัสอื่น = ยังไม่เป็นสมาชิก)
 //
 // โหมดเลียนแบบเซิร์ฟเวอร์เดิม (COMPAT=1): ใช้รันชุดทดสอบหน้าเว็บเดิม (e2e.js ฯลฯ) กับระบบใหม่โดยไม่ต้องแก้ชุดทดสอบ
@@ -14,7 +13,6 @@
 //   - MOCK_LINE=1: LINE จำลองแบบเดียวกับ gas-server (รหัสผ่านเมื่อส่วนท้าย = valid และยังไม่หมดอายุ) ปิดรหัสทดสอบ
 //
 // พิเศษสำหรับทดสอบ (เปิดเฉพาะในเครื่องนี้ 127.0.0.1):
-//   /__fake-old = แทนระบบเดิม (ตอบช้า 300ms) ให้หน้าวัดความเร็วไม่ต้องเรียกระบบจริงของร้าน
 //   /__sql      = ชุดทดสอบแก้ข้อมูลจำลองตรงๆ (เช่น ย้อนวันสมัคร) — ฐานข้อมูลอยู่ในหน่วยความจำ ปิดแล้วหายหมด
 const http = require('http');
 const path = require('path');
@@ -172,14 +170,10 @@ async function readJson(req) {
     } catch (e) {
       return json(res, { ok: false, error: e.message }, 400);
     }
-    if (pathname === '/__fake-old') {
-      req.resume();
-      setTimeout(() => json(res, { ok: false, error: 'ไม่รู้จักคำสั่งนี้', code: 'UNKNOWN_ACTION' }), 300);
-      return;
-    }
     if (COMPAT && pathname === '/' && req.method === 'GET') return json(res, { ok: true, service: 'LINE CRM (ระบบใหม่ จำลอง)' });
     serveStatic(req, res);
   }).listen(PORT, '127.0.0.1', () => console.log(COMPAT
     ? `ระบบใหม่ เลียนแบบ gas-server → http://localhost:${PORT}`
-    : `ตัวกลางทดสอบ (ฐานข้อมูลจำลอง + ร้าน demo) → http://localhost:${PORT}/speed.html`));
+    : `ตัวกลางทดสอบ (ฐานข้อมูลจำลอง + ร้าน demo) → http://localhost:${PORT}/api\n` +
+      `ลองหน้าเว็บ (เปิด python3 tools/dev-server.py 8002 ด้วย): http://localhost:8002/demo?api=http://localhost:${PORT}/api&user=U_DEMO_1&name=ทดสอบ`));
 })();

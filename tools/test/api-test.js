@@ -108,7 +108,7 @@ function fakeLine() {
   // ระบบเสียกลางทาง → ไม่หลุดรายละเอียดภายในออกไป
   const brokenApp = createApp({ db: () => ({ query: async () => { throw Object.assign(new Error('connection refused 10.0.0.1:6543'), { code: 'ECONNREFUSED' }); } }), verifier: createVerifier({ fetch: line.fetch }), region: 'test' });
   const errLog = console.error; console.error = () => {};
-  r = await brokenApp.handle({ action: 'speedCard', shop: 'demo' });
+  r = await brokenApp.handle({ action: 'bootstrap', shop: 'demo' }); // หาร้านก่อนตรวจ LINE → ชนฐานข้อมูลล่มทันที
   console.error = errLog;
   ok(!r.ok && r.code === 'ERROR' && r.error === 'ระบบขัดข้อง กรุณาลองใหม่อีกครั้ง' && !/10\.0|6543|ECONN/.test(JSON.stringify(r)), 'ฐานข้อมูลล่ม → ข้อความกลางๆ ไม่บอกที่อยู่/รหัสภายใน', r);
 
@@ -116,7 +116,7 @@ function fakeLine() {
   const { getDb } = require(path.join(ROOT, 'api', '_lib', 'db.js'));
   const noDbApp = createApp({ db: getDb, verifier: createVerifier({ fetch: line.fetch }), region: 'test' });
   console.error = () => {};
-  r = await noDbApp.handle({ action: 'speedCard', shop: 'demo' });
+  r = await noDbApp.handle({ action: 'bootstrap', shop: 'demo' });
   console.error = errLog;
   if (prevUrl) process.env.DATABASE_URL = prevUrl;
   ok(!r.ok && r.code === 'NO_DB' && /ติดต่อผู้ดูแลระบบ/.test(r.error), 'ยังไม่ได้ตั้งรหัสฐานข้อมูลใน Vercel → NO_DB + "ติดต่อผู้ดูแลระบบ"', r);
@@ -125,34 +125,17 @@ function fakeLine() {
   const cfg = connectionConfig('postgresql://postgres.abc:pw@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require');
   ok(!/sslmode/.test(cfg.connectionString) && cfg.ssl && cfg.max <= 5, 'ลิงก์ฐานข้อมูล: เอา sslmode ออก (ไม่ให้ทับค่าเข้ารหัส) + เปิดสายไม่เกิน 5', cfg.connectionString);
 
-  console.log('\n[3] วัดความเร็ว (speedCard)');
-  r = await app.handle({ action: 'speedCard', shop: 'demo', n: 1 });
-  ok(r.ok && r.data.member && r.data.member.id === 'DM-000001', 'ลูกค้าคนที่ 1 → ได้ข้อมูลสมาชิก', r.error);
-  ok(r.counts && r.counts.tx === 50, 'ประวัติตัดที่ 50 รายการ (history_limit ของร้าน)', r.counts);
-  const dates = r.data.tx.map(t => new Date(t.created_at).getTime());
-  ok(dates.every((d, i) => i === 0 || dates[i - 1] >= d), 'ประวัติเรียงใหม่ → เก่า');
-  ok(r.counts.rewards === 8 && r.counts.branches === 6 && r.counts.rules === 2, 'ของรางวัล 8 / สาขา 6 / แต้มพิเศษ 2', r.counts);
-  ok(r.counts.promos === 3 && !r.data.promos.some(p => p.id === 'P004'), 'โปรโมชันที่หมดเวลาแล้วไม่แสดง (เหลือ 3)', r.data.promos.map(p => p.id));
-  ok(typeof r.dbMs === 'number' && typeof r.ms === 'number' && r.ms >= r.dbMs, 'บอกเวลาฐานข้อมูล + เวลารวมในตัวกลาง (' + r.dbMs + ' / ' + r.ms + ' ms)');
-  r = await app.handle({ action: 'speedCard', shop: 'demo', n: 2000 });
-  ok(r.ok && r.data.member.id === 'DM-002000', 'ลูกค้าคนที่ 2,000 → ได้ข้อมูล');
-  r = await app.handle({ action: 'speedCard', shop: 'demo', n: 99999 });
-  ok(r.ok && r.data.member, 'เลขลูกค้าเกินช่วง → สุ่มให้แทน');
-  r = await app.handle({ action: 'speedCard', shop: 'demo', n: '1; drop table members' });
-  ok(r.ok, 'เลขลูกค้าแปลกๆ → ไม่พัง (สุ่มให้แทน)');
-  ok((await count(db, `select count(*)::int n from members`)) === 2000, 'ตารางสมาชิกยังอยู่ครบ');
-  r = await app.handle({ action: 'speedCard', shop: 'khamwan' });
-  ok(!r.ok && r.code === 'DEMO_ONLY', 'ร้านอื่นที่ไม่ใช่ demo → DEMO_ONLY (ไม่ส่งข้อมูลร้านจริงออกไป)', r);
+  // หาร้านเกิดก่อนตรวจ LINE → รหัสร้านเสีย/ไม่มีอยู่ตอบ NO_SHOP โดยไม่ต้องมีรหัส LINE
+  // (เดิมตรวจผ่านคำสั่งวัดความเร็ว speedCard ซึ่งลบแล้ว 7 พ.ย. 2569 — ส่วนวัดความเร็วไม่ต้องใช้แล้ว ผ่านเกณฑ์ไปตั้งแต่ขั้น 2)
+  console.log('\n[3] หาร้านจากคำขอ');
   for (const s of ['', 'Admin', '../x', 'a', 'x'.repeat(40), null, 123]) {
-    r = await app.handle({ action: 'speedCard', shop: s });
+    r = await app.handle({ action: 'bootstrap', shop: s });
     ok(!r.ok && r.code === 'NO_SHOP', 'รหัสร้าน ' + JSON.stringify(s) + ' → NO_SHOP', r);
   }
-  r = await app.handle({ action: 'speedCard', shop: 'nosuch' });
+  r = await app.handle({ action: 'bootstrap', shop: 'nosuch' });
   ok(!r.ok && r.code === 'NO_SHOP', 'ร้านที่ไม่มีอยู่ → NO_SHOP');
-  const times = [];
-  for (let i = 0; i < 20; i++) { const s = performance.now(); await app.handle({ action: 'speedCard', shop: 'demo' }); times.push(performance.now() - s); }
-  times.sort((a, b) => a - b);
-  ok(times[10] < 200, 'เปิดบัตร 20 ครั้งบนฐานข้อมูลจำลอง: ค่ากลาง ' + times[10].toFixed(1) + ' ms (ข้อมูลอ้างอิง ไม่ใช่ความเร็วจริง)');
+  r = await app.handle({ action: 'speedCard', shop: 'demo' });
+  ok(!r.ok && r.code === 'UNKNOWN_ACTION', 'คำสั่งวัดความเร็วชั่วคราว (speedCard) ลบแล้ว → UNKNOWN_ACTION', r);
 
   console.log('\n[4] ตรวจรหัส LINE');
   await db.query(`update shops set liff_id = $1 where id = 'demo'`, [CHANNEL + '-AbCdEfGh']);
@@ -295,8 +278,8 @@ function fakeLine() {
     ok(res.status === 405, 'PUT → 405');
     res = await fetch(base, { method: 'POST', body: 'x'.repeat(5 * 1024 * 1024) }).catch(e => ({ status: 'reset' }));
     ok(res.status === 413 || res.status === 'reset', 'ข้อมูลใหญ่เกิน 4 MB → ปฏิเสธ (' + res.status + ')');
-    j = await (await fetch(base, { method: 'POST', body: JSON.stringify({ action: 'speedCard', shop: 'demo', n: 5 }) })).json();
-    ok(j.ok && j.data.member.id === 'DM-000005', 'speedCard ผ่าน HTTP → ได้ข้อมูล');
+    j = await (await fetch(base, { method: 'POST', body: JSON.stringify({ action: 'bootstrap', shop: 'nosuch', idToken: 'x' }) })).json();
+    ok(!j.ok && j.code === 'NO_SHOP', 'คำสั่งที่ต้องหาร้านผ่าน HTTP → ถึงฐานข้อมูลจริง (ร้านที่ไม่มี → NO_SHOP)', j);
   } finally {
     server.close();
   }
@@ -414,9 +397,7 @@ function fakeLine() {
   const msgs = [...sources.matchAll(/userError\('([^']*)'/g)].map(m => m[1]);
   const leaks = msgs.filter(m => /google|drive|ชีต|apps ?script|supabase|vercel|postgres|ฐานข้อมูล/i.test(m));
   ok(msgs.length >= 8 && leaks.length === 0, 'ข้อความ ' + msgs.length + ' ข้อความที่ผู้ใช้เห็น ไม่พูดถึงที่เก็บข้อมูล', leaks);
-  const page = fs.readFileSync(path.join(ROOT, 'speed.html'), 'utf8').replace(/<!--[\s\S]*?-->/g, '').replace(/\/\/.*$/gm, '');
-  ok(!/google|apps ?script|supabase|ชีต/i.test(page), 'หน้าวัดความเร็วไม่พูดถึงที่เก็บข้อมูล (ใครมีลิงก์ก็เปิดได้)');
-  ok(/<meta name="robots" content="noindex">/.test(fs.readFileSync(path.join(ROOT, 'speed.html'), 'utf8')), 'หน้าวัดความเร็วไม่ให้ค้นเจอใน Google (noindex)');
+  ok(!fs.existsSync(path.join(ROOT, 'speed.html')) && !fs.existsSync(path.join(ROOT, 'api', '_lib', 'speed.js')), 'หน้าวัดความเร็วชั่วคราวลบแล้ว (ห้ามขึ้นเว็บจริง)');
 
   console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
   process.exit(fail ? 1 : 0);

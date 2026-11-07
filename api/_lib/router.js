@@ -10,9 +10,8 @@ const { SHOP_SQL, publicBrand } = require('./shop');
 const customer = require('./customer');
 const staff = require('./staff');
 const admin = require('./admin');
-const speed = require('./speed');
 
-const API_VERSION = '0.6.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก
+const API_VERSION = '0.6.1'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก / 0.6.1 = ลบคำสั่งวัดความเร็วชั่วคราว (speedCard)
 const { ALL_STAFF, MANAGERS } = staff;
 const OWNER = ['OWNER'];
 const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/; // ตรงกับเงื่อนไขในตาราง shops
@@ -24,8 +23,6 @@ const ACTIONS = {
   ping: { shop: false, auth: false, run: actPing },
   // ตรวจรหัส LINE อย่างเดียว — ไว้ลองการเข้าสู่ระบบบนลิงก์ทดสอบ
   whoami: { shop: true, auth: true, run: actWhoami },
-  // วัดความเร็วขั้น 2 (ร้าน demo เท่านั้น) — ลบพร้อม speed.js และ speed.html ก่อนรวมเข้าเว็บจริง
-  speedCard: { shop: true, auth: false, run: speed.card },
 
   // ลูกค้า (ขั้น 3 รอบ 1)
   bootstrap: { shop: true, auth: true, run: customer.bootstrap },
