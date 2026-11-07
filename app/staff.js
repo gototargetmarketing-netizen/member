@@ -52,6 +52,8 @@ async function main() {
     S.ready = true;
     if (S.me.status !== 'ACTIVE') return renderPending(r.testMode);
     S.rules = r.rules || [];
+    // ระดับสมาชิก (ระบบใหม่ + ร้านเปิดใช้) — เรียงเกณฑ์น้อย → มาก ใช้คิดตัวอย่างแต้มให้ตรงกับที่ระบบคิดจริง
+    S.tiers = r.tiers || [];
     S.hasBranches = !!r.hasBranches;
     S.branches = r.branches || [];
     if (S.hasBranches) {
@@ -226,16 +228,29 @@ function onBranchError(e) {
  * ===================================================== */
 const branchRules = () => S.rules.filter(r => !r.branch || (S.branch && r.branch === S.branch.id));
 
+// ระดับของลูกค้าที่กำลังบันทึก (ลำดับในรายการระดับ: 0 = ระดับแรก)
+const tierRank = id => Math.max(0, (S.tiers || []).findIndex(t => t.id === id));
+const viewMember = () => (S.view && S.view.kind !== 'coupon' ? S.view.member : null);
+
+// ต้องคิดเหมือน bestRule ใน api/_lib/staff.js (และ bestRule_ ใน code.gs สำหรับร้านที่ยังใช้ระบบเดิม)
 function bestRule(amount) {
-  return branchRules().filter(r => !r.minAmount || amount >= r.minAmount)
+  const m = viewMember();
+  return branchRules().filter(r => (!r.minAmount || amount >= r.minAmount) &&
+      (!r.minTierId || !(S.tiers || []).length || (m && tierRank(m.tierId) >= tierRank(r.minTierId))))
     .reduce((best, r) => (!best || r.multiplier > best.multiplier ? r : best), null);
 }
 
+// แต้มพิเศษกับตัวคูณของระดับไม่ซ้อนกัน ใช้ตัวที่มากกว่า (เท่ากัน → แสดงชื่อกติกา) — เหมือนที่ระบบคิดจริง
 function pointsFor(amount) {
   const base = amount > 0 ? Math.floor(amount / S.settings.pointRate + 1e-9) : 0;
   const rule = bestRule(amount);
-  const total = rule ? Math.floor(base * rule.multiplier + 1e-9) : base;
-  return { base, total, rule: total > base ? rule : null };
+  const m = viewMember();
+  const tierMult = m && m.tierMultiplier > 1 ? m.tierMultiplier : 1;
+  const ruleMult = rule ? rule.multiplier : 1;
+  const mult = Math.max(ruleMult, tierMult);
+  const total = mult > 1 ? Math.floor(base * mult + 1e-9) : base;
+  const applied = total > base ? (tierMult > ruleMult ? { name: 'ระดับ ' + m.tier, multiplier: tierMult } : rule) : null;
+  return { base, total, rule: applied };
 }
 
 // ชื่อกติกามีจำนวนเท่าอยู่แล้ว (เช่น "แต้ม x2 ทุกวันพุธ") ไม่ต้องเติม ×2 ซ้ำ
@@ -244,7 +259,7 @@ const ruleLabel = r => (/[x×]\s*\d/i.test(r.name) ? r.name : `×${r.multiplier}
 function todayPromoHtml() {
   const list = branchRules();
   if (!list.length) return '';
-  return `<div class="today-promo">${icon('bolt', 18)}<span>วันนี้มีแต้มพิเศษ: ${list.map(r => esc(r.name) + (r.minAmount ? ` (ซื้อครบ ฿${fmtNum(r.minAmount)})` : '')).join(' · ')}</span></div>`;
+  return `<div class="today-promo">${icon('bolt', 18)}<span>วันนี้มีแต้มพิเศษ: ${list.map(r => esc(r.name) + (r.minAmount ? ` (ซื้อครบ ฿${fmtNum(r.minAmount)})` : '') + (r.minTierName ? ` (ระดับ ${esc(r.minTierName)} ขึ้นไป)` : '')).join(' · ')}</span></div>`;
 }
 
 /* =====================================================
@@ -346,7 +361,7 @@ function memberView(v) {
       <div class="member-row">
         <div class="avatar sm">${icon('user', 22)}</div>
         <div class="grow">
-          <div class="m-name">${esc(m.name)}</div>
+          <div class="m-name">${esc(m.name)}${m.tier ? ` <span class="chip chip-tier">${/^#[0-9A-Fa-f]{6}$/.test(m.tierColor || '') ? `<i class="tier-dot" style="background:${m.tierColor}"></i>` : ''}${esc(m.tier)}${m.tierMultiplier > 1 ? ' ×' + m.tierMultiplier : ''}</span>` : ''}</div>
           <div class="m-sub">${esc(m.memberId)}${m.phoneMasked ? ' · ' + esc(m.phoneMasked) : ''}</div>
         </div>
         <button class="icon-btn" data-act="clear" aria-label="ลูกค้าคนถัดไป">${icon('x')}</button>
@@ -456,7 +471,8 @@ async function doPurchase(btn) {
     if (r.member) S.view.member = r.member;
     S.flash = r.duplicate
       ? { kind: 'warn', html: 'รายการนี้บันทึกไปแล้ว (ระบบไม่บันทึกซ้ำ)' }
-      : { kind: 'ok', html: `บันทึก ฿${fmtMoney(r.amount)} → <b>+${fmtNum(r.pointsAdded)} ${esc(unit())}</b>${r.rule ? ` (${esc(ruleLabel(r.rule))})` : ''} · คงเหลือ ${fmtNum(r.balance)}` };
+      : { kind: 'ok', html: `บันทึก ฿${fmtMoney(r.amount)} → <b>+${fmtNum(r.pointsAdded)} ${esc(unit())}</b>${r.rule ? ` (${esc(ruleLabel(r.rule))})` : ''} · คงเหลือ ${fmtNum(r.balance)}`
+          + (r.tierUp ? `<br>🎉 ลูกค้าเลื่อนเป็นระดับ <b>${esc(r.tierUp.name)}</b> แล้ว` : '') };
     renderResult();
     toast('บันทึกแล้ว', 'ok');
     loadRecent();

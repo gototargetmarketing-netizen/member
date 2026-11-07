@@ -23,7 +23,7 @@ export default {
     pointUnit: 'แต้ม'
   },
   // แพ็กเกจพื้นฐาน: ไม่มีหลายสาขา (เปิดด้วย branches: true + maxBranches)
-  features: { tiers: false, branches: false },
+  features: { tiers: true, branches: false }, // ร้านเดโม: เปิดระดับสมาชิกไว้ให้ลอง (ขั้น 4)
   legal: {
     privacyUrl: '',
     privacyText: 'ตัวอย่างนโยบายความเป็นส่วนตัว — ร้านจริงต้องใส่ข้อความของตัวเอง'

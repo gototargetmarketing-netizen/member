@@ -20,6 +20,7 @@ const PAGES = [
   { id: 'rewards', label: 'ของรางวัล', icon: 'gift' },
   { id: 'promos', label: 'โปรโมชัน', icon: 'star' },
   { id: 'rules', label: 'แต้มพิเศษ', icon: 'coins' },
+  { id: 'tiers', label: 'ระดับสมาชิก', icon: 'up' },
   { id: 'staff', label: 'พนักงาน', icon: 'shield' },
   { id: 'branches', label: 'สาขา', icon: 'pin' },
   { id: 'brand', label: 'หน้าตาร้าน', icon: 'palette' },
@@ -38,7 +39,7 @@ const PRESETS = [
 const RANGE_KEY = 'crm_admin_range';
 const BRANCH_KEY = 'crm_admin_branch';
 // ข้อความในป๊อปอัป "กำลังโหลด" ตามคำสั่ง (คำสั่งอ่านข้อมูลอื่นๆ = "กำลังโหลด...")
-const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave', 'adminMemberUpdate', 'adminRuleSave'];
+const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave', 'adminMemberUpdate', 'adminRuleSave', 'adminTiersSave', 'adminMemberTier'];
 const LOADING_TEXT = { adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...', adminRewardDelete: 'กำลังลบ...', adminPromoDelete: 'กำลังลบ...', adminRuleDelete: 'กำลังลบ...' };
 
 const app = document.getElementById('app');
@@ -47,7 +48,7 @@ const S = {
   range: loadRange(),
   // หลายสาขา: รายชื่อสาขาทั้งหมด (มาพร้อมคำขอแรก) + สาขาที่เลือกดูอยู่ ('' = ทุกสาขา) ใช้ร่วมกันทุกหน้า
   branches: [], branch: loadBranchFilter(),
-  members: { q: '', sort: 'joined', status: '', birth: '', page: 1 },
+  members: { q: '', sort: 'joined', status: '', birth: '', tier: '', page: 1 },
   // ระบบนี้ลบของรางวัล/โปรโมชัน/แต้มพิเศษได้ไหม (ระบบใหม่บอกมากับรายการ / ระบบเดิมไม่มี → ไม่แสดงปุ่มลบ)
   canDelete: {},
   tx: { type: '', staff: '', q: '', page: 1 },
@@ -70,7 +71,18 @@ const branchLimit = () => {
   const n = Number(cfg().features && cfg().features.maxBranches);
   return Number.isInteger(n) && n > 0 ? n : Infinity;
 };
-const visiblePages = () => PAGES.filter(p => p.id !== 'branches' || branchFeature());
+/* แพ็กเกจระดับสมาชิก (ขั้น 4): เปิดที่ config features.tiers — มีเฉพาะระบบใหม่ (ระบบเดิมไม่มีคำสั่งระดับ)
+ * ร้านยังไม่ตั้งระดับ / ระบบไม่ส่งข้อมูลระดับมา → ไม่เห็นอะไรเกี่ยวกับระดับเลย */
+const tierFeature = () => !!(cfg().features && cfg().features.tiers === true);
+const tierDot = c => (/^#[0-9A-Fa-f]{6}$/.test(c || '') ? `<i class="tier-dot" style="background:${c}"></i>` : '');
+const tierChip = (name, color) => (name ? `<span class="chip chip-tier">${tierDot(color)}${esc(name)}</span>` : '');
+const TIER_REASON = { START: 'เริ่มระดับ', UP: 'ขึ้นระดับ', DOWN: 'ลดระดับ (ครบ 12 เดือน ยอดไม่ถึง)', ADMIN: 'เปลี่ยนโดยร้าน' };
+const TIER_DEFAULTS = [
+  { name: 'Member', minSpend: 0, multiplier: 1, color: '#9CA3AF' },
+  { name: 'Silver', minSpend: 5000, multiplier: 1.5, color: '#A8A9AD' },
+  { name: 'Gold', minSpend: 20000, multiplier: 2, color: '#D4AF37' }
+];
+const visiblePages = () => PAGES.filter(p => (p.id !== 'branches' || branchFeature()) && (p.id !== 'tiers' || tierFeature()));
 
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
@@ -122,6 +134,13 @@ function onClick(e) {
     case 'promo-edit': openPromoEdit(id); break;
     case 'rule-edit': openRuleEdit(id); break;
     case 'item-delete': confirmDelete(el.dataset.kind, id); break;
+    case 'tier-add': tierAdd(); break;
+    case 'tier-remove': tierRemove(Number(id)); break;
+    case 'tiers-save-confirm': doSaveTiers(el); break;
+    case 'tiers-off': confirmTiersOff(); break;
+    case 'tiers-off-confirm': doSaveTiers(el, true); break;
+    case 'member-tier': openMemberTier(); break;
+    case 'tier-filter': Object.assign(S.members, { tier: id || '', page: 1 }); break; // ลิงก์ #members พาไปหน้ารายชื่อที่กรองแล้ว
     case 'item-delete-confirm': doDelete(el.dataset.kind, id, el); break;
     case 'member-status': openMemberStatus(); break;
     case 'member-edit': openMemberEdit(); break;
@@ -155,7 +174,7 @@ function onSubmit(e) {
       break;
     }
     case 'members':
-      Object.assign(S.members, { q: f.q.value.trim(), sort: f.sort.value, status: f.status.value, birth: f.birth ? f.birth.value : '', page: 1 });
+      Object.assign(S.members, { q: f.q.value.trim(), sort: f.sort.value, status: f.status.value, birth: f.birth ? f.birth.value : '', tier: f.tier ? f.tier.value : '', page: 1 });
       route();
       break;
     case 'tx':
@@ -170,6 +189,8 @@ function onSubmit(e) {
     case 'rule': saveRule(form); break;
     case 'member-status': saveMemberStatus(form); break;
     case 'member-edit': saveMemberEdit(form); break;
+    case 'tiers': confirmTiers(form); break;
+    case 'member-tier': saveMemberTier(form); break;
     case 'settings': confirmSettings(form); break;
     case 'brand': saveBrand(form); break;
   }
@@ -406,6 +427,7 @@ function route() {
     rewards: loadRewards,
     promos: loadPromos,
     rules: loadRules,
+    tiers: loadTierPage,
     staff: loadStaff,
     branches: loadBranches,
     brand: loadBrand,
@@ -523,6 +545,11 @@ function renderOverview(d) {
     <div class="kpis">${tiles.map(t => `
       <div class="kpi"><div class="kpi-label">${esc(t.label)}</div><div class="kpi-value">${t.value}</div><div class="kpi-sub">${t.sub || ''}</div></div>`).join('')}
     </div>
+    ${tierFeature() && (d.tiers || []).length ? `
+    <section class="card adm-card">
+      <div class="card-head"><h2>สมาชิกแต่ละระดับ</h2><a class="link" href="#tiers">ตั้งค่าระดับ ${icon('right', 14)}</a></div>
+      <div class="tier-counts">${d.tiers.map(t => `<a class="tier-count" href="#members" data-act="tier-filter" data-id="${esc(t.id)}">${tierDot(t.color)}<b>${esc(t.name)}</b><span>${fmtNum(t.count)} คน</span></a>`).join('')}</div>
+    </section>` : ''}
     <section class="card adm-card">
       <div class="card-head"><h2>ยอดซื้อ${d.period.bucket === 'month' ? 'รายเดือน' : 'รายวัน'}</h2><span class="muted small">แตะหรือชี้ที่แท่งเพื่อดูตัวเลข</span></div>
       ${chartHtml(d)}
@@ -665,11 +692,14 @@ function setupChart(d) {
  * ===================================================== */
 function loadMembers() {
   const m = S.members;
-  fetchView('adminMembers', { q: m.q, sort: m.sort, status: m.status, page: m.page, birthMonth: m.birth === 'this', ...branchData() }, renderMembers);
+  fetchView('adminMembers', { q: m.q, sort: m.sort, status: m.status, page: m.page, birthMonth: m.birth === 'this', tier: m.tier, ...branchData() }, renderMembers);
 }
 
 function renderMembers(r) {
   const m = S.members;
+  // ระดับสมาชิก: เฉพาะร้านที่เปิดแพ็กเกจ + ระบบส่งรายชื่อระดับมา
+  const tiersShown = tierFeature() && Array.isArray(r.tiers) && r.tiers.length > 1;
+  const tierOf = id => (r.tiers || []).find(t => t.id === id) || {};
   const opt = (value, label, cur) => `<option value="${value}" ${cur === value ? 'selected' : ''}>${label}</option>`;
   const owner = isOwner();
   document.getElementById('view').innerHTML = `
@@ -684,16 +714,18 @@ function renderMembers(r) {
         ${opt('', 'ทุกสถานะ', m.status)}${opt('ACTIVE', 'ใช้งานได้', m.status)}${opt('BLOCKED', 'ถูกระงับ', m.status)}
       </select>
       ${owner ? `<select name="birth" aria-label="เดือนเกิด">${opt('', 'ทุกเดือนเกิด', m.birth)}${opt('this', '🎂 เกิดเดือนนี้', m.birth)}</select>` : ''}
+      ${tiersShown ? `<select name="tier" aria-label="ระดับ">${opt('', 'ทุกระดับ', m.tier)}${r.tiers.map(t => opt(esc(t.id), esc(t.name), m.tier)).join('')}</select>` : ''}
       <button class="btn btn-sm btn-primary" type="submit">ค้นหา</button>
     </form>
     ${owner ? '' : '<p class="muted small adm-note">ผู้จัดการเห็นเบอร์โทรแค่ 4 ตัวท้าย (เจ้าของร้านเห็นเต็ม)</p>'}
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>ชื่อ</th><th>รหัสสมาชิก</th><th>เบอร์โทร</th><th class="num">${esc(unit())}</th><th class="num">ยอดซื้อรวม</th><th class="num">ครั้งที่มา</th><th>สมัครเมื่อ</th>${hasBranches() ? '<th>สมัครที่</th>' : ''}<th>มาล่าสุด</th><th>สถานะ</th></tr></thead>
+        <thead><tr><th>ชื่อ</th><th>รหัสสมาชิก</th>${tiersShown ? '<th>ระดับ</th>' : ''}<th>เบอร์โทร</th><th class="num">${esc(unit())}</th><th class="num">ยอดซื้อรวม</th><th class="num">ครั้งที่มา</th><th>สมัครเมื่อ</th>${hasBranches() ? '<th>สมัครที่</th>' : ''}<th>มาล่าสุด</th><th>สถานะ</th></tr></thead>
         <tbody>${r.items.length ? r.items.map(x => `
           <tr class="row-link" data-act="member" data-id="${esc(x.memberId)}">
             <td class="strong">${memberLink(x.memberId, x.name)}</td>
             <td class="mono">${esc(x.memberId)}</td>
+            ${tiersShown ? `<td class="nowrap">${tierChip(x.tier, tierOf(x.tierId).color)}</td>` : ''}
             <td class="nowrap">${esc(fmtPhone(x.phone) || x.phoneMasked || '-')}</td>
             <td class="num">${fmtNum(x.points)}</td>
             <td class="num">฿${fmtMoney(x.totalSpend)}</td>
@@ -702,7 +734,7 @@ function renderMembers(r) {
             ${hasBranches() ? `<td class="nowrap">${esc(branchName(x.joinedBranch))}</td>` : ''}
             <td class="nowrap">${x.lastVisitAt ? fmtDate(x.lastVisitAt) : '-'}</td>
             <td>${x.status === 'ACTIVE' ? statusChip('active', 'ใช้งานได้') : statusChip('blocked', 'ถูกระงับ')}</td>
-          </tr>`).join('') : emptyRow(10, m.q || S.branch ? 'ไม่พบสมาชิกที่ค้นหา' : 'ยังไม่มีสมาชิก')}
+          </tr>`).join('') : emptyRow(11, m.q || S.branch || m.tier ? 'ไม่พบสมาชิกที่ค้นหา' : 'ยังไม่มีสมาชิก')}
         </tbody></table></div>
     </section>
     ${pager(r, 'members')}`;
@@ -718,6 +750,7 @@ function loadMember(id) {
 function renderMember(r) {
   const m = r.member;
   S.member = m;
+  S.memberTiers = r.tiers || [];
   const owner = isOwner();
   document.getElementById('view').innerHTML = `
     <a class="back-link" href="#members">${icon('left', 16)} รายชื่อสมาชิก</a>
@@ -734,6 +767,7 @@ function renderMember(r) {
       <div class="kpi"><div class="kpi-label">ยอดซื้อรวม</div><div class="kpi-value">฿${fmtMoney(m.totalSpend)}</div></div>
       <div class="kpi"><div class="kpi-label">จำนวนครั้งที่มา</div><div class="kpi-value">${fmtNum(m.visitCount)}</div></div>
     </div>
+    ${memberTierHtml(m, owner)}
     <div class="adm-grid2">
       <section class="card adm-card">
         <div class="card-head"><h2>ข้อมูลสมาชิก</h2></div>
@@ -1004,6 +1038,7 @@ function loadRewards() {
 function renderRewards(r) {
   S.rewards = r.items;
   S.couponDays = r.couponDays;
+  S.tierList = tierFeature() ? r.tiers || [] : [];
   S.canDelete.reward = !!r.canDelete;
   document.getElementById('view').innerHTML = `
     ${pageHead('ของรางวัล', `ลูกค้าเห็นอยู่ ${fmtNum(r.items.filter(x => x.state === 'ACTIVE').length)} จาก ${fmtNum(r.items.length)} รายการ`,
@@ -1014,7 +1049,7 @@ function renderRewards(r) {
         <tbody>${r.items.length ? r.items.map(x => `
           <tr>
             <td class="thumb-cell">${thumb(x.imageUrl)}</td>
-            <td><b>${esc(x.name)}</b>${x.type === 'BIRTHDAY' ? ' <span class="chip chip-bday">🎂 ของขวัญวันเกิด</span>' : ''}${x.description ? `<div class="m-sub">${esc(x.description)}</div>` : ''}<div class="m-sub mono">${esc(x.id)}</div></td>
+            <td><b>${esc(x.name)}</b>${x.type === 'BIRTHDAY' ? ' <span class="chip chip-bday">🎂 ของขวัญวันเกิด</span>' : ''}${minTierChip(x)}${x.description ? `<div class="m-sub">${esc(x.description)}</div>` : ''}<div class="m-sub mono">${esc(x.id)}</div></td>
             <td class="num">${x.points ? fmtNum(x.points) : 'ฟรี'}</td>
             <td class="num">${fmtNum(x.issued)} / ${x.quota ? fmtNum(x.quota) : 'ไม่จำกัด'}</td>
             <td class="num">${x.limitPerMember ? fmtNum(x.limitPerMember) : '-'}</td>
@@ -1055,6 +1090,7 @@ function openRewardEdit(id) {
         ${/* ของขวัญวันเกิดจำกัดปีละครั้งต่อคนอยู่แล้ว ช่องนี้ไม่มีผล → ซ่อน กันเจ้าของร้านสับสน */ ''}
         <label class="field" id="limit-field" ${bday ? 'hidden' : ''}><span>จำกัดต่อคน</span><input name="limitPerMember" value="${esc(v.limitPerMember)}" inputmode="numeric" placeholder="ว่าง = ไม่จำกัด"></label>
       </div>
+      ${tierSelect(v.minTierId, 'แลกได้')}
       ${imageField(v.image, 'reward-preview')}
       <div class="form-grid">
         <label class="field"><span>ลำดับที่แสดง</span><input name="sort" value="${esc(v.sort)}" inputmode="numeric" placeholder="เลขน้อยขึ้นก่อน"></label>
@@ -1217,6 +1253,7 @@ async function saveReward(form) {
   const reward = formValues(form, ['name', 'description', 'points', 'image', 'validDays', 'quota', 'limitPerMember', 'startDate', 'endDate', 'sort', 'status']);
   reward.id = form.dataset.id;
   reward.type = form.elements.type.value;
+  if (form.elements.minTierId) reward.minTierId = form.elements.minTierId.value;
   if (reward.type === 'BIRTHDAY') reward.limitPerMember = ''; // ช่องถูกซ่อน ไม่ส่งค่าเก่าที่ค้างอยู่
   if (!reward.name) return toast('กรุณากรอกชื่อของรางวัล', 'err');
   if (!reward.points && reward.type !== 'BIRTHDAY') return toast(`กรุณากรอกจำนวน${unit()}ที่ใช้แลก`, 'err');
@@ -1239,6 +1276,7 @@ function loadPromos() {
 
 function renderPromos(r) {
   S.promos = r.items;
+  S.tierList = tierFeature() ? r.tiers || [] : [];
   S.canDelete.promo = !!r.canDelete;
   document.getElementById('view').innerHTML = `
     ${pageHead('โปรโมชัน', `แบนเนอร์หน้าแรกของลูกค้า · แสดงอยู่ ${fmtNum(r.items.filter(x => x.state === 'ACTIVE').length)} จาก ${fmtNum(r.items.length)} รายการ`,
@@ -1249,7 +1287,7 @@ function renderPromos(r) {
         <tbody>${r.items.length ? r.items.map(x => `
           <tr>
             <td class="thumb-cell">${thumb(x.imageUrl, true)}</td>
-            <td><b>${esc(x.title)}</b>${x.subtitle ? `<div class="m-sub">${esc(x.subtitle)}</div>` : ''}</td>
+            <td><b>${esc(x.title)}</b>${minTierChip(x)}${x.subtitle ? `<div class="m-sub">${esc(x.subtitle)}</div>` : ''}</td>
             <td>${x.tag ? `<span class="chip">${esc(x.tag)}</span>` : '-'}</td>
             <td class="link-cell">${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.link.replace(/^https:\/\//, ''))}</a>` : '-'}</td>
             <td class="nowrap">${esc(periodText(x.startDate, x.endDate))}</td>
@@ -1275,6 +1313,7 @@ function openPromoEdit(id) {
         <label class="field"><span>วันเริ่ม</span><input type="date" name="startDate" value="${esc(v.startDate)}"></label>
         <label class="field"><span>วันสิ้นสุด</span><input type="date" name="endDate" value="${esc(v.endDate)}"></label>
       </div>
+      ${tierSelect(v.minTierId, 'เห็นสิทธิ์')}
       ${imageField(v.image, 'promo-preview', 'image', 'รูป', false, 'promo')}
       <div class="form-grid">
         <label class="field"><span>ลำดับที่แสดง</span><input name="sort" value="${esc(v.sort)}" inputmode="numeric" placeholder="เลขน้อยขึ้นก่อน"></label>
@@ -1291,6 +1330,7 @@ function openPromoEdit(id) {
 async function savePromo(form) {
   const promo = formValues(form, ['title', 'subtitle', 'tag', 'image', 'link', 'startDate', 'endDate', 'sort', 'status']);
   promo.id = form.dataset.id;
+  if (form.elements.minTierId) promo.minTierId = form.elements.minTierId.value;
   if (!promo.title) return toast('กรุณากรอกหัวข้อ', 'err');
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
@@ -1320,6 +1360,7 @@ const daysHtml = on => `<div class="days">${DAYS.map(([k, t]) => `<span class="$
 
 function renderRules(r) {
   S.rules = r.items;
+  S.tierList = tierFeature() ? r.tiers || [] : [];
   S.canDelete.rule = !!r.canDelete;
   const owner = isOwner();
   document.getElementById('view').innerHTML = `
@@ -1329,7 +1370,7 @@ function renderRules(r) {
       <thead><tr><th>กติกา</th><th>ได้แต้ม</th><th>วัน</th><th>ช่วงวันที่</th>${hasBranches() ? '<th>สาขา</th>' : ''}<th class="num">ยอดขั้นต่ำ</th><th>สถานะ</th><th></th></tr></thead>
       <tbody>${r.items.length ? r.items.map(x => `
         <tr>
-          <td><b>${esc(x.name)}</b>${x.showBadge ? '<div class="m-sub">แสดงป้ายที่หน้าลูกค้า</div>' : ''}</td>
+          <td><b>${esc(x.name)}</b>${minTierChip(x)}${x.showBadge ? '<div class="m-sub">แสดงป้ายที่หน้าลูกค้า</div>' : ''}</td>
           <td><span class="mult">×${x.multiplier}</span></td>
           <td>${daysHtml(x.days)}</td>
           <td class="nowrap">${esc(periodText(x.startDate, x.endDate))}</td>
@@ -1362,6 +1403,7 @@ function openRuleEdit(id) {
         <label class="field"><span>ยอดขั้นต่ำต่อบิล (บาท)</span><input name="minAmount" value="${esc(v.minAmount || '')}" inputmode="decimal" placeholder="ว่าง = ทุกบิล"></label>
         ${hasBranches() ? `<label class="field"><span>สาขา</span><select name="branch" class="select"><option value="">ทุกสาขา</option>${S.branches.filter(b => b.status === 'ACTIVE' || b.id === v.branch).map(b => `<option value="${esc(b.id)}" ${b.id === v.branch ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select></label>` : ''}
       </div>
+      ${tierSelect(v.minTierId, 'ได้แต้มพิเศษ')}
       <label class="check"><input type="checkbox" name="showBadge" ${v.showBadge ? 'checked' : ''}><span>แสดงป้าย "วันนี้ …" ที่หน้าลูกค้า เฉพาะวันที่มีผล</span></label>
       ${statusField(v.status, 'เปิดใช้')}
       <div class="modal-actions">
@@ -1380,6 +1422,7 @@ async function saveRule(form) {
     startDate: f.startDate.value, endDate: f.endDate.value, minAmount: f.minAmount.value.trim(),
     branch: f.branch ? f.branch.value : '', showBadge: f.showBadge.checked, status: f.status.value
   };
+  if (f.minTierId) rule.minTierId = f.minTierId.value;
   if (!rule.name) return toast('กรุณากรอกชื่อกติกา', 'err');
   if (!rule.days.length) return toast('เลือกวันที่มีผลอย่างน้อย 1 วัน', 'err');
   const btn = form.querySelector('button[type="submit"]');
@@ -1437,6 +1480,270 @@ async function doDelete(kind, id, btn) {
     closeModal();
     toast(`ลบ "${r.name}" แล้ว`, 'ok');
     k.reload();
+  } catch (e) {
+    setBusy(btn, false);
+    toast(e.message, 'err');
+  }
+}
+
+/* =====================================================
+ * ระดับสมาชิก (ขั้น 4 — มีเฉพาะระบบใหม่ + ร้านที่เปิดแพ็กเกจ features.tiers)
+ * ระดับคิดจากยอดซื้อ 12 เดือนล่าสุด / ขึ้นทันที / คงระดับ 12 เดือน แล้วลดทีละ 1 ถ้ายอดไม่ถึง
+ * เจ้าของร้านตั้งได้ ผู้จัดการดูอย่างเดียว (หลังบ้านตรวจซ้ำ)
+ * ===================================================== */
+// ป้าย "ระดับ X ขึ้นไป" ในตารางของรางวัล / โปรโมชัน / แต้มพิเศษ
+function minTierChip(x) {
+  if (!x.minTierName) return '';
+  const t = (S.tierList || []).find(t => t.id === x.minTierId) || {};
+  return ` <span class="chip chip-tier">${tierDot(t.color)}${esc(x.minTierName)} ขึ้นไป</span>`;
+}
+
+// ช่องเลือกระดับขั้นต่ำในฟอร์ม — ร้านที่ไม่ได้ใช้ระดับไม่มีช่องนี้ (บันทึกแล้วจึงไม่ส่ง minTierId = ไม่แก้ค่าเดิม)
+function tierSelect(cur, verb) {
+  const list = S.tierList || [];
+  if (list.length < 2) return '';
+  return `<label class="field"><span>สมาชิกที่${esc(verb)}</span>
+    <select name="minTierId" class="select">
+      <option value="">ทุกระดับ</option>
+      ${list.slice(1).map(t => `<option value="${esc(t.id)}" ${t.id === cur ? 'selected' : ''}>ระดับ ${esc(t.name)} ขึ้นไป</option>`).join('')}
+    </select>
+    <small class="muted">ลูกค้าที่ระดับไม่ถึง จะเห็นแต่ใช้สิทธิ์ไม่ได้ (มีป้ายบอกว่าต้องถึงระดับไหน)</small></label>`;
+}
+
+function loadTierPage() {
+  fetchView('adminTiers', {}, renderTierPage);
+}
+
+function renderTierPage(r) {
+  S.tierPage = r;
+  S.tierDraft = r.enabled ? r.items.map(t => ({ ...t })) : null;
+  const owner = isOwner();
+  document.getElementById('view').innerHTML = `
+    ${pageHead('ระดับสมาชิก', `ระดับคิดจากยอดซื้อ ${fmtNum(r.keepMonths)} เดือนล่าสุด · ถึงเกณฑ์ขึ้นทันที แล้วคงระดับ ${fmtNum(r.keepMonths)} เดือน · ครบกำหนดแล้วยอดไม่ถึง ลดลง 1 ระดับ`,
+      owner && r.enabled ? `<button class="btn btn-sm btn-danger-outline" data-act="tiers-off">ปิดใช้ระดับสมาชิก</button>` : '')}
+    <div id="tier-edit">${tierEditHtml()}</div>
+    <section class="card adm-card">
+      <div class="card-head"><h2>กติกา</h2></div>
+      <ul class="muted small tier-rules">
+        <li>สมาชิกทุกคนอย่างน้อยอยู่ระดับแรก (เริ่มที่ยอดซื้อ 0 บาท) ระดับแรกไม่มีวันหมดอายุ</li>
+        <li>ตัวคูณ${esc(unit())}ของระดับ ไม่ซ้อนกับแต้มพิเศษ ระบบใช้ตัวที่ให้มากกว่า</li>
+        <li>ของรางวัล / โปรโมชัน / แต้มพิเศษ ตั้ง "ระดับ X ขึ้นไป" ได้ในหน้าแก้ไขของแต่ละรายการ</li>
+        <li>ของขวัญวันเกิด: ลูกค้าได้ชิ้นของระดับสูงสุดที่ตัวเองถึง</li>
+        <li>เพิ่มเกณฑ์ยอดซื้อ: สมาชิกเดิมไม่ลดทันที คงระดับจนครบกำหนด · ลดเกณฑ์: คนที่ถึงแล้วขึ้นทันที</li>
+      </ul>
+    </section>`;
+}
+
+// ส่วนตั้งระดับ: ยังไม่เปิดใช้ → ปุ่มเริ่ม / เจ้าของร้าน → ฟอร์มแก้ / ผู้จัดการ → ตาราง
+function tierEditHtml() {
+  const r = S.tierPage;
+  const owner = isOwner();
+  const d = S.tierDraft;
+  if (!d) {
+    return `<section class="card adm-card tier-intro">
+      <h2>ร้านยังไม่ได้เปิดใช้ระดับสมาชิก</h2>
+      <p class="muted">แบ่งลูกค้าเป็น ${fmtNum(r.minTiers)}–${fmtNum(r.maxTiers)} ระดับตามยอดซื้อ เช่น Member / Silver / Gold ให้ลูกค้าประจำได้${esc(unit())}มากขึ้นและสิทธิ์พิเศษ</p>
+      ${owner ? `<button class="btn btn-primary" data-act="tier-add" data-id="start">เริ่มตั้งระดับสมาชิก</button>` : '<p class="muted small">เจ้าของร้านเป็นคนตั้งระดับ</p>'}
+    </section>`;
+  }
+  if (!owner) {
+    return `<section class="card adm-card flush"><div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>ระดับ</th><th class="num">ยอดซื้อ ${fmtNum(r.keepMonths)} เดือน ตั้งแต่</th><th>ได้${esc(unit())}</th><th class="num">สมาชิก</th></tr></thead>
+      <tbody>${d.map(t => `<tr>
+        <td><b>${tierDot(t.color)}${esc(t.name)}</b></td>
+        <td class="num">฿${fmtMoney(t.minSpend)}</td>
+        <td>${t.multiplier > 1 ? `<span class="mult">×${t.multiplier}</span>` : 'ปกติ'}</td>
+        <td class="num"><a class="link" href="#members" data-act="tier-filter" data-id="${esc(t.id)}">${fmtNum(t.members)} คน</a></td>
+      </tr>`).join('')}</tbody></table></div></section>
+      <p class="muted small">เจ้าของร้านเป็นคนตั้งระดับ</p>`;
+  }
+  return `<section class="card adm-card">
+    <form class="form" data-form="tiers" autocomplete="off">
+      <div class="tier-edit-list">${d.map((t, i) => `
+        <div class="tier-edit" data-row="${i}" data-tid="${esc(t.id || '')}">
+          <label class="field tier-f-color"><span>สี</span><input type="color" name="color" value="${esc(HEX.test(t.color || '') ? t.color : '#9CA3AF')}"></label>
+          <label class="field tier-f-name"><span>ชื่อระดับ</span><input name="name" value="${esc(t.name)}" maxlength="30" placeholder="เช่น Gold"></label>
+          <label class="field tier-f-spend"><span>ยอดซื้อ ${fmtNum(r.keepMonths)} เดือน ตั้งแต่ (บาท)</span>
+            ${i === 0 ? '<input name="minSpend" value="0" readonly title="ระดับแรกเริ่มที่ 0 บาทเสมอ">' : `<input name="minSpend" value="${esc(t.minSpend === '' ? '' : String(t.minSpend))}" inputmode="decimal" placeholder="เช่น 5000">`}</label>
+          <label class="field tier-f-mult"><span>ได้${esc(unit())}</span><select name="multiplier" class="select">${r.multipliers.map(m => `<option value="${m}" ${Number(t.multiplier) === m ? 'selected' : ''}>${m === 1 ? 'ปกติ' : '×' + m}</option>`).join('')}</select></label>
+          <div class="tier-f-end">
+            ${t.id ? `<a class="link small" href="#members" data-act="tier-filter" data-id="${esc(t.id)}">${fmtNum(t.members || 0)} คน</a>` : '<span class="muted small">ใหม่</span>'}
+            ${i > 0 && d.length > r.minTiers ? `<button type="button" class="icon-btn" data-act="tier-remove" data-id="${i}" aria-label="เอาระดับนี้ออก">${icon('x', 16)}</button>` : ''}
+          </div>
+        </div>`).join('')}
+      </div>
+      ${d.length < r.maxTiers ? `<button type="button" class="btn btn-sm" data-act="tier-add">+ เพิ่มระดับ</button>` : `<p class="muted small">ตั้งได้สูงสุด ${fmtNum(r.maxTiers)} ระดับ</p>`}
+      <div class="modal-actions">
+        ${r.enabled ? '<button type="button" class="btn" data-act="refresh">ยกเลิกที่แก้</button>' : '<button type="button" class="btn" data-act="refresh">ยกเลิก</button>'}
+        <button class="btn btn-primary" type="submit">${r.enabled ? 'บันทึก' : 'เปิดใช้ระดับสมาชิก'}</button>
+      </div>
+    </form>
+  </section>`;
+}
+
+// อ่านค่าที่พิมพ์ไว้ก่อนเพิ่ม/ลบแถว (ไม่งั้นที่พิมพ์ไว้หาย)
+function readTierForm() {
+  const form = document.querySelector('[data-form="tiers"]');
+  if (!form || !S.tierDraft) return;
+  form.querySelectorAll('.tier-edit').forEach(row => {
+    const t = S.tierDraft[Number(row.dataset.row)];
+    if (!t) return;
+    const val = n => row.querySelector(`[name="${n}"]`).value;
+    Object.assign(t, { name: val('name').trim(), minSpend: val('minSpend').replace(/[,\s]/g, ''), multiplier: Number(val('multiplier')), color: val('color').toUpperCase() });
+  });
+}
+
+function redrawTierEdit() {
+  const box = document.getElementById('tier-edit');
+  if (box) box.innerHTML = tierEditHtml();
+}
+
+function tierAdd() {
+  if (!isOwner() || !S.tierPage) return;
+  if (!S.tierDraft) {
+    // เริ่มครั้งแรก: ใส่ตัวอย่าง 3 ระดับให้แก้ต่อ (ยังไม่บันทึกจนกดปุ่ม)
+    S.tierDraft = TIER_DEFAULTS.map(t => ({ ...t, id: '', members: 0 }));
+    return redrawTierEdit();
+  }
+  readTierForm();
+  if (S.tierDraft.length >= S.tierPage.maxTiers) return;
+  const last = S.tierDraft[S.tierDraft.length - 1];
+  S.tierDraft.push({ id: '', name: '', minSpend: '', multiplier: Math.min(3, Number(last.multiplier) || 1), color: '#6B7280', members: 0 });
+  redrawTierEdit();
+}
+
+function tierRemove(i) {
+  if (!S.tierDraft || i <= 0) return;
+  readTierForm();
+  S.tierDraft.splice(i, 1);
+  redrawTierEdit();
+}
+
+// ตรวจก่อนส่ง (หลังบ้านตรวจซ้ำทุกข้อ) แล้วสรุปผลให้ยืนยัน
+function confirmTiers(form) {
+  readTierForm();
+  const d = S.tierDraft || [];
+  const r = S.tierPage;
+  for (const t of d) {
+    if (!t.name) return toast('กรุณาใส่ชื่อทุกระดับ', 'err');
+    if (t.minSpend === '' || !(Number(t.minSpend) >= 0)) return toast(`ใส่ยอดซื้อของระดับ "${t.name}" เป็นตัวเลข`, 'err');
+  }
+  const rows = d.map(t => ({ id: t.id || '', name: t.name, minSpend: Number(t.minSpend), multiplier: Number(t.multiplier), color: t.color }))
+    .sort((a, b) => a.minSpend - b.minSpend);
+  if (rows[0].minSpend !== 0) return toast('ระดับแรกต้องเริ่มที่ 0 บาท', 'err');
+  for (let i = 1; i < rows.length; i++) {
+    if (rows[i].minSpend === rows[i - 1].minSpend) return toast('แต่ละระดับต้องใช้ยอดซื้อไม่ซ้ำกัน', 'err');
+  }
+  if (new Set(rows.map(t => t.name.toLowerCase())).size !== rows.length) return toast('ชื่อระดับซ้ำกัน', 'err');
+  S.pendingTiers = rows;
+  const removed = r.enabled ? r.items.filter(t => !rows.some(x => x.id === t.id)) : [];
+  openModal(`
+    <div class="modal-head"><h2>${r.enabled ? 'บันทึกระดับสมาชิก' : 'เปิดใช้ระดับสมาชิก'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="tier-summary">${rows.map(t => `<div>${tierDot(t.color)}<b>${esc(t.name)}</b> <span class="muted">ตั้งแต่ ฿${fmtMoney(t.minSpend)}${t.multiplier > 1 ? ` · ${esc(unit())} ×${t.multiplier}` : ''}</span></div>`).join('')}</div>
+    <ul class="muted small">
+      ${r.enabled ? '' : `<li>ระบบจัดระดับสมาชิกทุกคนตามยอดซื้อ ${fmtNum(r.keepMonths)} เดือนล่าสุดทันที</li>`}
+      ${removed.map(t => `<li>เอาระดับ "${esc(t.name)}" ออก: สมาชิก ${fmtNum(t.members)} คนย้ายไประดับที่ใกล้ที่สุดซึ่งไม่สูงกว่าเดิม</li>`).join('')}
+      <li>ลูกค้าเห็นระดับในบัตรสมาชิกทันที</li>
+    </ul>
+    <div class="modal-actions">
+      <button class="btn" type="button" data-act="close">ยกเลิก</button>
+      <button class="btn btn-primary" type="button" data-act="tiers-save-confirm">ยืนยัน</button>
+    </div>`);
+}
+
+function confirmTiersOff() {
+  if (!isOwner()) return;
+  openModal(`
+    <div class="modal-head"><h2>ปิดใช้ระดับสมาชิก?</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <ul class="muted small">
+      <li>ลูกค้าไม่เห็นระดับในบัตรอีก และไม่ได้ตัวคูณ${esc(unit())}ของระดับ</li>
+      <li>ของรางวัล / โปรโมชัน / แต้มพิเศษ ที่ตั้งระดับไว้ กลับเป็นใช้ได้ทุกคน</li>
+      <li>${esc(unit())} คูปอง และประวัติเดิมไม่หาย · เปิดใช้ใหม่ภายหลังได้ (ระบบจัดระดับใหม่จากยอดซื้อ)</li>
+    </ul>
+    <div class="modal-actions">
+      <button class="btn" type="button" data-act="close">ยกเลิก</button>
+      <button class="btn btn-danger" type="button" data-act="tiers-off-confirm">ปิดใช้</button>
+    </div>`);
+}
+
+async function doSaveTiers(btn, off) {
+  const tiers = off ? [] : S.pendingTiers;
+  if (!tiers) return;
+  setBusy(btn, true);
+  try {
+    const r = await S.api.call('adminTiersSave', { tiers });
+    closeModal();
+    S.pendingTiers = null;
+    toast(off ? 'ปิดใช้ระดับสมาชิกแล้ว' : 'บันทึกระดับสมาชิกแล้ว', 'ok');
+    renderTierPage(r);
+  } catch (e) {
+    setBusy(btn, false);
+    // เน็ตหลุดกลางทาง: อาจบันทึกไปแล้ว → โหลดค่าล่าสุดมาให้ดูก่อน (กันกดซ้ำแล้วได้ระดับใหม่ซ้อน)
+    if (e.code === 'NETWORK') { closeModal(); toast(e.message + ' — โหลดค่าล่าสุดให้แล้ว ตรวจดูก่อนกดบันทึกอีกครั้ง', 'err'); loadTierPage(); return; }
+    toast(e.message, 'err');
+  }
+}
+
+// การ์ดระดับในหน้าสมาชิกรายคน: ระดับตอนนี้ + ยอด 12 เดือน + ระดับถัดไป + ประวัติ
+function memberTierHtml(m, owner) {
+  const ti = m.tierInfo;
+  if (!tierFeature() || !ti) return '';
+  const tiers = S.memberTiers || [];
+  const name = id => { const t = tiers.find(t => t.id === id); return t ? t.name : ''; };
+  const pct = ti.next ? Math.min(100, Math.round(ti.spend12m / ti.next.minSpend * 100)) : 100;
+  const hist = m.tierHistory || [];
+  return `
+    <section class="card adm-card">
+      <div class="card-head"><h2>ระดับสมาชิก</h2>${owner ? `<button class="btn btn-sm" data-act="member-tier">${icon('edit', 16)} เปลี่ยนระดับ</button>` : ''}</div>
+      <div class="tier-now">
+        ${tierChip(ti.name, ti.color)}
+        ${ti.multiplier > 1 ? `<span class="muted small">ได้${esc(unit())} ×${ti.multiplier}</span>` : ''}
+        <span class="muted small">${ti.until ? `คงระดับถึง ${fmtDate(ti.until + 'T00:00:00+07:00')}` : 'ระดับแรก ไม่มีวันหมดอายุ'}</span>
+      </div>
+      <p class="small">ยอดซื้อ 12 เดือนล่าสุด <b>฿${fmtMoney(ti.spend12m)}</b>${ti.next ? ` · อีก ฿${fmtMoney(ti.next.remaining)} ถึงระดับ ${esc(ti.next.name)}` : ' · ระดับสูงสุดแล้ว'}</p>
+      ${ti.next ? `<div class="tier-bar"><i style="width:${pct}%"></i></div>` : ''}
+      ${hist.length ? `
+      <div class="tbl-wrap tier-hist"><table class="tbl">
+        <thead><tr><th>วันเวลา</th><th>เปลี่ยน</th><th>เหตุ</th><th class="num">ยอด 12 เดือน</th><th>โดย</th></tr></thead>
+        <tbody>${hist.map(h => `<tr>
+          <td class="nowrap">${fmtDateTime(h.date)}</td>
+          <td class="nowrap">${h.from ? esc(h.fromName || name(h.from) || 'ระดับเดิม') + ' → ' : ''}${esc(h.toName || name(h.to) || 'ระดับเดิม')}</td>
+          <td class="nowrap">${esc(TIER_REASON[h.reason] || h.reason)}</td>
+          <td class="num">${h.reason === 'ADMIN' && !h.spend12m ? '-' : '฿' + fmtMoney(h.spend12m)}</td>
+          <td>${esc(h.by)}</td>
+        </tr>`).join('')}</tbody></table></div>` : ''}
+    </section>`;
+}
+
+function openMemberTier() {
+  const m = S.member;
+  if (!m || !isOwner() || !m.tierInfo) return;
+  openModal(`
+    <div class="modal-head"><h2>เปลี่ยนระดับสมาชิก</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <p><b>${esc(m.name)}</b> <span class="muted mono">${esc(m.memberId)}</span></p>
+    <form class="form" data-form="member-tier" autocomplete="off">
+      <label class="field"><span>ระดับ</span><select name="tierId" class="select">${(S.memberTiers || []).map(t => `<option value="${esc(t.id)}" ${t.id === m.tierInfo.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
+      <label class="field"><span>เหตุผล <em>*</em></span><input name="reason" maxlength="150" placeholder="เช่น ลูกค้า VIP ของร้าน"></label>
+      <p class="muted small">คงระดับนี้ 12 เดือนนับจากวันนี้ (ระดับแรกไม่มีวันหมดอายุ) แล้วเป็นไปตามยอดซื้อตามปกติ · บันทึกชื่อคุณและเหตุผลไว้ในประวัติ</p>
+      <div class="modal-actions">
+        <button class="btn" type="button" data-act="close">ยกเลิก</button>
+        <button class="btn btn-primary" type="submit">บันทึก</button>
+      </div>
+    </form>`);
+}
+
+async function saveMemberTier(form) {
+  const m = S.member;
+  const tierId = form.elements.tierId.value;
+  const reason = form.elements.reason.value.trim();
+  if (reason.length < 3) return toast('กรุณาใส่เหตุผล', 'err');
+  const btn = form.querySelector('button[type="submit"]');
+  setBusy(btn, true);
+  try {
+    await S.api.call('adminMemberTier', { memberId: m.memberId, tierId, reason });
+    closeModal();
+    toast('เปลี่ยนระดับแล้ว', 'ok');
+    loadMember(m.memberId);
   } catch (e) {
     setBusy(btn, false);
     toast(e.message, 'err');

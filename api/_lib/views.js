@@ -1,6 +1,7 @@
 // แปลงแถวในฐานข้อมูล → ข้อมูลที่ส่งให้หน้าเว็บ (เดิม: ส่วนที่ 5 ของ code.gs)
 // ชื่อช่องและรูปแบบค่าต้องเหมือนของเดิมทุกตัว หน้าเว็บจึงไม่ต้องแก้ — api-diff-test.js เทียบให้
 const U = require('./util');
+const T = require('./tiers');
 
 const REWARD_BIRTHDAY = 'BIRTHDAY';
 const BIRTH_SELF_EDITS = 1; // ลูกค้าแก้วันเกิดเองได้ 1 ครั้ง (กันเปลี่ยนเพื่อรับสิทธิ์วันเกิดซ้ำ)
@@ -11,15 +12,16 @@ const BRANCH_ADMIN = 'ADMIN';   // ปรับแต้มจากหลัง
 // คอลัมน์สมาชิกที่ทุกคำสั่งอ่าน — วันเกิดออกมาเป็นข้อความ yyyy-MM-dd เสมอ (pg แปลงช่อง date เป็นเวลาท้องถิ่นของเครื่อง ซึ่งเพี้ยนได้)
 const MEMBER_COLS = `id, line_user_id, name, first_name, last_name, phone,
   to_char(birth_date, 'YYYY-MM-DD') as birth_date, birth_date_edits, picture, points,
-  total_spend::float8 as total_spend, visit_count, tier_id, joined_at, last_visit_at, status,
-  marketing_consent, joined_branch, note`;
+  total_spend::float8 as total_spend, visit_count, tier_id, tier_since, to_char(tier_until, 'YYYY-MM-DD') as tier_until,
+  joined_at, last_visit_at, status, marketing_consent, joined_branch, note`;
 
 const REWARD_COLS = `id, name, description, type, points, image, valid_days, quota, issued, limit_per_member,
-  to_char(start_date, 'YYYY-MM-DD') as start_date, to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status`;
+  to_char(start_date, 'YYYY-MM-DD') as start_date, to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status, min_tier_id`;
 
 const COUPON_COLS = 'code, member_id, reward_id, name, points_used, issued_at, expires_at, used_at, used_by, used_branch, status, tx_id, birthday_year';
 
-function publicMember(m) {
+// tiers = ระดับของร้าน (ส่งมาเมื่อร้านเปิดใช้ระดับ) → ใส่ชื่อระดับในช่อง tier
+function publicMember(m, tiers) {
   const first = String(m.first_name || '');
   return {
     memberId: String(m.id || ''),
@@ -35,26 +37,46 @@ function publicMember(m) {
     points: U.toInt(m.points),
     totalSpend: U.toNum(m.total_spend),
     visitCount: U.toInt(m.visit_count),
-    tier: '', // ระดับสมาชิก — เปิดใช้ในขั้น 4
+    tier: tierName(tiers, m),
     joinedAt: U.iso(m.joined_at),
     status: U.upper(m.status) || 'ACTIVE'
   };
 }
 
 // พนักงานเห็นเบอร์แค่ 4 ตัวท้าย (พอให้ถามยืนยันตัวตนลูกค้าได้)
-function staffMember(m) {
+function staffMember(m, tiers) {
   const phone = String(m.phone || '');
-  return {
+  const o = {
     memberId: String(m.id || ''),
     name: String(m.name || ''),
     phoneMasked: phone ? 'xxx-xxx-' + phone.slice(-4) : '',
     points: U.toInt(m.points),
     totalSpend: U.toNum(m.total_spend),
     visitCount: U.toInt(m.visit_count),
-    tier: '', // ระดับสมาชิก — เปิดใช้ในขั้น 4
+    tier: tierName(tiers, m),
     status: U.upper(m.status) || 'ACTIVE',
     lastVisitAt: U.iso(m.last_visit_at)
   };
+  // ร้านเปิดใช้ระดับ: ใส่รหัส สี ตัวคูณ ให้หน้าพนักงานคิดตัวอย่างแต้ม / หลังบ้านกรอง
+  if (T.tiersOn(tiers)) {
+    const t = T.tierById(tiers, m.tier_id) || tiers[0];
+    Object.assign(o, { tierId: t.id, tierColor: t.color, tierMultiplier: t.multiplier });
+  }
+  return o;
+}
+
+function tierName(tiers, m) {
+  if (!T.tiersOn(tiers)) return '';
+  const t = T.tierById(tiers, m.tier_id) || tiers[0];
+  return t.name;
+}
+
+// ช่องระดับขั้นต่ำของของรางวัล/โปรโมชัน (เฉพาะร้านที่เปิดใช้ระดับ): minTier + ล็อกไหม (ผู้ใช้เลือก: แสดงแต่ล็อก)
+function tierLock(o, row, tc) {
+  if (!tc || !T.tiersOn(tc.tiers)) return o;
+  o.minTier = T.tierBrief(tc.tiers, row.min_tier_id);
+  o.locked = !T.meets(tc.tiers, tc.tierId, row.min_tier_id);
+  return o;
 }
 
 function publicTx(t) {
@@ -90,13 +112,13 @@ function publicCoupon(cp, now) {
 }
 
 // ของรางวัลที่ลูกค้าแลกด้วยแต้มได้ตอนนี้ (ไม่รวมของขวัญวันเกิด)
-function listRewards(rows, now) {
+function listRewards(rows, now, tc) {
   return (rows || [])
     .filter((r) => r.id && U.upper(r.status) === 'ACTIVE' && U.toInt(r.points) > 0 && U.upper(r.type) !== REWARD_BIRTHDAY &&
       U.inWindow(r.start_date, r.end_date, now))
     .map((r) => {
       const quota = U.toInt(r.quota);
-      return {
+      return tierLock({
         id: String(r.id),
         name: String(r.name || ''),
         description: String(r.description || ''),
@@ -106,15 +128,15 @@ function listRewards(rows, now) {
         limitPerMember: U.toInt(r.limit_per_member) || null,
         endDate: U.iso(r.end_date),
         sort: U.toInt(r.sort)
-      };
+      }, r, tc);
     })
     .sort((a, b) => (a.sort - b.sort) || (a.points - b.points));
 }
 
-function listPromos(rows, now) {
+function listPromos(rows, now, tc) {
   return (rows || [])
     .filter((r) => r.id && U.upper(r.status) === 'ACTIVE' && U.inWindow(r.start_date, r.end_date, now))
-    .map((r) => ({
+    .map((r) => tierLock({
       id: String(r.id),
       title: String(r.title || ''),
       subtitle: String(r.subtitle || ''),
@@ -122,7 +144,7 @@ function listPromos(rows, now) {
       image: U.safeUrl(U.driveImage(r.image)),
       link: U.safeUrl(r.link),
       sort: U.toInt(r.sort)
-    }))
+    }, r, tc))
     .sort((a, b) => a.sort - b.sort);
 }
 
@@ -140,7 +162,8 @@ function ruleFromRow(r) {
     branch: U.upper(r.branch),
     minAmount: U.toNum(r.min_amount),
     showBadge: r.show_badge === true,
-    status: U.upper(r.status) === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE'
+    status: U.upper(r.status) === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
+    minTierId: r.min_tier_id || ''
   };
 }
 
@@ -158,11 +181,18 @@ function branchNames(branches) {
   return names;
 }
 
-function publicRule(r, names) {
-  return { id: r.id, name: r.name, multiplier: r.multiplier, branch: r.branch, branchName: r.branch ? names[r.branch] || '' : '', minAmount: r.minAmount };
+// tiers (เมื่อร้านเปิดใช้ระดับ) → บอกระดับขั้นต่ำของกติกาด้วย (หน้าพนักงานคิดตัวอย่างแต้มตามระดับลูกค้า)
+function publicRule(r, names, tiers) {
+  const o = { id: r.id, name: r.name, multiplier: r.multiplier, branch: r.branch, branchName: r.branch ? names[r.branch] || '' : '', minAmount: r.minAmount };
+  if (T.tiersOn(tiers)) {
+    const t = T.tierById(tiers, r.minTierId);
+    o.minTierId = t ? t.id : '';
+    o.minTierName = t ? t.name : '';
+  }
+  return o;
 }
 
 module.exports = {
   REWARD_BIRTHDAY, BIRTH_SELF_EDITS, RULE_MULTIPLIERS, BRANCH_ONLINE, BRANCH_ADMIN, MEMBER_COLS, REWARD_COLS, COUPON_COLS,
-  publicMember, staffMember, publicTx, couponState, publicCoupon, listRewards, listPromos, ruleFromRow, rulesOn, branchNames, publicRule
+  publicMember, staffMember, publicTx, couponState, publicCoupon, listRewards, listPromos, ruleFromRow, rulesOn, branchNames, publicRule, tierName
 };

@@ -7,13 +7,14 @@ const { cfg } = require('./shop');
 const { once } = require('./once');
 const V = require('./views');
 const M = require('./members');
+const T = require('./tiers');
 
 const ROLES = ['OWNER', 'ADMIN', 'CASHIER'];
 const ALL_STAFF = ROLES;
 const MANAGERS = ['OWNER', 'ADMIN'];
 
 const RULES_SQL = `select id, name, multiplier, days, to_char(start_date, 'YYYY-MM-DD') as start_date,
-  to_char(end_date, 'YYYY-MM-DD') as end_date, branch, min_amount::float8 as min_amount, show_badge, status
+  to_char(end_date, 'YYYY-MM-DD') as end_date, branch, min_amount::float8 as min_amount, show_badge, status, min_tier_id
   from point_rules where shop_id = $1 and deleted_at is null order by created_at, id`;
 
 // ---------- สาขา ----------
@@ -64,11 +65,13 @@ async function requireStaff(ctx, roles) {
 
 // ---------- แต้มพิเศษ ----------
 // ตรงหลายกติกา → ใช้อันที่ให้มากสุดอันเดียว ไม่คูณซ้อน (ผู้ใช้ตกลง 4 พ.ย. 2569) — ต้องคิดเหมือน pointsFor ใน staff.js หน้าเว็บ
-function bestRule(rules, now, branch, amount) {
+// tc = { tiers, tierId } (ร้านเปิดใช้ระดับ) → ข้ามกติกาที่ตั้ง "ตั้งแต่ระดับ X" ไว้สูงกว่าระดับของลูกค้า
+function bestRule(rules, now, branch, amount, tc) {
   let best = null;
   V.rulesOn(rules, now).forEach((r) => {
     if (r.branch && r.branch !== branch) return;
     if (r.minAmount > 0 && amount < r.minAmount) return;
+    if (tc && !T.meets(tc.tiers, tc.tierId, r.minTierId)) return;
     if (!best || r.multiplier > best.multiplier) best = r;
   });
   return best;
@@ -103,23 +106,39 @@ async function staffMe(p, ctx) {
     out.hasBranches = active.length > 0;
     out.branches = active.filter((b) => staffCanUse(me, b.id)).map((b) => ({ id: b.id, name: b.name }));
     const names = V.branchNames(list);
-    out.rules = V.rulesOn(await loadRules(ctx.db, shopId), ctx.now).map((r) => V.publicRule(r, names));
+    const tiers = await T.loadTiers(ctx.db, shopId);
+    const on = T.tiersOn(tiers);
+    out.rules = V.rulesOn(await loadRules(ctx.db, shopId), ctx.now).map((r) => V.publicRule(r, names, on ? tiers : null));
+    // ร้านเปิดใช้ระดับ: หน้าพนักงานใช้ตัวคูณของแต่ละระดับคิดตัวอย่างแต้มก่อนกดบันทึก
+    if (on) out.tiers = T.publicTiers(tiers);
   }
   return out;
 }
 
 // ค้นจาก QR หรือที่พิมพ์: รหัสคูปอง (CP-...) / เบอร์โทร / รหัสสมาชิก
+// ร้านเปิดใช้ระดับ: ระดับของสมาชิกคนนี้ครบกำหนด → ปรับก่อนแสดง (คืนแถวสมาชิกที่เป็นปัจจุบัน)
+async function freshTier(ctx, m, tiers) {
+  if (!m || !T.tiersOn(tiers) || (m.tier_id && !(m.tier_until && m.tier_until < U.thaiDay(ctx.now)))) return m;
+  return ctx.db.tx(async (q) => {
+    const locked = await M.memberById(q, ctx.shop.id, m.id, true);
+    await T.syncMember(q, ctx.shop.id, locked, tiers, ctx.now);
+    return locked;
+  });
+}
+
 async function staffLookup(p, ctx) {
   const q = String(p.query || '').trim().toUpperCase().replace(/\s+/g, '');
   if (!q || q.length > 40) throw userError('กรุณาใส่รหัสสมาชิก เบอร์โทร หรือรหัสคูปอง', 'BAD_QUERY');
   const shopId = ctx.shop.id;
   const now = ctx.now;
+  const tiers = await T.loadTiers(ctx.db, shopId);
+  const tl = T.tiersOn(tiers) ? tiers : null;
 
   if (/^CP-[A-Z0-9]+$/.test(q)) {
     const cp = (await ctx.db.query(`select ${V.COUPON_COLS} from coupons where shop_id = $1 and code = $2`, [shopId, q])).rows[0];
     if (!cp) throw userError('ไม่พบคูปองรหัสนี้', 'NOT_FOUND');
-    const owner = await M.memberById(ctx.db, shopId, cp.member_id);
-    return { kind: 'coupon', coupon: V.publicCoupon(cp, now), member: owner ? V.staffMember(owner) : null };
+    const owner = await freshTier(ctx, await M.memberById(ctx.db, shopId, cp.member_id), tiers);
+    return { kind: 'coupon', coupon: V.publicCoupon(cp, now), member: owner ? V.staffMember(owner, tl) : null };
   }
 
   let m = null;
@@ -129,10 +148,11 @@ async function staffLookup(p, ctx) {
   }
   if (!m) m = await M.memberById(ctx.db, shopId, q);
   if (!m) throw userError('ไม่พบสมาชิก', 'NOT_FOUND');
+  m = await freshTier(ctx, m, tiers);
 
   const coupons = (await ctx.db.query(`select ${V.COUPON_COLS} from coupons where shop_id = $1 and member_id = $2 order by issued_at desc limit 100`,
     [shopId, m.id])).rows.map((cp) => V.publicCoupon(cp, now)).filter((cp) => cp.status === 'ACTIVE');
-  return { kind: 'member', member: V.staffMember(m), coupons };
+  return { kind: 'member', member: V.staffMember(m, tl), coupons };
 }
 
 // บันทึกยอดซื้อ: ระบบคิดแต้มเอง และบันทึกทุกบิล (แม้ไม่ถึงเกณฑ์) เพื่อให้รู้ยอดซื้อสะสมจริง
@@ -147,8 +167,9 @@ async function addPurchase(p, ctx) {
   const note = U.cleanNote(p.note);
   const basePoints = Math.floor(amount / c.pointRate + 1e-9);
   const branch = await resolveStaffBranch(ctx, p);
-  const rule = bestRule(await loadRules(ctx.db, ctx.shop.id), ctx.now, branch, amount);
-  const points = rule ? Math.floor(basePoints * rule.multiplier + 1e-9) : basePoints;
+  const rules = await loadRules(ctx.db, ctx.shop.id);
+  const tiers = await T.loadTiers(ctx.db, ctx.shop.id);
+  const on = T.tiersOn(tiers);
   const shopId = ctx.shop.id;
 
   return once(ctx, 'addPurchase', p.requestId, async (q, reqId) => {
@@ -163,26 +184,40 @@ async function addPurchase(p, ctx) {
     M.assertActiveMember(m);
 
     const now = ctx.now;
+    // ระดับที่ครบกำหนดลดก่อน แล้วค่อยคิดแต้ม (ระดับเก่าที่หมดอายุแล้วต้องไม่ได้ตัวคูณ)
+    await T.syncMember(q, shopId, m, tiers, now);
+    const tier = on ? T.tierById(tiers, m.tier_id) || tiers[0] : null;
+    // แต้มพิเศษกับตัวคูณของระดับไม่ซ้อนกัน ใช้ตัวที่มากกว่า (ผู้ใช้ตกลง 6 พ.ย. 2569) / เท่ากัน → ใช้ชื่อกติกา (บอกเหตุผลชัดกว่า)
+    const rule = bestRule(rules, now, branch, amount, on ? { tiers, tierId: m.tier_id } : null);
+    const ruleMult = rule ? rule.multiplier : 1;
+    const tierMult = tier ? tier.multiplier : 1;
+    const byTier = tierMult > ruleMult;
+    const mult = Math.max(ruleMult, tierMult);
+    const points = mult > 1 ? Math.floor(basePoints * mult + 1e-9) : basePoints;
+    const applied = points > basePoints ? (byTier ? { id: tier.id, name: 'ระดับ ' + tier.name, multiplier: tierMult } : rule) : null;
     const balance = U.toInt(m.points) + points;
     const spend = U.round2(U.toNum(m.total_spend) + amount);
     const visits = U.toInt(m.visit_count) + 1;
     await q.query('update members set points = $3, total_spend = $4, visit_count = $5, last_visit_at = $6 where shop_id = $1 and id = $2',
       [shopId, memberId, balance, spend, visits, now]);
 
-    const applied = rule && points > basePoints;
     const base = note || ('ซื้อสินค้า ' + U.fmtMoney(amount) + ' บาท' + (points ? '' : ' (ไม่ถึงเกณฑ์รับแต้ม)'));
-    // ชื่อกติกาต่อท้าย ลูกค้าเห็นในประวัติว่าได้พิเศษเพราะอะไร / รหัสกติกาเก็บใน ref ไว้ดูย้อนหลัง
-    const detail = applied ? base + ' · ' + rule.name : base;
+    // ชื่อกติกา (หรือ "ระดับ Gold") ต่อท้าย ลูกค้าเห็นในประวัติว่าได้พิเศษเพราะอะไร / รหัสเก็บใน ref ไว้ดูย้อนหลัง
+    const detail = applied ? base + ' · ' + applied.name : base;
     const txId = M.newTxId();
     await q.query(`insert into transactions (shop_id, id, created_at, member_id, type, amount, points, balance_after, detail, staff, request_id, ref, branch)
                    values ($1, $2, $3, $4, 'EARN', $5, $6, $7, $8, $9, $10, $11, $12)`,
-      [shopId, txId, now, memberId, amount, points, balance, detail, ctx.staff.name, reqId, applied ? rule.id : '', branch]);
+      [shopId, txId, now, memberId, amount, points, balance, detail, ctx.staff.name, reqId, applied ? applied.id : '', branch]);
 
     Object.assign(m, { points: balance, total_spend: spend, visit_count: visits, last_visit_at: now });
-    return {
-      txId, amount, pointsAdded: points, basePoints, balance, member: V.staffMember(m),
-      rule: applied ? { name: rule.name, multiplier: rule.multiplier } : null
+    // ยอด 12 เดือนถึงเกณฑ์ระดับที่สูงกว่า → ขึ้นทันที (บิลนี้คิดแต้มตามระดับเดิม บิลถัดไปได้ตัวคูณใหม่)
+    const up = on ? (await T.syncMember(q, shopId, m, tiers, now, { upgrade: true, by: ctx.staff.name })).up : null;
+    const out = {
+      txId, amount, pointsAdded: points, basePoints, balance, member: V.staffMember(m, on ? tiers : null),
+      rule: applied ? { name: applied.name, multiplier: applied.multiplier } : null
     };
+    if (up) out.tierUp = { id: up.id, name: up.name, color: up.color };
+    return out;
   });
 }
 
@@ -209,7 +244,8 @@ async function useCoupon(p, ctx) {
     await q.query(`update coupons set status = 'USED', used_at = $3, used_by = $4, used_branch = $5 where shop_id = $1 and code = $2`,
       [shopId, code, now, ctx.staff.name, branch]);
     Object.assign(cp, { status: 'USED', used_at: now, used_by: ctx.staff.name, used_branch: branch });
-    return { coupon: V.publicCoupon(cp, now), member: owner ? V.staffMember(owner) : null };
+    const tiers = await T.loadTiers(q, shopId);
+    return { coupon: V.publicCoupon(cp, now), member: owner ? V.staffMember(owner, T.tiersOn(tiers) ? tiers : null) : null };
   });
 }
 
@@ -239,7 +275,8 @@ async function adjustPoints(p, ctx) {
                    values ($1, $2, $3, $4, 'ADJUST', 0, $5, $6, $7, $8, $9, $10)`,
       [shopId, M.newTxId(), ctx.now, memberId, delta, balance, 'ปรับแต้ม: ' + reason, ctx.staff.name, reqId, branch]);
     m.points = balance;
-    return { pointsAdded: delta, balance, member: V.staffMember(m) };
+    const tiers = await T.loadTiers(q, shopId);
+    return { pointsAdded: delta, balance, member: V.staffMember(m, T.tiersOn(tiers) ? tiers : null) };
   });
 }
 

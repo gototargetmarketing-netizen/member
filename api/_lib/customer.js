@@ -7,6 +7,7 @@ const { cfg } = require('./shop');
 const { once } = require('./once');
 const V = require('./views');
 const M = require('./members');
+const T = require('./tiers');
 
 const BIRTHDAY_MIN_DAYS = 30; // ต้องเป็นสมาชิก ≥ 30 วัน และไม่ได้เพิ่งเปลี่ยนวันเกิด (กันสมัคร/แก้วันเกิดเพื่อรับของขวัญ)
 
@@ -26,17 +27,20 @@ select json_build_object(
       select ${V.REWARD_COLS} from rewards where shop_id = $1 and status = 'ACTIVE' and deleted_at is null order by sort, id) r), '[]'::json),
   'promos', coalesce((select json_agg(p) from (
       select id, title, subtitle, tag, image, link, to_char(start_date, 'YYYY-MM-DD') as start_date,
-             to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status
+             to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status, min_tier_id
       from promotions where shop_id = $1 and status = 'ACTIVE' and deleted_at is null order by sort, id) p), '[]'::json),
   'rules', coalesce((select json_agg(x) from (
       select id, name, multiplier, days, to_char(start_date, 'YYYY-MM-DD') as start_date,
-             to_char(end_date, 'YYYY-MM-DD') as end_date, branch, min_amount, show_badge, status
+             to_char(end_date, 'YYYY-MM-DD') as end_date, branch, min_amount, show_badge, status, min_tier_id
       from point_rules where shop_id = $1 and status = 'ACTIVE' and deleted_at is null) x), '[]'::json),
   'branches', coalesce((select json_agg(b) from (
       select id, name, status, sort from branches where shop_id = $1 order by sort, id) b), '[]'::json),
   'birthLog', coalesce((select json_agg(l) from (
       select created_at, changed from profile_log where shop_id = $1 and member_id = (select id from m)
-      order by created_at desc limit 20) l), '[]'::json)
+      order by created_at desc limit 20) l), '[]'::json),
+  -- ยอดซื้อ 12 เดือนล่าสุด (ระดับสมาชิก: บอกลูกค้าว่าขาดอีกเท่าไรถึงระดับถัดไป)
+  'spend12m', (select coalesce(sum(amount), 0)::float8 from transactions where shop_id = $1 and member_id = (select id from m)
+      and type = 'EARN' and created_at > ($4::timestamptz - interval '12 months') and created_at <= $4::timestamptz)
 ) as data`;
 
 // ---------- ของขวัญวันเกิด (ผู้ใช้ตกลง 4 พ.ย. 2569) ----------
@@ -56,11 +60,15 @@ function birthdayBlock(m, now, birthLog) {
   return changedRecently ? 'TOO_NEW' : '';
 }
 
-// ของขวัญวันเกิดที่แจกอยู่ (เรียงตามลำดับแสดง เอาชิ้นแรก) — ขั้น 4 จะเลือกตามระดับสมาชิก
-function birthdayReward(rewards, now) {
+// ของขวัญวันเกิดที่แจกอยู่ — ร้านเปิดใช้ระดับ: ได้ชิ้นของระดับสูงสุดที่ตัวเองถึง (tc = { tiers, tierId })
+// ระดับเท่ากัน / ร้านไม่มีระดับ → เรียงตามลำดับแสดง เอาชิ้นแรก (เหมือนเดิม)
+function birthdayReward(rewards, now, tc) {
+  const on = !!tc && T.tiersOn(tc.tiers);
+  const need = (r) => { const t = on ? T.tierById(tc.tiers, r.min_tier_id) : null; return t ? t.rank : -1; };
   return (rewards || []).filter((r) => r.id && U.upper(r.type) === V.REWARD_BIRTHDAY && U.upper(r.status) === 'ACTIVE' &&
-    U.inWindow(r.start_date, r.end_date, now) && (U.toInt(r.quota) <= 0 || U.toInt(r.issued) < U.toInt(r.quota)))
-    .sort((a, b) => U.toInt(a.sort) - U.toInt(b.sort))[0] || null;
+    U.inWindow(r.start_date, r.end_date, now) && (U.toInt(r.quota) <= 0 || U.toInt(r.issued) < U.toInt(r.quota)) &&
+    (!on || T.meets(tc.tiers, tc.tierId, r.min_tier_id)))
+    .sort((a, b) => (need(b) - need(a)) || (U.toInt(a.sort) - U.toInt(b.sort)))[0] || null;
 }
 
 const thaiYear = (now) => Number(U.thaiDay(now).slice(0, 4));
@@ -72,11 +80,11 @@ function birthdayCouponOf(coupons, now) {
 }
 
 // การ์ดหน้าลูกค้า: null = ไม่แสดง
-function birthdayOffer(m, now, coupons, rewards, birthLog) {
+function birthdayOffer(m, now, coupons, rewards, birthLog, tc) {
   if (U.upper(m.status || 'ACTIVE') !== 'ACTIVE' || birthdayBlock(m, now, birthLog)) return null;
   const got = birthdayCouponOf(coupons, now);
   if (got) return V.couponState(got, now) === 'ACTIVE' ? { claimed: true, coupon: V.publicCoupon(got, now) } : null;
-  const r = birthdayReward(rewards, now);
+  const r = birthdayReward(rewards, now, tc);
   if (!r) return null;
   return {
     claimed: false, rewardId: String(r.id), name: String(r.name || ''), description: String(r.description || ''),
@@ -86,35 +94,54 @@ function birthdayOffer(m, now, coupons, rewards, birthLog) {
 
 // ---------- คำสั่ง ----------
 
+// ระดับของลูกค้าคนนี้ครบกำหนด / ยังไม่มีระดับ → ปรับก่อนแสดง (ส่วนใหญ่ไม่ต้องทำอะไร เป็นคำสั่งค้นสั้นๆ ครั้งเดียว)
+async function syncTierByLine(ctx, tiers) {
+  const due = (await ctx.db.query(`select id from members where shop_id = $1 and line_user_id = $2 and (tier_id is null or tier_until < $3::date)`,
+    [ctx.shop.id, ctx.user.userId, U.thaiDay(ctx.now)])).rows[0];
+  if (!due) return;
+  await ctx.db.tx(async (q) => {
+    const m = await M.memberById(q, ctx.shop.id, due.id, true);
+    if (m) await T.syncMember(q, ctx.shop.id, m, tiers, ctx.now);
+  });
+}
+
 async function bootstrap(p, ctx) {
   const c = cfg(ctx.shop);
   const now = ctx.now;
-  const r = await ctx.db.query(BOOT_SQL, [ctx.shop.id, ctx.user.userId, c.historyLimit]);
+  const tiers = await T.loadTiers(ctx.db, ctx.shop.id);
+  const on = T.tiersOn(tiers);
+  if (on) await syncTierByLine(ctx, tiers);
+  const r = await ctx.db.query(BOOT_SQL, [ctx.shop.id, ctx.user.userId, c.historyLimit, now]);
   let d = r.rows[0].data;
   if (typeof d === 'string') d = JSON.parse(d);
   const names = V.branchNames(d.branches);
+  const m = d.member;
+  // ร้านเปิดใช้ระดับ: ของที่ตั้งระดับขั้นต่ำไว้ แสดงแต่ล็อก / ป้ายแต้มพิเศษแสดงเฉพาะกติกาที่ระดับนี้ได้
+  const tc = on ? { tiers, tierId: m ? m.tier_id : null } : null;
   const out = {
     settings: { shopName: c.shopName, pointRate: c.pointRate, welcomePoints: c.welcomePoints, consentVersion: c.consentVersion },
     profile: { name: ctx.user.name, picture: ctx.user.picture },
     member: null,
     history: [],
     coupons: [],
-    rewards: V.listRewards(d.rewards, now),
-    promos: V.listPromos(d.promos, now),
+    rewards: V.listRewards(d.rewards, now, tc),
+    promos: V.listPromos(d.promos, now, tc),
     // ป้าย "แต้ม x2 วันนี้" (เฉพาะกติกาที่เจ้าของร้านติ๊กให้แสดง)
-    badges: V.rulesOn(d.rules.map(V.ruleFromRow), now).filter((x) => x.showBadge).map((x) => V.publicRule(x, names)),
+    badges: V.rulesOn(d.rules.map(V.ruleFromRow), now).filter((x) => x.showBadge && (!on || T.meets(tiers, tc.tierId, x.minTierId)))
+      .map((x) => V.publicRule(x, names)),
     birthday: null
   };
-  const m = d.member;
+  if (on) out.tiers = T.publicTiers(tiers);
   if (!m) return out;
-  out.birthday = birthdayOffer(m, now, d.coupons, d.rewards, d.birthLog);
+  out.birthday = birthdayOffer(m, now, d.coupons, d.rewards, d.birthLog, tc);
 
   // อัปเดตรูปโปรไฟล์เมื่อลูกค้าเปลี่ยนรูปใน LINE (เขียนเฉพาะตอนที่เปลี่ยนจริง)
   if (ctx.user.picture && ctx.user.picture !== String(m.picture || '')) {
     await ctx.db.query('update members set picture = $3 where shop_id = $1 and id = $2', [ctx.shop.id, m.id, ctx.user.picture]);
     m.picture = ctx.user.picture;
   }
-  out.member = V.publicMember(m);
+  out.member = V.publicMember(m, on ? tiers : null);
+  if (on) out.member.tierInfo = T.tierInfo(tiers, m, d.spend12m);
   out.history = d.tx.map(V.publicTx);
   out.coupons = d.coupons.slice(0, 100).map((cp) => V.publicCoupon(cp, now));
   return out;
@@ -137,6 +164,7 @@ async function register(p, ctx) {
   if ((await ctx.db.query('select 1 from members where shop_id = $1 and phone = $2', [shopId, phone])).rows.length) throw phoneTaken();
   const joined = M.joinedBranch(p.branch, await M.activeBranches(ctx.db, shopId));
   const now = ctx.now;
+  const tiers = await T.loadTiers(ctx.db, shopId);
 
   try {
     return await ctx.db.tx(async (q) => {
@@ -153,7 +181,9 @@ async function register(p, ctx) {
                        values ($1, $2, $3, $4, 'WELCOME', 0, $5, $5, 'แต้มต้อนรับสมาชิกใหม่', 'SYSTEM')`,
           [shopId, M.newTxId(), now, member.id, c.welcomePoints]);
       }
-      return { member: V.publicMember(member), welcomePoints: c.welcomePoints };
+      // ร้านเปิดใช้ระดับ: สมาชิกใหม่เริ่มที่ระดับแรก (จดประวัติ START)
+      await T.syncMember(q, shopId, member, tiers, now);
+      return { member: V.publicMember(member, T.tiersOn(tiers) ? tiers : null), welcomePoints: c.welcomePoints };
     });
   } catch (e) {
     if (e && e.code === '23505') {
@@ -205,10 +235,15 @@ async function redeem(p, ctx) {
     M.assertActiveMember(m);
 
     const now = ctx.now;
+    const tiers = await T.loadTiers(q, shopId);
+    await T.syncMember(q, shopId, m, tiers, now); // ระดับที่ครบกำหนดแล้ว ลดก่อนตรวจสิทธิ์
     const reward = (await q.query(`select ${V.REWARD_COLS} from rewards where shop_id = $1 and id = $2 and deleted_at is null for update`, [shopId, rewardId])).rows[0];
     if (!reward || U.upper(reward.status) !== 'ACTIVE' || !U.inWindow(reward.start_date, reward.end_date, now) ||
         U.upper(reward.type) === V.REWARD_BIRTHDAY) {
       throw userError('รางวัลนี้ไม่พร้อมให้แลกแล้ว', 'REWARD_UNAVAILABLE');
+    }
+    if (!T.meets(tiers, m.tier_id, reward.min_tier_id)) {
+      throw userError('ของรางวัลนี้สำหรับสมาชิกระดับ ' + T.tierById(tiers, reward.min_tier_id).name + ' ขึ้นไป', 'TIER_LOCKED');
     }
     const cost = U.toInt(reward.points);
     if (cost <= 0) throw userError('รางวัลนี้ตั้งค่าแต้มไม่ถูกต้อง', 'REWARD_UNAVAILABLE');
@@ -248,11 +283,14 @@ async function claimBirthday(p, ctx) {
                                 order by issued_at desc limit 1`, [shopId, m.id, year])).rows[0];
     if (got) return { already: true, coupon: V.publicCoupon(got, now) };
 
+    const tiers = await T.loadTiers(q, shopId);
+    await T.syncMember(q, shopId, m, tiers, now);
+    const tc = { tiers, tierId: m.tier_id };
     const list = (await q.query(`select ${V.REWARD_COLS} from rewards where shop_id = $1 and status = 'ACTIVE' and type = 'BIRTHDAY' and deleted_at is null`, [shopId])).rows;
-    const pick = birthdayReward(list, now);
+    const pick = birthdayReward(list, now, tc);
     const reward = pick && (await q.query(`select ${V.REWARD_COLS} from rewards where shop_id = $1 and id = $2 and deleted_at is null for update`, [shopId, pick.id])).rows[0];
     // ตรวจโควตาซ้ำหลังจองแถว (อีกคนอาจเพิ่งรับชิ้นสุดท้ายไป)
-    if (!reward || !birthdayReward([reward], now)) throw userError('ตอนนี้ร้านยังไม่มีของขวัญวันเกิด', 'REWARD_UNAVAILABLE');
+    if (!reward || !birthdayReward([reward], now, tc)) throw userError('ตอนนี้ร้านยังไม่มีของขวัญวันเกิด', 'REWARD_UNAVAILABLE');
     const cost = U.toInt(reward.points);
     const points = U.toInt(m.points);
     if (cost > points) throw notEnough(cost, points);
@@ -273,7 +311,8 @@ async function updateProfile(p, ctx) {
       M.assertActiveMember(m);
       const changed = await M.applyProfile(q, shopId, m, input, { self: true, by: 'ลูกค้า' }, ctx.now);
       const fresh = await M.memberById(q, shopId, m.id);
-      return { changed: changed.length, member: V.publicMember(fresh) };
+      const tiers = await T.loadTiers(q, shopId);
+      return { changed: changed.length, member: V.publicMember(fresh, T.tiersOn(tiers) ? tiers : null) };
     });
   } catch (e) {
     // เบอร์เพิ่งถูกคนอื่นใช้ไปพร้อมกันพอดี (ฐานข้อมูลกันซ้ำให้)

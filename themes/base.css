@@ -735,3 +735,50 @@ input.input-err { border-color: var(--danger); }
 /* ปุ่มลบในหน้าต่างแก้ไข (หลังบ้าน) — แยกจากปุ่มบันทึก กันกดพลาด */
 .modal-delete { text-align: center; margin-top: 14px; }
 .link-danger { color: var(--danger); }
+
+/* ---------- ระดับสมาชิก (ขั้น 4) — แสดงเฉพาะร้านที่เปิดใช้ระดับ ---------- */
+.tier-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: middle;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--surface) 60%, transparent); }
+.mc-tier .tier-dot { box-shadow: none; }
+.tier-card { margin: 16px 16px 0; padding: 16px 18px; border-radius: var(--radius); background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow); }
+.tier-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
+.tier-name { font-weight: 800; font-size: 16px; }
+.tier-bar { height: 8px; border-radius: 99px; background: var(--surface2); overflow: hidden; }
+.tier-bar i { display: block; height: 100%; border-radius: 99px; background: var(--accent); }
+.tier-next { margin-top: 8px; font-size: 13.5px; }
+.tier-until { margin-top: 4px; font-size: 12.5px; color: var(--muted); }
+.tier-card .link { margin-top: 8px; font-size: 13px; }
+.tier-list { display: grid; gap: 8px; }
+.tier-row { display: grid; grid-template-columns: 1.3fr 1.5fr auto; gap: 8px; align-items: center; padding: 12px 14px;
+  border-radius: var(--radius-sm); background: var(--surface); border: 1px solid var(--line); font-size: 13.5px; }
+.tier-row.current { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--surface)); }
+.tier-row-name { font-weight: 800; }
+.tier-row-name small { font-weight: 600; color: var(--muted); }
+.tier-row-mult { font-weight: 800; color: var(--button); }
+.reward-tier { position: absolute; left: 8px; top: 8px; display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px;
+  border-radius: 99px; font-size: 11px; font-weight: 800; background: var(--surface); color: var(--text); }
+.reward.is-locked .reward-img img, .reward.is-locked .reward-ph { filter: grayscale(0.7); opacity: 0.7; }
+.promo-tier { background: var(--surface); color: var(--text); margin-left: 4px; }
+.chip-tier { font-size: 12px; padding: 2px 9px; vertical-align: middle; }
+
+/* ระดับสมาชิกในหลังบ้าน: ตั้งระดับ / จำนวนสมาชิกแต่ละระดับ / การ์ดระดับของสมาชิก */
+.tier-counts { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.tier-count { display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: var(--radius-sm); background: var(--surface2); color: var(--text); text-decoration: none; }
+.tier-count span { color: var(--muted); font-size: 13px; }
+.tier-edit-list { display: grid; gap: 10px; }
+.tier-edit { display: grid; grid-template-columns: 56px minmax(0, 1.3fr) minmax(0, 1.3fr) minmax(0, 0.8fr) auto; gap: 10px; align-items: end;
+  padding: 12px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); }
+.tier-edit .field { margin: 0; }
+.tier-edit input[type="color"] { width: 100%; height: 42px; padding: 3px; }
+.tier-edit input[readonly] { background: var(--surface2); color: var(--muted); }
+.tier-f-end { display: flex; align-items: center; gap: 6px; min-height: 42px; white-space: nowrap; }
+.tier-now { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 6px; }
+.tier-hist { margin-top: 14px; }
+.tier-summary { display: grid; gap: 6px; margin-bottom: 12px; }
+.tier-rules { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.tier-intro p { margin: 6px 0 14px; }
+@media (max-width: 720px) {
+  .tier-edit { grid-template-columns: 56px minmax(0, 1fr) auto; }
+  .tier-f-spend, .tier-f-mult { grid-column: span 3; }
+  .tier-f-end { grid-row: 1; grid-column: 3; }
+}

@@ -12,7 +12,7 @@ const staff = require('./staff');
 const admin = require('./admin');
 const speed = require('./speed');
 
-const API_VERSION = '0.4.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3)
+const API_VERSION = '0.5.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4)
 const { ALL_STAFF, MANAGERS } = staff;
 const OWNER = ['OWNER'];
 const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/; // ตรงกับเงื่อนไขในตาราง shops
@@ -74,7 +74,11 @@ const ACTIONS = {
   // ลบ (7 พ.ย. 2569): ใครแก้ได้ = ลบได้ (ของรางวัล/โปรโมชัน: เจ้าของร้าน+ผู้จัดการ / แต้มพิเศษ: เจ้าของร้าน)
   adminRewardDelete: { shop: true, auth: true, roles: MANAGERS, run: admin.adminRewardDelete },
   adminPromoDelete: { shop: true, auth: true, roles: MANAGERS, run: admin.adminPromoDelete },
-  adminRuleDelete: { shop: true, auth: true, roles: OWNER, run: admin.adminRuleDelete }
+  adminRuleDelete: { shop: true, auth: true, roles: OWNER, run: admin.adminRuleDelete },
+  // ระดับสมาชิก (ขั้น 4): ผู้จัดการดูได้ / ตั้งระดับและเปลี่ยนระดับให้สมาชิก เฉพาะเจ้าของร้าน (มีผลกับต้นทุนเหมือนอัตราแต้ม)
+  adminTiers: { shop: true, auth: true, roles: MANAGERS, run: admin.adminTiers },
+  adminTiersSave: { shop: true, auth: true, roles: OWNER, run: admin.adminTiersSave },
+  adminMemberTier: { shop: true, auth: true, roles: OWNER, run: admin.adminMemberTier }
 };
 
 const ms = (t0) => Math.round((performance.now() - t0) * 10) / 10;

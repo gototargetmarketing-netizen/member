@@ -640,6 +640,7 @@ function pageHome() {
       </div>
     </header>
     ${memberCard(m)}
+    ${tierCard(m)}
     ${birthdayCard()}
     ${badgesHtml()}
     <section class="section">
@@ -656,13 +657,40 @@ function pageHome() {
     ${creditHtml('credit-page')}`;
 }
 
+/* ---------- ระดับสมาชิก (ขั้น 4) ----------
+ * แสดงเมื่อร้านเปิดแพ็กเกจ (config features.tiers) และหลังบ้านส่งข้อมูลระดับมา (ระบบใหม่ + ร้านตั้งระดับแล้ว)
+ * ระบบเดิมไม่ส่งข้อมูลระดับ → หน้าเหมือนเดิมทุกอย่าง */
+const tiersOn = () => !!(cfg().features && cfg().features.tiers) && !!S.data && Array.isArray(S.data.tiers) && S.data.tiers.length >= 2;
+// จุดสีของระดับ (สีมาจากหลังบ้าน ตรวจรูปแบบ #RRGGBB แล้ว)
+const tierDot = color => (/^#[0-9A-Fa-f]{6}$/.test(color || '') ? `<i class="tier-dot" style="background:${color}"></i>` : '');
+
+function tierCard(m) {
+  const t = m.tierInfo;
+  if (!tiersOn() || !t) return '';
+  const next = t.next;
+  const pct = next && next.minSpend > 0 ? Math.min(100, Math.round(t.spend12m / next.minSpend * 100)) : 100;
+  return `
+    <section class="tier-card">
+      <div class="tier-head">
+        <span class="tier-name">${tierDot(t.color)}ระดับ ${esc(t.name)}</span>
+        ${t.multiplier > 1 ? `<span class="chip">${esc(unit())} ×${t.multiplier} ทุกบิล</span>` : ''}
+      </div>
+      ${next ? `
+        <div class="tier-bar"><i style="width:${pct}%"></i></div>
+        <div class="tier-next">ยอดซื้อ 12 เดือน ฿${fmtMoney(t.spend12m)} · อีก <b>฿${fmtMoney(next.remaining)}</b> ถึงระดับ <b>${esc(next.name)}</b></div>`
+        : '<div class="tier-next">คุณอยู่ระดับสูงสุดแล้ว 🎉</div>'}
+      ${t.until ? `<div class="tier-until">คงระดับนี้ถึง ${fmtDate(t.until)}</div>` : ''}
+      <button class="link" data-act="go" data-page="collect">สิทธิ์ของแต่ละระดับ ${icon('right', 14)}</button>
+    </section>`;
+}
+
 function memberCard(m) {
   const tiers = cfg().features && cfg().features.tiers;
   return `
     <section class="member-card">
       <div class="mc-top">
         <div><div class="mc-label">${esc(T('cardLabel', 'บัตรสมาชิก'))}</div><div class="mc-shop">${esc(cfg().name)}</div></div>
-        ${tiers && m.tier ? `<span class="mc-tier">${esc(m.tier)}</span>` : ''}
+        ${tiers && m.tier ? `<span class="mc-tier">${tierDot(m.tierInfo && m.tierInfo.color)}${esc(m.tier)}</span>` : ''}
       </div>
       <div class="mc-mid">
         <div>
@@ -689,6 +717,7 @@ function promos() {
           ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : ''}
           <div class="promo-text">
             ${p.tag ? `<span class="promo-tag">${esc(p.tag)}</span>` : ''}
+            ${p.minTier ? `<span class="promo-tag promo-tier">${p.locked ? icon('lock', 11) + ' ' : ''}สำหรับระดับ ${esc(p.minTier.name)} ขึ้นไป</span>` : ''}
             <div class="promo-title">${esc(p.title)}</div>
             ${p.subtitle ? `<div class="promo-sub">${esc(p.subtitle)}</div>` : ''}
           </div>`;
@@ -713,13 +742,16 @@ function showMemberQr() {
 function rewardCard(r) {
   const pts = S.data.member.points;
   const soldOut = r.remaining === 0;
-  const can = !soldOut && pts >= r.points;
-  const label = soldOut ? 'หมดแล้ว' : can ? 'แลกของรางวัล' : `ขาดอีก ${fmtNum(r.points - pts)}`;
+  // ระดับไม่ถึง: แสดงแต่ล็อก (ผู้ใช้เลือก 7 พ.ย. 2569 — ลูกค้ารู้ว่ามีอะไรรออยู่ เป็นแรงจูงใจ) / ระบบก็ไม่ยอมให้แลกอีกชั้น
+  const locked = r.locked === true && r.minTier;
+  const can = !soldOut && !locked && pts >= r.points;
+  const label = soldOut ? 'หมดแล้ว' : locked ? `${icon('lock', 14)} ระดับ ${esc(r.minTier.name)} ขึ้นไป` : can ? 'แลกของรางวัล' : `ขาดอีก ${fmtNum(r.points - pts)}`;
   return `
-    <article class="reward">
+    <article class="reward ${locked ? 'is-locked' : ''}">
       <div class="reward-img">
         ${r.image ? `<img src="${esc(r.image)}" alt="" loading="lazy">` : `<div class="reward-ph">${icon('gift', 34)}</div>`}
         <span class="reward-cost">${fmtNum(r.points)} ${esc(unit())}</span>
+        ${r.minTier ? `<span class="reward-tier">${locked ? icon('lock', 12) : ''}${esc(r.minTier.name)} ขึ้นไป</span>` : ''}
       </div>
       <div class="reward-body">
         <h3>${esc(r.name)}</h3>
@@ -876,5 +908,24 @@ function pageCollect() {
       <ol class="steps">${steps.map((s, i) => `
         <li><span class="step-no">${i + 1}</span><div><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p></div></li>`).join('')}
       </ol>
+    </section>
+    ${tierTable()}`;
+}
+
+// ตารางระดับสมาชิก (หน้าวิธีสะสม) — ระดับของลูกค้าคนนี้ไฮไลต์ไว้
+function tierTable() {
+  if (!tiersOn()) return '';
+  const mine = S.data.member && S.data.member.tierInfo ? S.data.member.tierInfo.id : '';
+  return `
+    <section class="section">
+      <div class="section-head"><h2>ระดับสมาชิก</h2></div>
+      <p class="muted small">คิดจากยอดซื้อ 12 เดือนล่าสุด · ถึงเกณฑ์ขึ้นระดับทันที และคงระดับไว้ 12 เดือน · ครบแล้วยอดไม่ถึง ลดลงทีละ 1 ระดับ</p>
+      <div class="tier-list">${S.data.tiers.map(t => `
+        <div class="tier-row ${t.id === mine ? 'current' : ''}">
+          <span class="tier-row-name">${tierDot(t.color)}${esc(t.name)}${t.id === mine ? ' <small>(ระดับของคุณ)</small>' : ''}</span>
+          <span>${t.minSpend > 0 ? 'ยอด ฿' + fmtMoney(t.minSpend) + ' ขึ้นไป' : 'สมาชิกทุกคน'}</span>
+          <span class="tier-row-mult">${t.multiplier > 1 ? esc(unit()) + ' ×' + t.multiplier : '-'}</span>
+        </div>`).join('')}
+      </div>
     </section>`;
 }
