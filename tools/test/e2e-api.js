@@ -204,8 +204,8 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     await b.waitFor(`document.querySelector('.tier-card')`, 10000, 'การ์ดระดับ');
     ok(/ระดับของคุณ Member/.test(await b.text('.tl-head')) && /อีก 150 แต้ม ถึง Silver/.test(await b.text('.tl-next')) && /150 แต้ม/.test(await b.text('.tl-labels')),
       'หน้าลูกค้า: บันไดระดับนับแต้ม — Member + อีก 150 แต้ม ถึง Silver', await b.text('.tier-card'));
-    ok(!/ได้แต้ม ×/.test(await b.text('.tl-next')) && /แต้มสะสม 12 เดือน 0 แต้ม/.test(await b.text('.tl-next')),
-      'การ์ดไม่มีบรรทัดสิทธิ์แล้ว (ย้ายไปหน้าสิทธิ์) + บอกแต้มสะสม 12 เดือน', await b.text('.tl-next'));
+    ok(!/ได้แต้ม ×/.test(await b.text('.tl-next')) && !/12 เดือน|คงระดับ|🎉/.test(await b.text('.tl-next')),
+      'การ์ดสั้น: ไม่มีบรรทัดสิทธิ์ / แต้มสะสม 12 เดือน (ย้ายไปหน้าสิทธิ์) / ระดับแรกไม่มีวันหมดจึงไม่มี "คงระดับถึง"', await b.text('.tl-next'));
     ok(/แต้มคงเหลือ/.test(await b.text('.member-card')), 'บัตรเขียน "แต้มคงเหลือ" (คนละตัวกับแต้มสะสมที่นับระดับ)');
     ok(await b.eval(`(() => { const n = [...document.querySelectorAll('.tl-node')]; return n.length === 3 && n[0].classList.contains('on') && /Gold/.test(document.querySelector('.tl-labels').innerText); })()`),
       'เห็นทุกระดับเรียงกัน 3 จุด + ระดับปัจจุบันเป็นจุดแรก');
@@ -219,10 +219,11 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
       /สมาชิก GO TO CAFE/.test(await b.text('.tp-intro')), 'กดการ์ดบันได → หน้าสิทธิ์: ข้อความร้าน + รูปบัตร 3 ระดับ');
     ok(/Member\s*ระดับของคุณ/.test(await b.text('.tp-tabs [aria-selected=true]')) && /คุณอยู่ระดับนี้/.test(await b.text('#tier-detail')),
       'เปิดมาที่ระดับของลูกค้า (Member)', await b.text('.tp-tabs'));
+    ok(/สะสมจากการซื้อใน 12 เดือน 0 แต้ม/.test(await b.text('#tier-detail')), 'แท็บระดับของลูกค้าบอกแต้มสะสม 12 เดือน (ย้ายมาจากการ์ดหน้าแรก)', await b.text('#tier-detail'));
     await b.click('[data-act=tier-tab][data-id="1"]');
     await b.waitFor(`/Silver/.test(document.querySelector('.tp-tabs [aria-selected=true]').innerText)`, 3000, 'แท็บ Silver');
     const silver = await b.text('#tier-detail');
-    ok(/สะสม 150 แต้มจากการซื้อ/.test(silver) && /อีก 150 แต้ม/.test(silver) && /ได้แต้ม ×1\.5 ทุกบิล/.test(silver) && /ทดลองเมนูใหม่ก่อนใคร/.test(silver),
+    ok(/สะสม 150 แต้มจากการซื้อ/.test(silver) && /สะสมจากการซื้อใน 12 เดือน 0 แต้ม · อีก 150 แต้ม/.test(silver) && /แลกของรางวัลแล้ว แต้มสะสมเพื่อเลื่อนระดับไม่ลด/.test(silver) && /ได้แต้ม ×1\.5 ทุกบิล/.test(silver) && /ทดลองเมนูใหม่ก่อนใคร/.test(silver),
       'แท็บ Silver: เงื่อนไข + แต้มที่ขาด + สิทธิ์ที่ระบบใส่ (×1.5) + สิทธิ์ที่ร้านเขียน', silver);
     await b.shot(path.join(OUT, 'n08b-tiers-page.png'), { full: true });
     await b.click('[data-act=tier-tab][data-id="2"]');

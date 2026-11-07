@@ -696,6 +696,8 @@ function tierCard(m) {
     }
     return `<span class="tl-node${i < rank ? ' done' : ''}" style="left:${left}%;${c ? `border-color:${c};${i < rank ? `background:${c}` : ''}` : ''}"></span>`;
   };
+  // บรรทัดเล็กมีแค่ "คงระดับถึง" — ตัวเลขสะสม 12 เดือน + "แลกแล้วไม่ลด" ย้ายไปหน้าสิทธิ์ (ผู้ใช้เลือก 7 พ.ย. 2569) ให้การ์ดหน้าแรกสั้น
+  // ลูกค้าที่สงสัยว่า "อีก X" มาจากไหน กดการ์ดเข้าไปดูได้
   return `
     <button type="button" class="tier-card tier-ladder" data-act="go" data-page="tiers" aria-label="ระดับของคุณ ${esc(t.name)} — ดูสิทธิ์สมาชิก">
       <span class="tl-head"><span>ระดับของคุณ <b>${esc(t.name)}</b>${t.multiplier > 1 ? ` <small>· ${esc(unit())} ×${t.multiplier}</small>` : ''}</span><span class="tl-more">ดูสิทธิ์ ${icon('right', 14)}</span></span>
@@ -707,8 +709,8 @@ function tierCard(m) {
       </span>
       <span class="tl-next">${next
         ? `อีก <b>${fmtNum(next.remaining)} ${u}</b> ถึง <b>${esc(next.name)}</b>`
-        : `<b>คุณอยู่ระดับสูงสุดแล้ว</b> 🎉`}
-        <small>${u}สะสม 12 เดือน ${fmtNum(t.points12m)} ${u} (ไม่ลดเมื่อแลกของรางวัล)${t.until ? ` · คงระดับถึง ${fmtDate(t.until)}` : ''}</small></span>
+        : `<b>คุณอยู่ระดับสูงสุดแล้ว</b>`}
+        ${t.until ? `<small>คงระดับถึง ${fmtDate(t.until)}</small>` : ''}</span>
     </button>`;
 }
 
@@ -1018,11 +1020,13 @@ function tierDetail(i) {
   const mine = tierIndex(ti.id);
   const u = esc(unit());
   let status;
-  if (i === mine) status = `${icon('check', 15)}<span>คุณอยู่ระดับนี้${ti.until ? ` · คงระดับถึง ${fmtDate(ti.until)}` : ''}</span>`;
+  // นับจาก "แต้มจากการซื้อ" 12 เดือน ไม่ใช่แต้มคงเหลือบนบัตร → เขียนให้ชัด กันลูกค้าเอาแต้มคงเหลือไปเทียบกับเกณฑ์
+  const got = `สะสมจากการซื้อใน 12 เดือน <b>${fmtNum(ti.points12m)}</b> ${u}`;
+  if (i === mine) status = `${icon('check', 15)}<span>คุณอยู่ระดับนี้${ti.until ? ` · คงระดับถึง ${fmtDate(ti.until)}` : ''}<span class="tp-sub">${got}</span></span>`;
   else if (i < mine) status = `${icon('check', 15)}<span>คุณผ่านระดับนี้แล้ว</span>`;
   else {
     const pct = t.minPoints > 0 ? Math.max(2, Math.min(100, Math.round(ti.points12m / t.minPoints * 100))) : 100;
-    status = `<span>คุณสะสมแล้ว <b>${fmtNum(ti.points12m)}</b> ${u} · อีก <b>${fmtNum(Math.max(0, t.minPoints - ti.points12m))}</b> ${u}
+    status = `<span>${got} · อีก <b>${fmtNum(Math.max(0, t.minPoints - ti.points12m))}</b> ${u}
       <span class="tp-bar"><i style="width:${pct}%"></i></span></span>`;
   }
   const perks = autoPerks(i);
@@ -1030,7 +1034,7 @@ function tierDetail(i) {
     <section class="tp-sec">
       <h2>${icon('receipt', 20)}เงื่อนไข</h2>
       <ul>${i === 0 ? '<li>สมัครสมาชิกฟรี ได้ระดับนี้ทันที</li><li>ไม่มีวันหมดอายุ</li>'
-        : `<li>สะสม ${fmtNum(t.minPoints)} ${u}จากการซื้อ ภายใน 12 เดือน</li><li>ถึงเกณฑ์เลื่อนระดับทันที และคงระดับ 12 เดือน</li>`}</ul>
+        : `<li>สะสม ${fmtNum(t.minPoints)} ${u}จากการซื้อ ภายใน 12 เดือน</li><li>ถึงเกณฑ์เลื่อนระดับทันที และคงระดับ 12 เดือน</li><li>แลกของรางวัลแล้ว ${u}สะสมเพื่อเลื่อนระดับไม่ลด</li>`}</ul>
       <div class="tp-status ${i > mine ? '' : 'done'}">${status}</div>
     </section>
     <section class="tp-sec">

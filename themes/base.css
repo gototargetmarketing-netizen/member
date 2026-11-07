@@ -851,6 +851,7 @@ input.input-err { border-color: var(--danger); }
   background: color-mix(in srgb, var(--button) 8%, var(--surface)); }
 .tp-status > span { flex: 1; min-width: 0; }
 .tp-status.done .ic { color: var(--success); margin-top: 2px; }
+.tp-sub { display: block; margin-top: 2px; color: var(--muted); font-size: 12.5px; }
 .tp-bar { display: block; height: 7px; margin-top: 7px; border-radius: 99px; background: var(--line); overflow: hidden; }
 .tp-bar i { display: block; height: 100%; border-radius: 99px; background: var(--button); }
 .tp-links { list-style: none; }
