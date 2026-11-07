@@ -22,8 +22,8 @@ export default {
     greeting: 'สวัสดี',
     pointUnit: 'แต้ม'
   },
-  // แพ็กเกจพื้นฐาน: ไม่มีหลายสาขา (เปิดด้วย branches: true + maxBranches)
-  features: { tiers: true, branches: true }, // ร้านเดโม: เปิดระดับสมาชิก + หลายสาขา (ไม่จำกัดจำนวน — ใช้เดโมขาย) ไว้ให้ลอง
+  // ร้านเดโม (ใช้เดโมขาย): เปิดทุกแพ็กเกจ — ระดับสมาชิก + หลายสาขา (ไม่ใส่ maxBranches = ไม่จำกัด) + ส่งออก Excel
+  features: { tiers: true, branches: true, export: true },
   legal: {
     privacyUrl: '',
     privacyText: 'ตัวอย่างนโยบายความเป็นส่วนตัว — ร้านจริงต้องใส่ข้อความของตัวเอง'

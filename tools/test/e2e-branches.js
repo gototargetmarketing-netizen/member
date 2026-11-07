@@ -205,12 +205,19 @@ const page = (p, user, name, extra = '') => `${WEB}/khamwan${p}?api=${encodeURIC
     ok(true, 'เปิดสาขาที่ปิดไว้กลับมาตอนครบ 6 แล้ว → แจ้งเกินแพ็กเกจ');
     await b.click('.modal [data-act=close]');
 
-    console.log('\n[แพ็กเกจ] ร้านแพ็กเกจพื้นฐาน (demo: branches: false)');
+    console.log('\n[แพ็กเกจ] ร้านแพ็กเกจพื้นฐาน (จำลอง demo: ไม่มีหลายสาขา ไม่มีส่งออก)');
+    await b.setFeatures('demo', { tiers: false, branches: false });
     await b.nav('about:blank');
     await b.nav(`${WEB}/demo/admin?api=${encodeURIComponent(API)}&user=U_BR_OWNER&name=x#branches`);
     await b.waitFor(`document.querySelectorAll('.kpi').length === 8`, 10000, 'ภาพรวมร้าน demo');
     ok(!(await b.eval(`!!document.querySelector('.adm-nav a[data-page=branches]')`)), 'ไม่มีเมนูสาขาในหลังบ้าน');
     ok((await b.eval(`(document.querySelector('.adm-head h1') || {}).innerText`)) === 'ภาพรวม', 'เปิดลิงก์ #branches ตรงๆ → พาไปหน้าภาพรวมแทน');
+    await b.click('.adm-nav a[data-page=members]');
+    await settle('.tbl');
+    ok(!(await b.eval(`!!document.querySelector('[data-act=export]')`)), 'แพ็กเกจไม่มีส่งออก → เจ้าของร้านไม่เห็นปุ่มส่งออก Excel (หน้าสมาชิก)');
+    await b.click('.adm-nav a[data-page=transactions]');
+    await settle('.tbl');
+    ok(!(await b.eval(`!!document.querySelector('[data-act=export]')`)), 'แพ็กเกจไม่มีส่งออก → ไม่มีปุ่มส่งออกในหน้ารายการแต้ม');
   } catch (e) {
     fail++;
     console.log('  ✗ หยุดกลางทาง: ' + e.message);

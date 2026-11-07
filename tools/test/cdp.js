@@ -62,6 +62,22 @@ async function launch({ port = 9333, profile, width = 390, height = 844, dpr = 2
       fs.writeFileSync(file, Buffer.from(r.data, 'base64'));
       if (full) await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: dpr, mobile });
     },
+    // จำลองแพ็กเกจของร้าน: ดักไฟล์ /shops/<ร้าน>/config.js แล้วทับ features (ไม่ต้องแก้ไฟล์ร้านจริงเพื่อทดสอบ)
+    // ไฟล์ที่ส่งแทน import ของเดิมผ่าน ?orig (รูปแบบที่ดักไม่มี ? ต่อท้าย จึงไม่ดักซ้ำ) — เรียกก่อนเปิดหน้า
+    async setFeatures(shop, features) {
+      if (!api._features) {
+        api._features = {};
+        api.on('Fetch.requestPaused', p => {
+          const m = /\/shops\/([a-z0-9-]+)\/config\.js$/.exec(new URL(p.request.url).pathname);
+          const f = m && api._features[m[1]];
+          if (!f || new URL(p.request.url).search) { send('Fetch.continueRequest', { requestId: p.requestId }).catch(() => {}); return; }
+          const body = `import c from '/shops/${m[1]}/config.js?orig';\nexport default { ...c, features: ${JSON.stringify(f)} };\n`;
+          send('Fetch.fulfillRequest', { requestId: p.requestId, responseCode: 200, responseHeaders: [{ name: 'Content-Type', value: 'text/javascript' }, { name: 'Cache-Control', value: 'no-store' }], body: Buffer.from(body).toString('base64') }).catch(() => {});
+        });
+        await send('Fetch.enable', { patterns: [{ urlPattern: '*/shops/*/config.js*' }] });
+      }
+      api._features[shop] = features;
+    },
     async close() { try { ws.close(); } catch (e) {} proc.kill('SIGKILL'); }
   };
   return api;

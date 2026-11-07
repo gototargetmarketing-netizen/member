@@ -75,6 +75,9 @@ const branchLimit = () => {
 /* แพ็กเกจระดับสมาชิก (ขั้น 4): เปิดที่ config features.tiers — มีเฉพาะระบบใหม่ (ระบบเดิมไม่มีคำสั่งระดับ)
  * ร้านยังไม่ตั้งระดับ / ระบบไม่ส่งข้อมูลระดับมา → ไม่เห็นอะไรเกี่ยวกับระดับเลย */
 const tierFeature = () => !!(cfg().features && cfg().features.tiers === true);
+/* แพ็กเกจส่งออก Excel: เปิดที่ config features.export (ไม่ใส่ = ปิด → ร้านใหม่ต้องตั้งเองตามแพ็กเกจที่ซื้อ)
+ * ตอนนี้แค่ซ่อนปุ่ม — ตัวกลางยังไม่ตรวจแพ็กเกจ (ทำตอนขั้น 7 พร้อมกันทุกสวิตช์) */
+const exportFeature = () => !!(cfg().features && cfg().features.export === true);
 const tierDot = c => (/^#[0-9A-Fa-f]{6}$/.test(c || '') ? `<i class="tier-dot" style="background:${c}"></i>` : '');
 const tierChip = (name, color) => (name ? `<span class="chip chip-tier">${tierDot(color)}${esc(name)}</span>` : '');
 const TIER_REASON = { START: 'เริ่มระดับ', UP: 'ขึ้นระดับ', DOWN: 'ลดระดับ (ครบ 12 เดือน ยอดไม่ถึง)', ADMIN: 'เปลี่ยนโดยร้าน' };
@@ -489,7 +492,7 @@ function pageHead(title, sub, actions = '') {
 }
 
 function exportBtn(kind) {
-  return isOwner() ? `<button class="btn btn-sm" data-act="export" data-id="${kind}">${icon('download', 16)} ส่งออก Excel (CSV)</button>` : '';
+  return isOwner() && exportFeature() ? `<button class="btn btn-sm" data-act="export" data-id="${kind}">${icon('download', 16)} ส่งออก Excel (CSV)</button>` : '';
 }
 
 function pager(r, of) {
