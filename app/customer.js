@@ -1,6 +1,6 @@
 // หน้าลูกค้า: สมัครสมาชิก บัตรสมาชิก + QR แลกของรางวัล คูปอง ประวัติแต้ม
 // ทุกร้านใช้ไฟล์นี้ร่วมกัน — ข้อความ/สี/โลโก้มาจาก shops/<ร้าน>/config.js
-import { loadShop, applyBrand, textOn } from './shop.js';
+import { loadShop, applyBrand, textOn, contrast, shade } from './shop.js';
 import { tierBanner } from './tier.js';
 import { initLine, IS_LOCAL } from './line.js';
 import { createApi, createRetryKeeper } from './api.js';
@@ -671,47 +671,51 @@ const tierDot = color => (/^#[0-9A-Fa-f]{6}$/.test(color || '') ? `<i class="tie
 const HEX6 = /^#[0-9A-Fa-f]{6}$/;
 const tierColor = c => (HEX6.test(c || '') ? c : '');
 
-// การ์ดระดับแบบ "บันไดระดับ" (ผู้ใช้เลือกจากตัวอย่าง 5 แบบ 7 พ.ย. 2569 — แบบการ์ดสีใหญ่เกินและดูเหมือนบัตรสมาชิก)
-// ทุกระดับเรียงบนเส้นเดียว ลูกค้าเห็นว่าอยู่ตรงไหนและมีอะไรรออยู่ / กดทั้งการ์ด → หน้าสิทธิ์สมาชิก
-// นับจาก "แต้มจากการซื้อ" 12 เดือน (7 พ.ย. 2569) — สิทธิ์ของแต่ละระดับย้ายไปอยู่หน้าสิทธิ์สมาชิก (ผู้ใช้ขอ: การ์ดเหลือแค่แต้มที่ขาด)
-// ร้านตั้งได้ 2–5 ระดับ: จุดอยู่กลางช่องของตัวเอง (เส้นเริ่มกลางช่องแรก จบกลางช่องสุดท้าย) ป้ายชื่อจึงตรงใต้จุดเสมอ
+// การ์ดระดับแบบ "วงแหวน" (ผู้ใช้เลือกจากภาพจำลอง 8 พ.ย. 2569 — เดิมเป็นบันไดระดับ สำรองที่ backups/2569-11-08_ก่อนการ์ดระดับวงแหวน/)
+// การ์ดขาวเตี้ย ทรงกลมต่างจากบัตรสมาชิกด้านบนชัดเจน / กดทั้งการ์ด → หน้าสิทธิ์สมาชิก (ภาพรวมทุกระดับอยู่ในแท็บของหน้านั้น)
+// ข้อความแบบ ข (ผู้ใช้เลือก 7 พ.ย. 2569): บรรทัดหลัก "อีก X ถึง Y" หรือ "คุณอยู่ระดับสูงสุดแล้ว" + บรรทัดเล็กมีแค่ "คงระดับถึง"
+//   ตัวเลขสะสม 12 เดือน / "แลกแล้วไม่ลด" / สิทธิ์ระดับถัดไป อยู่หน้าสิทธิ์ — ลูกค้าที่สงสัยว่า "อีก X" มาจากไหน กดการ์ดดูได้
 function tierCard(m) {
   const t = m.tierInfo;
   if (!tiersOn() || !t) return '';
-  const tiers = S.data.tiers;
-  const n = tiers.length;
-  const rank = Math.max(0, tiers.findIndex(x => x.id === t.id));
   const next = t.next;
-  const cur = tiers[rank];
-  // ตำแหน่งบนเส้น: ระดับห่างเท่ากัน + ความคืบหน้าในช่วงระดับนี้ → ระดับถัดไป
-  const frac = next && next.minPoints > cur.minPoints ? Math.max(0, Math.min(1, (t.points12m - cur.minPoints) / (next.minPoints - cur.minPoints))) : 0;
-  const fill = Math.min(100, (rank + frac) / (n - 1) * 100);
-  const color = tierColor(t.color);
   const u = esc(unit());
-  const node = (x, i) => {
-    const c = tierColor(x.color);
-    const left = i / (n - 1) * 100;
-    if (i === rank) {
-      return `<span class="tl-node on" style="left:${left}%;${c ? `background:${c};color:${textOn(c)};--tl-ring:${c}` : ''}">${icon('crown', 12)}</span>`;
-    }
-    return `<span class="tl-node${i < rank ? ' done' : ''}" style="left:${left}%;${c ? `border-color:${c};${i < rank ? `background:${c}` : ''}` : ''}"></span>`;
-  };
-  // บรรทัดเล็กมีแค่ "คงระดับถึง" — ตัวเลขสะสม 12 เดือน + "แลกแล้วไม่ลด" ย้ายไปหน้าสิทธิ์ (ผู้ใช้เลือก 7 พ.ย. 2569) ให้การ์ดหน้าแรกสั้น
-  // ลูกค้าที่สงสัยว่า "อีก X" มาจากไหน กดการ์ดเข้าไปดูได้
+  // วงเต็ม = ถึงเกณฑ์ระดับถัดไป (นับจาก 0 ให้ตรงกับที่ลูกค้าคิดในใจ "สะสม 910 จาก 1,000") / อย่างน้อย 2% ให้เห็นหัววง / ระดับสูงสุด = เต็มวง
+  const pct = next && next.minPoints > 0 ? Math.max(2, Math.min(100, t.points12m / next.minPoints * 100)) : 100;
+  const color = tierColor(t.color);
   return `
-    <button type="button" class="tier-card tier-ladder" data-act="go" data-page="tiers" aria-label="ระดับของคุณ ${esc(t.name)} — ดูสิทธิ์สมาชิก">
-      <span class="tl-head"><span>ระดับของคุณ <b>${esc(t.name)}</b>${t.multiplier > 1 ? ` <small>· ${esc(unit())} ×${t.multiplier}</small>` : ''}</span><span class="tl-more">ดูสิทธิ์ ${icon('right', 14)}</span></span>
-      <span class="tl-track" style="--tl-pad:${(50 / n).toFixed(3)}%">
-        <span class="tl-rail"><span class="tl-line"></span><span class="tl-fill" style="width:${fill.toFixed(1)}%;${color ? `background:${color}` : ''}"></span>${tiers.map(node).join('')}</span>
+    <button type="button" class="tier-card tier-ring" data-act="go" data-page="tiers" aria-label="ระดับของคุณ ${esc(t.name)} — ดูสิทธิ์สมาชิก">
+      <span class="tr-ring">${ringSvg(pct, color)}<span class="tr-icon"${color ? ` style="color:${inkOn(color)}"` : ''}>${icon('crown', 22)}</span></span>
+      <span class="tr-text">
+        <span class="tr-label">ระดับสมาชิกของคุณ</span>
+        <span class="tr-name">${esc(t.name)}${t.multiplier > 1 ? ` <small>· ${u} ×${t.multiplier}</small>` : ''}</span>
+        <span class="tr-next">${next
+          ? `อีก <b>${fmtNum(next.remaining)} ${u}</b> ถึง <b>${esc(next.name)}</b>`
+          : `<b>คุณอยู่ระดับสูงสุดแล้ว</b>`}</span>
+        ${t.until ? `<span class="tr-sub">คงระดับถึง ${fmtDate(t.until)}</span>` : ''}
       </span>
-      <span class="tl-labels" style="grid-template-columns:repeat(${n}, minmax(0, 1fr))">${tiers.map((x, i) => `
-        <span class="${i === rank ? 'on' : ''}"><b>${esc(x.name)}</b>${x.minPoints ? fmtNum(x.minPoints) + ' ' + u : 'เริ่มต้น'}${x.multiplier > 1 ? ` · ×${x.multiplier}` : ''}</span>`).join('')}
-      </span>
-      <span class="tl-next">${next
-        ? `อีก <b>${fmtNum(next.remaining)} ${u}</b> ถึง <b>${esc(next.name)}</b>`
-        : `<b>คุณอยู่ระดับสูงสุดแล้ว</b>`}
-        ${t.until ? `<small>คงระดับถึง ${fmtDate(t.until)}</small>` : ''}</span>
+      <span class="tr-chev">${icon('right', 18)}</span>
     </button>`;
+}
+
+// วงแหวนความคืบหน้า (SVG) — เริ่มที่ 12 นาฬิกา เดินตามเข็ม / ไม่มีสีระดับ → ใช้สีปุ่มของร้าน (ตั้งใน CSS)
+// สีระดับต้องใส่เป็น style ไม่ใช่ attribute stroke= เพราะ CSS (.tr-val) ทับ attribute ของ SVG ได้ — เคยเจอ: ลูกค้า Gold ได้วงสีฟ้า
+function ringSvg(pct, color, size = 58, w = 6) {
+  const r = (size - w) / 2, C = 2 * Math.PI * r, c = size / 2;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">
+    <circle class="tr-track" cx="${c}" cy="${c}" r="${r}" fill="none" stroke-width="${w}"/>
+    <circle class="tr-val" cx="${c}" cy="${c}" r="${r}" fill="none"${color ? ` style="stroke:${color}"` : ''} stroke-width="${w}" stroke-linecap="round"
+      stroke-dasharray="${C.toFixed(2)}" stroke-dashoffset="${(C * (1 - pct / 100)).toFixed(2)}" transform="rotate(-90 ${c} ${c})"/></svg>`;
+}
+
+// สีมงกุฎกลางวง: สีของระดับ แต่ถ้าอ่อนจนกลืนกับพื้นการ์ด (เช่น Silver บนพื้นขาว) ทำให้เข้มขึ้นจนต่างกันอย่างน้อย 3:1
+function inkOn(c) {
+  const bg = getComputedStyle(document.documentElement).getPropertyValue('--surface').trim();
+  const base = HEX6.test(bg) ? bg : '#FFFFFF';
+  const dir = textOn(base) === '#FFFFFF' ? 0.18 : -0.18; // พื้นเข้ม → ทำให้อ่อนลง / พื้นอ่อน → ทำให้เข้มขึ้น
+  let x = c;
+  for (let i = 0; i < 6 && contrast(x, base) < 3; i++) x = shade(x, dir);
+  return x;
 }
 
 // ป้ายระดับบนบัตร: พื้นเป็นสีของระดับนั้นเอง (เดิมพื้นสีเน้นของร้าน + จุดสีระดับ ทำให้สับสนว่าระดับนี้สีอะไร)

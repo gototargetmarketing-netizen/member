@@ -787,30 +787,24 @@ input.input-err { border-color: var(--danger); }
   .tier-f-end { grid-row: 1; grid-column: 3; }
 }
 
-/* การ์ดระดับในหน้าลูกค้า แบบบันไดระดับ (ผู้ใช้เลือก 7 พ.ย. 2569) — สีของระดับมาจากหลังบ้าน ใส่เป็น style ใน tierCard()
-   ไม่มีสี → ใช้สีปุ่มของร้าน / เส้นเริ่มกลางช่องแรก จบกลางช่องสุดท้าย (--tl-pad = ครึ่งช่อง) ป้ายชื่อจึงอยู่ใต้จุดพอดี */
-.tier-ladder { display: block; width: calc(100% - 32px); text-align: left; color: var(--text); padding: 14px 14px 12px; }
-.tier-ladder > span { display: block; }
-.tl-head { display: flex !important; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13.5px; }
-.tl-head b { font-size: 16px; font-weight: 800; }
-.tl-head small { color: var(--muted); font-weight: 700; font-size: 12px; }
-.tl-more { display: inline-flex; align-items: center; gap: 2px; color: var(--button); font-weight: 700; font-size: 12.5px; white-space: nowrap; }
-.tl-track { padding: 0 var(--tl-pad); margin-top: 10px; }
-.tl-rail { position: relative; display: block; height: 24px; }
-.tl-line, .tl-fill { position: absolute; left: 0; top: 10px; height: 4px; border-radius: 99px; }
-.tl-line { right: 0; background: var(--line); }
-.tl-fill { background: var(--button); }
-.tl-node { position: absolute; top: 12px; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 3px solid var(--button); background: var(--surface); }
-.tl-node.done { background: var(--button); }
-.tl-node.on { width: 24px; height: 24px; margin: -12px 0 0 -12px; border: 0; display: grid; place-items: center; background: var(--button); color: var(--on-button);
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--tl-ring, var(--button)) 22%, transparent); }
-.tl-labels { display: grid !important; margin-top: 2px; font-size: 11px; line-height: 1.3; color: var(--muted); text-align: center; }
-.tl-labels span { min-width: 0; padding: 0 2px; overflow-wrap: anywhere; }
-.tl-labels b { display: block; color: var(--text); font-size: 12px; font-weight: 700; }
-.tl-labels .on b { font-weight: 800; }
-.tl-next { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.45; }
-.tl-next b { font-weight: 800; }
-.tl-next small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }
+/* การ์ดระดับในหน้าลูกค้า แบบวงแหวน (ผู้ใช้เลือก 8 พ.ย. 2569) — สีของระดับมาจากหลังบ้าน ใส่เป็น style ใน tierCard()
+   ไม่มีสี → ใช้สีปุ่มของร้าน */
+.tier-ring { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; width: calc(100% - 32px);
+  padding: 12px 10px 12px 12px; text-align: left; color: var(--text); }
+.tr-ring { position: relative; width: 58px; height: 58px; }
+.tr-ring svg { display: block; }
+.tr-track { stroke: var(--line); }
+.tr-val { stroke: var(--button); }
+.tr-icon { position: absolute; inset: 0; display: grid; place-items: center; color: var(--button); }
+.tr-text { display: grid; gap: 1px; min-width: 0; }
+.tr-label { font-size: 12px; color: var(--muted); }
+.tr-name { font-size: 18px; font-weight: 800; line-height: 1.25; overflow-wrap: anywhere; }
+.tr-name small { font-size: 12px; font-weight: 700; color: var(--muted); }
+.tr-next { font-size: 13.5px; line-height: 1.4; }
+.tr-next b { font-weight: 800; }
+.tr-sub { font-size: 12px; color: var(--muted); }
+.tr-chev { color: var(--muted); display: grid; }
+@media (prefers-reduced-motion: no-preference) { .tr-val { transition: stroke-dashoffset .4s ease; } }
 
 /* ---------- หน้าสิทธิ์สมาชิก (ผู้ใช้ตกลง 7 พ.ย. 2569) — แท็บระดับ + รูปบัตรปัดได้ + เงื่อนไข/สิทธิพิเศษ/นโยบาย ---------- */
 .tier-more-btn { margin-top: 12px; }

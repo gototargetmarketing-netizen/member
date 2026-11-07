@@ -202,18 +202,19 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     await b.nav('about:blank');
     await b.nav(`${WEB}/demo#home`);
     await b.waitFor(`document.querySelector('.tier-card')`, 10000, 'การ์ดระดับ');
-    ok(/ระดับของคุณ Member/.test(await b.text('.tl-head')) && /อีก 150 แต้ม ถึง Silver/.test(await b.text('.tl-next')) && /150 แต้ม/.test(await b.text('.tl-labels')),
-      'หน้าลูกค้า: บันไดระดับนับแต้ม — Member + อีก 150 แต้ม ถึง Silver', await b.text('.tier-card'));
-    ok(!/ได้แต้ม ×/.test(await b.text('.tl-next')) && !/12 เดือน|คงระดับ|🎉/.test(await b.text('.tl-next')),
-      'การ์ดสั้น: ไม่มีบรรทัดสิทธิ์ / แต้มสะสม 12 เดือน (ย้ายไปหน้าสิทธิ์) / ระดับแรกไม่มีวันหมดจึงไม่มี "คงระดับถึง"', await b.text('.tl-next'));
+    ok(/ระดับสมาชิกของคุณ/.test(await b.text('.tier-ring')) && /Member/.test(await b.text('.tr-name')) && /อีก 150 แต้ม ถึง Silver/.test(await b.text('.tr-next')),
+      'หน้าลูกค้า: การ์ดวงแหวนนับแต้ม — Member + อีก 150 แต้ม ถึง Silver', await b.text('.tier-card'));
+    ok(!/ได้แต้ม ×|12 เดือน|คงระดับ|🎉/.test(await b.text('.tier-ring')),
+      'การ์ดสั้น: ไม่มีบรรทัดสิทธิ์ / แต้มสะสม 12 เดือน (ย้ายไปหน้าสิทธิ์) / ระดับแรกไม่มีวันหมดจึงไม่มี "คงระดับถึง"', await b.text('.tier-ring'));
     ok(/แต้มคงเหลือ/.test(await b.text('.member-card')), 'บัตรเขียน "แต้มคงเหลือ" (คนละตัวกับแต้มสะสมที่นับระดับ)');
-    ok(await b.eval(`(() => { const n = [...document.querySelectorAll('.tl-node')]; return n.length === 3 && n[0].classList.contains('on') && /Gold/.test(document.querySelector('.tl-labels').innerText); })()`),
-      'เห็นทุกระดับเรียงกัน 3 จุด + ระดับปัจจุบันเป็นจุดแรก');
+    // ยังไม่มียอดซื้อ → วงแสดงแค่หัววง (2%) ไม่ใช่วงเต็ม
+    ok(await b.eval(`(() => { const v = document.querySelector('.tier-ring .tr-val'); const C = +v.getAttribute('stroke-dasharray'); const off = +v.getAttribute('stroke-dashoffset'); return C > 0 && off / C > 0.95 && off / C < 1; })()`),
+      'วงแหวนความคืบหน้า: ยังไม่มีแต้มสะสม = หัววงเล็กๆ');
     ok(/Member/.test(await b.text('.mc-tier')), 'บัตรสมาชิกมีป้ายระดับ');
     await b.shot(path.join(OUT, 'n08-customer-tier.png'), { full: true });
 
     // หน้าสิทธิ์สมาชิก
-    await b.click('.tier-ladder');
+    await b.click('.tier-ring');
     await b.waitFor(`document.querySelector('.tp-tabs') && document.querySelector('#tier-detail')`, 5000, 'หน้าสิทธิ์สมาชิก');
     ok(/#tiers$/.test(await b.eval('location.hash')) && (await b.eval(`document.querySelectorAll('.tp-carousel .tier-banner').length`)) === 3 &&
       /สมาชิก GO TO CAFE/.test(await b.text('.tp-intro')), 'กดการ์ดบันได → หน้าสิทธิ์: ข้อความร้าน + รูปบัตร 3 ระดับ');
@@ -286,6 +287,19 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     await b.waitFor(`document.querySelector('[data-act=redeem][data-id=R005]')`, 10000, 'ของรางวัล R005');
     ok(await b.eval(`(() => { const x = document.querySelector('[data-act=redeem][data-id=R005]'); return /ขาดอีก/.test(x.innerText) && !x.closest('.is-locked'); })()`),
       'ลูกค้า Gold: ของรางวัล Gold ไม่ล็อกแล้ว (เหลือแค่แต้มไม่พอ)');
+    // ระดับสูงสุด → วงเต็ม + ข้อความแบบ ข (ไม่มีอีโมจิ) + คงระดับถึง
+    await b.nav(`${WEB}/demo#home`);
+    await b.waitFor(`document.querySelector('.tier-ring')`, 10000, 'การ์ดวงแหวน');
+    const ring = await b.text('.tier-ring');
+    ok(/Gold/.test(await b.text('.tr-name')) && /คุณอยู่ระดับสูงสุดแล้ว/.test(ring) && /คงระดับถึง/.test(ring) && !/🎉/.test(ring) &&
+      await b.eval(`+document.querySelector('.tier-ring .tr-val').getAttribute('stroke-dashoffset') === 0`),
+      'ลูกค้า Gold (สูงสุด): วงเต็ม + "คุณอยู่ระดับสูงสุดแล้ว" + "คงระดับถึง"', ring);
+    // สีวง = สีของระดับ (ไม่ใช่สีปุ่มร้าน) — CSS เคยทับสีที่ใส่ใน SVG
+    const ringColor = await b.eval(`getComputedStyle(document.querySelector('.tier-ring .tr-val')).stroke`);
+    const [gc] = await sql(`select color from tiers where shop_id='demo' and id=$1`, [gold]);
+    const hex = c => { const m = String(c).match(/\d+/g); return m ? '#' + m.slice(0, 3).map(x => (+x).toString(16).padStart(2, '0')).join('').toUpperCase() : ''; };
+    ok(!gc.color || hex(ringColor) === gc.color.toUpperCase(), 'วงแหวนเป็นสีของระดับ Gold', { ringColor, tierColor: gc.color });
+    await b.shot(path.join(OUT, 'n12-customer-ring-gold.png'), { full: true });
 
     const errs = b.logs.filter((l) => /EXCEPTION|console\.error/.test(l));
     ok(errs.length === 0, 'ไม่มีข้อผิดพลาดในหน้าเว็บ', errs);
