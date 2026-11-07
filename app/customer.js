@@ -1,6 +1,6 @@
 // หน้าลูกค้า: สมัครสมาชิก บัตรสมาชิก + QR แลกของรางวัล คูปอง ประวัติแต้ม
 // ทุกร้านใช้ไฟล์นี้ร่วมกัน — ข้อความ/สี/โลโก้มาจาก shops/<ร้าน>/config.js
-import { loadShop, applyBrand } from './shop.js';
+import { loadShop, applyBrand, textOn, shade } from './shop.js';
 import { initLine, IS_LOCAL } from './line.js';
 import { createApi, createRetryKeeper } from './api.js';
 import { applyDevParams, mountDevBar } from './devbar.js';
@@ -664,24 +664,64 @@ const tiersOn = () => !!(cfg().features && cfg().features.tiers) && !!S.data && 
 // จุดสีของระดับ (สีมาจากหลังบ้าน ตรวจรูปแบบ #RRGGBB แล้ว)
 const tierDot = color => (/^#[0-9A-Fa-f]{6}$/.test(color || '') ? `<i class="tier-dot" style="background:${color}"></i>` : '');
 
+// สีการ์ดระดับ: ไล่จากสีของระดับไปทางที่ห่างจากสีตัวอักษร (ตัวอักษรขาว → ไล่เข้มลง / ตัวอักษรเข้ม → เริ่มอ่อนกว่า)
+// ตัวอักษรจึงอ่านออกทั้งใบไม่ว่าร้านตั้งสีอะไร / สีไม่ถูกรูปแบบ → ใช้สีบัตรสมาชิกของร้าน (CSS)
+const HEX6 = /^#[0-9A-Fa-f]{6}$/;
+function tierPaint(color) {
+  if (!HEX6.test(color || '')) return '';
+  const fg = textOn(color);
+  const dark = fg === '#FFFFFF';
+  const a = dark ? color : shade(color, 0.3);
+  const b = dark ? shade(color, -0.35) : shade(color, -0.06);
+  return `--tier-a:${a};--tier-b:${b};--tier-fg:${fg}`;
+}
+
+// สิทธิ์ที่ได้เพิ่มเมื่อขึ้นระดับถัดไป (แรงจูงใจ): ตัวคูณแต้มที่สูงขึ้น + ของรางวัลที่ปลดล็อก
+function nextPerks(t, next) {
+  const nt = (S.data.tiers || []).find(x => x.id === next.id);
+  const perks = [];
+  if (nt && nt.multiplier > t.multiplier) perks.push(`ได้${unit()} ×${nt.multiplier} ทุกบิล`);
+  const unlock = (S.data.rewards || []).filter(r => r.locked && r.minTier && r.minTier.id === next.id).length;
+  if (unlock) perks.push(`ปลดล็อกของรางวัล ${fmtNum(unlock)} รายการ`);
+  return perks;
+}
+
+// การ์ดระดับ (ผู้ใช้เลือกแบบ "การ์ดสีของระดับ" 7 พ.ย. 2569 — ให้เด่นกว่าการ์ดขาวเดิม)
 function tierCard(m) {
   const t = m.tierInfo;
   if (!tiersOn() || !t) return '';
   const next = t.next;
-  const pct = next && next.minSpend > 0 ? Math.min(100, Math.round(t.spend12m / next.minSpend * 100)) : 100;
+  // ยอด 0 บาทก็ยังเห็นจุดเริ่มต้นของแถบ (แถบว่างทั้งเส้นดูเหมือนไม่มีอะไร)
+  const pct = next && next.minSpend > 0 ? Math.max(2, Math.min(100, Math.round(t.spend12m / next.minSpend * 100))) : 100;
+  const perks = next ? nextPerks(t, next) : [];
   return `
-    <section class="tier-card">
-      <div class="tier-head">
-        <span class="tier-name">${tierDot(t.color)}ระดับ ${esc(t.name)}</span>
-        ${t.multiplier > 1 ? `<span class="chip">${esc(unit())} ×${t.multiplier} ทุกบิล</span>` : ''}
+    <section class="tier-card tier-hero" style="${tierPaint(t.color)}">
+      <div class="tier-hero-top">
+        <span class="tier-medal">${icon('crown', 22)}</span>
+        <div class="grow">
+          <div class="tier-hero-label">ระดับสมาชิกของคุณ</div>
+          <div class="tier-hero-name">${esc(t.name)}</div>
+        </div>
+        ${t.multiplier > 1 ? `<span class="tier-hero-mult">${esc(unit())} ×${t.multiplier}</span>` : ''}
       </div>
       ${next ? `
-        <div class="tier-bar"><i style="width:${pct}%"></i></div>
-        <div class="tier-next">ยอดซื้อ 12 เดือน ฿${fmtMoney(t.spend12m)} · อีก <b>฿${fmtMoney(next.remaining)}</b> ถึงระดับ <b>${esc(next.name)}</b></div>`
-        : '<div class="tier-next">คุณอยู่ระดับสูงสุดแล้ว 🎉</div>'}
-      ${t.until ? `<div class="tier-until">คงระดับนี้ถึง ${fmtDate(t.until)}</div>` : ''}
-      <button class="link" data-act="go" data-page="collect">สิทธิ์ของแต่ละระดับ ${icon('right', 14)}</button>
+        <div class="tier-hero-bar" role="progressbar" aria-label="ยอดซื้อสู่ระดับ ${esc(next.name)}" aria-valuemin="0" aria-valuemax="${next.minSpend}" aria-valuenow="${t.spend12m}"><i style="width:${pct}%"></i></div>
+        <div class="tier-hero-scale"><span>ยอดซื้อ 12 เดือน ฿${fmtMoney(t.spend12m)}</span><span>${esc(next.name)} ฿${fmtMoney(next.minSpend)}</span></div>
+        <div class="tier-hero-next">อีก <b>฿${fmtMoney(next.remaining)}</b> ถึงระดับ <b>${esc(next.name)}</b></div>
+        ${perks.length ? `<div class="tier-hero-perk">${icon('star', 15)}<span>ระดับ ${esc(next.name)}: ${esc(perks.join(' · '))}</span></div>` : ''}`
+        : '<div class="tier-hero-next"><b>คุณอยู่ระดับสูงสุดแล้ว</b> 🎉</div>'}
+      <div class="tier-hero-foot">
+        <span>${t.until ? `คงระดับนี้ถึง ${fmtDate(t.until)}` : ''}</span>
+        <button class="link" data-act="go" data-page="collect">สิทธิ์ของแต่ละระดับ ${icon('right', 14)}</button>
+      </div>
     </section>`;
+}
+
+// ป้ายระดับบนบัตร: พื้นเป็นสีของระดับนั้นเอง (เดิมพื้นสีเน้นของร้าน + จุดสีระดับ ทำให้สับสนว่าระดับนี้สีอะไร)
+function mcTier(m) {
+  const c = m.tierInfo && m.tierInfo.color;
+  if (!HEX6.test(c || '')) return `<span class="mc-tier">${esc(m.tier)}</span>`;
+  return `<span class="mc-tier" style="background:${c};color:${textOn(c)}">${icon('crown', 13)}${esc(m.tier)}</span>`;
 }
 
 function memberCard(m) {
@@ -690,7 +730,7 @@ function memberCard(m) {
     <section class="member-card">
       <div class="mc-top">
         <div><div class="mc-label">${esc(T('cardLabel', 'บัตรสมาชิก'))}</div><div class="mc-shop">${esc(cfg().name)}</div></div>
-        ${tiers && m.tier ? `<span class="mc-tier">${tierDot(m.tierInfo && m.tierInfo.color)}${esc(m.tier)}</span>` : ''}
+        ${tiers && m.tier ? mcTier(m) : ''}
       </div>
       <div class="mc-mid">
         <div>
