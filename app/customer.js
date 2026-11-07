@@ -1,13 +1,14 @@
 // หน้าลูกค้า: สมัครสมาชิก บัตรสมาชิก + QR แลกของรางวัล คูปอง ประวัติแต้ม
 // ทุกร้านใช้ไฟล์นี้ร่วมกัน — ข้อความ/สี/โลโก้มาจาก shops/<ร้าน>/config.js
 import { loadShop, applyBrand, textOn } from './shop.js';
+import { tierBanner } from './tier.js';
 import { initLine, IS_LOCAL } from './line.js';
 import { createApi, createRetryKeeper } from './api.js';
 import { applyDevParams, mountDevBar } from './devbar.js';
 import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, qrSvg, setBusy, creditHtml, bootHtml } from './ui.js';
 
 const app = document.getElementById('app');
-const PAGES = ['home', 'rewards', 'coupons', 'history', 'collect', 'profile'];
+const PAGES = ['home', 'rewards', 'coupons', 'history', 'collect', 'profile', 'tiers'];
 const S = { shop: null, line: null, api: null, data: null, page: 'home', histFilter: 'all', couponTab: 'active', ready: false, stale: false };
 const withRequestId = createRetryKeeper();
 
@@ -142,6 +143,8 @@ function onClick(e) {
     case 'coupon-tab': S.couponTab = el.dataset.tab; render(); break;
     case 'hist': S.histFilter = el.dataset.filter; render(); break;
     case 'privacy': showPrivacy(); break;
+    case 'tier-tab': setTierTab(Number(id), true); break;
+    case 'tier-rules': showTierRules(); break;
     case 'profile-confirm': doSaveProfile(el); break;
     case 'birthday-claim': claimBirthday(el); break;
     case 'close': closeModal(); break;
@@ -201,8 +204,9 @@ function render() {
       </div>`;
     return;
   }
-  const body = { home: pageHome, rewards: pageRewards, coupons: pageCoupons, history: pageHistory, collect: pageCollect, profile: pageProfile }[S.page] || pageHome;
+  const body = { home: pageHome, rewards: pageRewards, coupons: pageCoupons, history: pageHistory, collect: pageCollect, profile: pageProfile, tiers: pageTiers }[S.page] || pageHome;
   app.innerHTML = testBanner() + `<main class="screen">${body()}</main>${nav()}`;
+  if (S.page === 'tiers') mountTierCarousel();
   const pf = document.getElementById('profile');
   if (pf) pf.addEventListener('submit', onProfileSubmit);
 }
@@ -667,18 +671,9 @@ const tierDot = color => (/^#[0-9A-Fa-f]{6}$/.test(color || '') ? `<i class="tie
 const HEX6 = /^#[0-9A-Fa-f]{6}$/;
 const tierColor = c => (HEX6.test(c || '') ? c : '');
 
-// สิทธิ์ที่ได้เพิ่มเมื่อขึ้นระดับถัดไป (แรงจูงใจ): ตัวคูณแต้มที่สูงขึ้น + ของรางวัลที่ปลดล็อก
-function nextPerks(t, next) {
-  const nt = (S.data.tiers || []).find(x => x.id === next.id);
-  const perks = [];
-  if (nt && nt.multiplier > t.multiplier) perks.push(`ได้${unit()} ×${nt.multiplier} ทุกบิล`);
-  const unlock = (S.data.rewards || []).filter(r => r.locked && r.minTier && r.minTier.id === next.id).length;
-  if (unlock) perks.push(`ปลดล็อกของรางวัล ${fmtNum(unlock)} รายการ`);
-  return perks;
-}
-
 // การ์ดระดับแบบ "บันไดระดับ" (ผู้ใช้เลือกจากตัวอย่าง 5 แบบ 7 พ.ย. 2569 — แบบการ์ดสีใหญ่เกินและดูเหมือนบัตรสมาชิก)
-// ทุกระดับเรียงบนเส้นเดียว ลูกค้าเห็นว่าอยู่ตรงไหนและมีอะไรรออยู่ / กดทั้งการ์ด → หน้าสิทธิ์ของแต่ละระดับ
+// ทุกระดับเรียงบนเส้นเดียว ลูกค้าเห็นว่าอยู่ตรงไหนและมีอะไรรออยู่ / กดทั้งการ์ด → หน้าสิทธิ์สมาชิก
+// นับจาก "แต้มจากการซื้อ" 12 เดือน (7 พ.ย. 2569) — สิทธิ์ของแต่ละระดับย้ายไปอยู่หน้าสิทธิ์สมาชิก (ผู้ใช้ขอ: การ์ดเหลือแค่แต้มที่ขาด)
 // ร้านตั้งได้ 2–5 ระดับ: จุดอยู่กลางช่องของตัวเอง (เส้นเริ่มกลางช่องแรก จบกลางช่องสุดท้าย) ป้ายชื่อจึงตรงใต้จุดเสมอ
 function tierCard(m) {
   const t = m.tierInfo;
@@ -689,10 +684,10 @@ function tierCard(m) {
   const next = t.next;
   const cur = tiers[rank];
   // ตำแหน่งบนเส้น: ระดับห่างเท่ากัน + ความคืบหน้าในช่วงระดับนี้ → ระดับถัดไป
-  const frac = next && next.minSpend > cur.minSpend ? Math.max(0, Math.min(1, (t.spend12m - cur.minSpend) / (next.minSpend - cur.minSpend))) : 0;
+  const frac = next && next.minPoints > cur.minPoints ? Math.max(0, Math.min(1, (t.points12m - cur.minPoints) / (next.minPoints - cur.minPoints))) : 0;
   const fill = Math.min(100, (rank + frac) / (n - 1) * 100);
   const color = tierColor(t.color);
-  const perks = next ? nextPerks(t, next) : [];
+  const u = esc(unit());
   const node = (x, i) => {
     const c = tierColor(x.color);
     const left = i / (n - 1) * 100;
@@ -702,18 +697,18 @@ function tierCard(m) {
     return `<span class="tl-node${i < rank ? ' done' : ''}" style="left:${left}%;${c ? `border-color:${c};${i < rank ? `background:${c}` : ''}` : ''}"></span>`;
   };
   return `
-    <button type="button" class="tier-card tier-ladder" data-act="go" data-page="collect" aria-label="ระดับของคุณ ${esc(t.name)} — ดูสิทธิ์ของแต่ละระดับ">
+    <button type="button" class="tier-card tier-ladder" data-act="go" data-page="tiers" aria-label="ระดับของคุณ ${esc(t.name)} — ดูสิทธิ์สมาชิก">
       <span class="tl-head"><span>ระดับของคุณ <b>${esc(t.name)}</b>${t.multiplier > 1 ? ` <small>· ${esc(unit())} ×${t.multiplier}</small>` : ''}</span><span class="tl-more">ดูสิทธิ์ ${icon('right', 14)}</span></span>
       <span class="tl-track" style="--tl-pad:${(50 / n).toFixed(3)}%">
         <span class="tl-rail"><span class="tl-line"></span><span class="tl-fill" style="width:${fill.toFixed(1)}%;${color ? `background:${color}` : ''}"></span>${tiers.map(node).join('')}</span>
       </span>
       <span class="tl-labels" style="grid-template-columns:repeat(${n}, minmax(0, 1fr))">${tiers.map((x, i) => `
-        <span class="${i === rank ? 'on' : ''}"><b>${esc(x.name)}</b>${x.minSpend ? '฿' + fmtMoney(x.minSpend) : 'เริ่มต้น'}${x.multiplier > 1 ? ` · ×${x.multiplier}` : ''}</span>`).join('')}
+        <span class="${i === rank ? 'on' : ''}"><b>${esc(x.name)}</b>${x.minPoints ? fmtNum(x.minPoints) + ' ' + u : 'เริ่มต้น'}${x.multiplier > 1 ? ` · ×${x.multiplier}` : ''}</span>`).join('')}
       </span>
       <span class="tl-next">${next
-        ? `อีก <b>฿${fmtMoney(next.remaining)}</b> ถึง <b>${esc(next.name)}</b>${perks.length ? ' · ' + esc(perks.join(' · ')) : ''}`
+        ? `อีก <b>${fmtNum(next.remaining)} ${u}</b> ถึง <b>${esc(next.name)}</b>`
         : `<b>คุณอยู่ระดับสูงสุดแล้ว</b> 🎉`}
-        ${t.until ? `<small>คงระดับ ${esc(t.name)} ถึง ${fmtDate(t.until)}</small>` : ''}</span>
+        <small>${u}สะสม 12 เดือน ${fmtNum(t.points12m)} ${u} (ไม่ลดเมื่อแลกของรางวัล)${t.until ? ` · คงระดับถึง ${fmtDate(t.until)}` : ''}</small></span>
     </button>`;
 }
 
@@ -734,7 +729,7 @@ function memberCard(m) {
       </div>
       <div class="mc-mid">
         <div>
-          <div class="mc-label">${esc(unit())}สะสม</div>
+          <div class="mc-label">${esc(unit())}${tiersOn() ? 'คงเหลือ' : 'สะสม'}</div>
           <div class="mc-points">${fmtNum(m.points)}<small>${esc(unit())}</small></div>
         </div>
         <button class="mc-qr" data-act="qr">${icon('qr', 26)}<span>แสดง QR</span></button>
@@ -959,13 +954,150 @@ function tierTable() {
   return `
     <section class="section">
       <div class="section-head"><h2>ระดับสมาชิก</h2></div>
-      <p class="muted small">คิดจากยอดซื้อ 12 เดือนล่าสุด · ถึงเกณฑ์ขึ้นระดับทันที และคงระดับไว้ 12 เดือน · ครบแล้วยอดไม่ถึง ลดลงทีละ 1 ระดับ</p>
+      <p class="muted small">คิดจาก${esc(unit())}ที่ได้จากการซื้อ 12 เดือนล่าสุด · ถึงเกณฑ์ขึ้นระดับทันที และคงระดับไว้ 12 เดือน · ครบแล้วไม่ถึง ลดลงทีละ 1 ระดับ</p>
       <div class="tier-list">${S.data.tiers.map(t => `
         <div class="tier-row ${t.id === mine ? 'current' : ''}">
           <span class="tier-row-name">${tierDot(t.color)}${esc(t.name)}${t.id === mine ? ' <small>(ระดับของคุณ)</small>' : ''}</span>
-          <span>${t.minSpend > 0 ? 'ยอด ฿' + fmtMoney(t.minSpend) + ' ขึ้นไป' : 'สมาชิกทุกคน'}</span>
+          <span>${t.minPoints > 0 ? fmtNum(t.minPoints) + ' ' + esc(unit()) + ' ขึ้นไป' : 'สมาชิกทุกคน'}</span>
           <span class="tier-row-mult">${t.multiplier > 1 ? esc(unit()) + ' ×' + t.multiplier : '-'}</span>
         </div>`).join('')}
       </div>
+      <button class="btn btn-block tier-more-btn" data-act="go" data-page="tiers">ดูสิทธิ์ของแต่ละระดับ ${icon('right', 16)}</button>
     </section>`;
+}
+
+/* =====================================================
+ * หน้าสิทธิ์สมาชิก (ผู้ใช้ตกลง 7 พ.ย. 2569 จากตัวอย่าง — แบบหน้าสิทธิ์ของร้านใหญ่ที่ผู้ใช้ส่งรูปมา)
+ * แท็บระดับ + รูปบัตรปัดได้ (ขยับตามกัน) + เงื่อนไข / สิทธิพิเศษ / นโยบาย ของระดับที่เลือก
+ * สิทธิพิเศษ = ส่วนที่ระบบรู้ (ตัวคูณ ของรางวัล/โปรเฉพาะระดับ — ตรงกับที่ระบบทำจริงเสมอ) + ข้อความที่ร้านเขียนเอง
+ * ===================================================== */
+const tierIndex = id => Math.max(0, S.data.tiers.findIndex(t => t.id === id));
+
+function pageTiers() {
+  if (!tiersOn() || !S.data.member.tierInfo) return pageHome();
+  const tiers = S.data.tiers;
+  const mine = tierIndex(S.data.member.tierInfo.id);
+  if (!(S.tierTab >= 0 && S.tierTab < tiers.length)) S.tierTab = mine;
+  const intro = S.data.tierIntro || `สมัครสมาชิกฟรี สะสม${unit()}ทุกบิล\nยิ่งสะสมมาก ยิ่งได้สิทธิ์มาก`;
+  const opts = { logo: logoHtml('logo-xs'), shopName: cfg().name, unit: unit() };
+  return `
+    <header class="tp-top">
+      <button class="back tp-back" data-act="go" data-page="home" aria-label="กลับหน้าแรก">${icon('left', 22)}</button>
+      ${logoHtml('logo-lg')}
+      <p class="tp-intro">${esc(intro).replace(/\n/g, '<br>')}</p>
+    </header>
+    <div class="tp-tabs" role="tablist" aria-label="ระดับสมาชิก">${tiers.map((t, i) => `
+      <button role="tab" data-act="tier-tab" data-id="${i}" aria-selected="${i === S.tierTab}">${esc(t.name)}<small>${i === mine ? 'ระดับของคุณ' : '&nbsp;'}</small></button>`).join('')}
+    </div>
+    <div class="tp-carousel" id="tier-carousel">${tiers.map(t => tierBanner(t, opts)).join('')}</div>
+    <div class="tp-dots" aria-hidden="true">${tiers.map((t, i) => `<i class="${i === S.tierTab ? 'on' : ''}"></i>`).join('')}</div>
+    <div class="tp-body" id="tier-detail">${tierDetail(S.tierTab)}</div>`;
+}
+
+// สิทธิ์ที่ระบบรู้เอง (ตรงกับที่ระบบทำจริง) ของระดับที่ i — ของรางวัล/โปร "ระดับ X ขึ้นไป" นับรวมของระดับที่ต่ำกว่า
+function autoPerks(i) {
+  const d = S.data;
+  const t = d.tiers[i];
+  const u = unit();
+  const out = [];
+  if (i === 0) out.push(`สะสม${u}ทุกบิล ${fmtMoney(d.settings.pointRate)} บาท = 1 ${u}`);
+  if (t.multiplier > 1) out.push(`ได้${u} ×${t.multiplier} ทุกบิล`);
+  const upTo = x => x.minTier && tierIndex(x.minTier.id) <= i && tierIndex(x.minTier.id) > 0;
+  const list = names => (names.length > 3 ? names.slice(0, 3).join(', ') + ` และอีก ${names.length - 3} รายการ` : names.join(', '));
+  const rewards = (d.rewards || []).filter(upTo).map(r => r.name);
+  if (i > 0 && rewards.length) out.push('แลกของรางวัลเฉพาะสมาชิกระดับนี้: ' + list(rewards));
+  const promos = (d.promos || []).filter(upTo).map(p => p.title);
+  if (i > 0 && promos.length) out.push('โปรโมชันเฉพาะสมาชิกระดับนี้: ' + list(promos));
+  return out;
+}
+
+function tierDetail(i) {
+  const d = S.data;
+  const t = d.tiers[i];
+  const ti = d.member.tierInfo;
+  const mine = tierIndex(ti.id);
+  const u = esc(unit());
+  let status;
+  if (i === mine) status = `${icon('check', 15)}<span>คุณอยู่ระดับนี้${ti.until ? ` · คงระดับถึง ${fmtDate(ti.until)}` : ''}</span>`;
+  else if (i < mine) status = `${icon('check', 15)}<span>คุณผ่านระดับนี้แล้ว</span>`;
+  else {
+    const pct = t.minPoints > 0 ? Math.max(2, Math.min(100, Math.round(ti.points12m / t.minPoints * 100))) : 100;
+    status = `<span>คุณสะสมแล้ว <b>${fmtNum(ti.points12m)}</b> ${u} · อีก <b>${fmtNum(Math.max(0, t.minPoints - ti.points12m))}</b> ${u}
+      <span class="tp-bar"><i style="width:${pct}%"></i></span></span>`;
+  }
+  const perks = autoPerks(i);
+  return `
+    <section class="tp-sec">
+      <h2>${icon('receipt', 20)}เงื่อนไข</h2>
+      <ul>${i === 0 ? '<li>สมัครสมาชิกฟรี ได้ระดับนี้ทันที</li><li>ไม่มีวันหมดอายุ</li>'
+        : `<li>สะสม ${fmtNum(t.minPoints)} ${u}จากการซื้อ ภายใน 12 เดือน</li><li>ถึงเกณฑ์เลื่อนระดับทันที และคงระดับ 12 เดือน</li>`}</ul>
+      <div class="tp-status ${i > mine ? '' : 'done'}">${status}</div>
+    </section>
+    <section class="tp-sec">
+      <h2>${icon('star', 20)}สิทธิพิเศษ</h2>
+      <ul>${perks.map(x => `<li><b>${esc(x)}</b></li>`).join('')}${(t.benefits || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+    </section>
+    <section class="tp-sec">
+      <h2>${icon('shield', 20)}นโยบายและเงื่อนไข</h2>
+      <ul class="tp-links">
+        <li><button type="button" class="link" data-act="tier-rules">เงื่อนไขสำหรับสมาชิก</button></li>
+        <li><button type="button" class="link" data-act="privacy">นโยบายความเป็นส่วนตัว</button></li>
+      </ul>
+    </section>`;
+}
+
+// เปลี่ยนระดับที่ดู (กดแท็บ หรือปัดรูปบัตร) — วาดเฉพาะแท็บ จุด และรายละเอียด (ไม่วาดรูปบัตรใหม่ ไม่งั้นการปัดสะดุด)
+function setTierTab(i, scroll) {
+  if (!(i >= 0 && i < S.data.tiers.length)) return;
+  S.tierTab = i;
+  document.querySelectorAll('.tp-tabs [role="tab"]').forEach((b, k) => b.setAttribute('aria-selected', String(k === i)));
+  document.querySelectorAll('.tp-dots i').forEach((dot, k) => dot.classList.toggle('on', k === i));
+  const box = document.getElementById('tier-detail');
+  if (box) box.innerHTML = tierDetail(i);
+  const tab = document.querySelectorAll('.tp-tabs [role="tab"]')[i];
+  if (tab) tab.scrollIntoView({ block: 'nearest', inline: 'center' });
+  if (scroll) scrollTierCard(i, true);
+}
+
+function scrollTierCard(i, smooth) {
+  const car = document.getElementById('tier-carousel');
+  const card = car && car.children[i];
+  if (!card) return;
+  const left = card.offsetLeft - (car.clientWidth - card.clientWidth) / 2;
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  car.scrollTo({ left, behavior: smooth && !reduce ? 'smooth' : 'auto' });
+}
+
+// เปิดหน้ามาที่ระดับที่เลือกไว้ + ปัดรูปบัตรแล้วแท็บตาม (รอให้หยุดปัดก่อนค่อยเปลี่ยน)
+function mountTierCarousel() {
+  const car = document.getElementById('tier-carousel');
+  if (!car) return;
+  scrollTierCard(S.tierTab, false);
+  let timer;
+  car.addEventListener('scroll', () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const mid = car.scrollLeft + car.clientWidth / 2;
+      let best = 0;
+      let dist = Infinity;
+      [...car.children].forEach((c, k) => { const x = Math.abs(c.offsetLeft + c.clientWidth / 2 - mid); if (x < dist) { dist = x; best = k; } });
+      if (best !== S.tierTab) setTierTab(best, false);
+    }, 120);
+  }, { passive: true });
+}
+
+// เงื่อนไขสำหรับสมาชิก: สรุปกติการะดับจากที่ระบบทำจริง (ร้านไม่ต้องเขียนเอง ไม่มีวันไม่ตรง)
+function showTierRules() {
+  const u = esc(unit());
+  openModal(`
+    <div class="modal-head"><h2>เงื่อนไขสำหรับสมาชิก</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <ul class="prose tp-rules">
+      <li>ระดับสมาชิกคิดจาก${u}ที่ได้จากการซื้อ ภายใน 12 เดือนล่าสุด (${esc(fmtMoney(S.data.settings.pointRate))} บาท = 1 ${u})</li>
+      <li>${u}พิเศษ ${u}ต้อนรับ และ${u}ที่ร้านปรับให้ ไม่นับรวม · แลกของรางวัลแล้ว${u}ที่ใช้นับระดับไม่ลด</li>
+      <li>ถึงเกณฑ์ขึ้นระดับทันที และคงระดับไว้ 12 เดือน</li>
+      <li>ครบ 12 เดือนแล้ว${u}ไม่ถึงเกณฑ์ของระดับนั้น ลดลง 1 ระดับ (ถึงเกณฑ์ คงระดับต่ออีก 12 เดือน)</li>
+      <li>ระดับแรกไม่มีวันหมดอายุ</li>
+      <li>ตัวคูณ${u}ของระดับไม่รวมกับ${u}พิเศษในวันโปรโมชัน ระบบให้แบบที่ได้มากกว่า</li>
+    </ul>
+    <button class="btn btn-block" data-act="close">ปิด</button>`);
 }

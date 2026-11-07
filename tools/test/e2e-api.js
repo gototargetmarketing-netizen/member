@@ -150,20 +150,31 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     ok(/ยังไม่ได้เปิดใช้ระดับสมาชิก/.test(await b.text('#view')), 'ร้านยังไม่มีระดับ → มีปุ่มเริ่มตั้งระดับ');
     await b.click('.tier-intro [data-act=tier-add]');
     await b.waitFor(`document.querySelectorAll('.tier-edit').length === 3`, 3000, 'ตัวอย่าง 3 ระดับ');
-    await b.eval(`(() => { document.querySelectorAll('.tier-edit')[1].querySelector('[name=minSpend]').value = '3000'; return true; })()`);
+    ok(/≈ ยอดซื้อ ฿5,000/.test(await b.text('.tier-edit:nth-child(2) .tier-baht')), 'ตัวอย่างเกณฑ์เป็นแต้ม + บอกยอดซื้อโดยประมาณ (250 แต้ม ≈ ฿5,000)');
+    // Silver 150 แต้ม (≈ ฿3,000) + สิทธิพิเศษที่ร้านเขียน + ข้อความหัวหน้า
+    await b.eval(`(() => { const row = document.querySelectorAll('.tier-edit')[1]; const f = row.querySelector('[name=minPoints]'); f.value = '150';
+      f.dispatchEvent(new Event('input', { bubbles: true }));
+      row.querySelector('[name=benefits]').value = 'ทดลองเมนูใหม่ก่อนใคร\\nที่นั่งริมหน้าต่าง';
+      document.querySelector('[data-form=tiers] [name=intro]').value = 'สมาชิก GO TO CAFE\\nยิ่งสะสม ยิ่งคุ้ม'; return true; })()`);
+    ok(/≈ ยอดซื้อ ฿3,000/.test(await b.text('.tier-edit:nth-child(2) .tier-baht')), 'พิมพ์ 150 แต้ม → บอก ≈ ฿3,000 ทันที');
+    ok(await b.eval(`!!document.querySelector('.tier-edit:nth-child(3) .tier-auto .tier-banner')`), 'มีตัวอย่างบัตรที่ระบบวาดให้ (ยังไม่ใส่รูป)');
     await b.click('[data-act=tier-add]');
     await b.waitFor(`document.querySelectorAll('.tier-edit').length === 4`, 3000, 'เพิ่มแถว');
-    ok((await b.eval(`document.querySelectorAll('.tier-edit')[1].querySelector('[name=minSpend]').value`)) === '3000', 'เพิ่มแถวแล้ว ค่าที่พิมพ์ไว้ไม่หาย');
+    ok((await b.eval(`document.querySelectorAll('.tier-edit')[1].querySelector('[name=minPoints]').value`)) === '150' &&
+      /ที่นั่งริมหน้าต่าง/.test(await b.eval(`document.querySelectorAll('.tier-edit')[1].querySelector('[name=benefits]').value`)), 'เพิ่มแถวแล้ว ค่าที่พิมพ์ไว้ไม่หาย');
     await b.click('.tier-edit:nth-child(4) [data-act=tier-remove]');
     await b.waitFor(`document.querySelectorAll('.tier-edit').length === 3`, 3000, 'เอาแถวออก');
     await b.shot(path.join(OUT, 'n07-tiers-edit.png'), { full: true });
     await b.eval(`document.querySelector('[data-form=tiers]').requestSubmit()`);
     await b.waitFor(`document.querySelector('.modal [data-act=tiers-save-confirm]')`, 3000, 'ยืนยันเปิดใช้ระดับ');
-    ok(/จัดระดับสมาชิกทุกคน/.test(await b.text('.modal')), 'ยืนยันก่อน: บอกว่าจะจัดระดับทุกคนตามยอด 12 เดือน');
+    ok(/จัดระดับสมาชิกทุกคน/.test(await b.text('.modal')), 'ยืนยันก่อน: บอกว่าจะจัดระดับทุกคนตามแต้ม 12 เดือน');
     await b.click('.modal [data-act=tiers-save-confirm]');
     await b.waitFor(`document.querySelector('[data-act=tiers-off]')`, 20000, 'เปิดใช้ระดับแล้ว');
-    const tiers = await sql(`select id, name, min_spend::float8 as m from tiers where shop_id='demo' order by min_spend`);
-    ok(tiers.length === 3 && tiers[1].m === 3000 && tiers[2].name === 'Gold', 'ฐานข้อมูล: 3 ระดับ (Silver เริ่ม 3,000)', tiers);
+    const tiers = await sql(`select id, name, min_points as m, benefits from tiers where shop_id='demo' order by min_points`);
+    ok(tiers.length === 3 && tiers[1].m === 150 && tiers[2].m === 1000 && tiers[2].name === 'Gold' && tiers[1].benefits === 'ทดลองเมนูใหม่ก่อนใคร\nที่นั่งริมหน้าต่าง',
+      'ฐานข้อมูล: 3 ระดับ (Silver 150 แต้ม / Gold 1,000) + สิทธิพิเศษ', tiers);
+    const [intro] = await sql(`select tier_intro from shops where id='demo'`);
+    ok(intro.tier_intro === 'สมาชิก GO TO CAFE\nยิ่งสะสม ยิ่งคุ้ม', 'บันทึกข้อความหัวหน้าสิทธิ์สมาชิก', intro);
     const [noTier] = await sql(`select count(*)::int as n from members where shop_id='demo' and tier_id is null`);
     ok(noTier.n === 0, 'สมาชิกทุกคนได้ระดับแล้ว', noTier);
     const gold = tiers[2].id;
@@ -191,13 +202,39 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     await b.nav('about:blank');
     await b.nav(`${WEB}/demo#home`);
     await b.waitFor(`document.querySelector('.tier-card')`, 10000, 'การ์ดระดับ');
-    ok(/ระดับของคุณ Member/.test(await b.text('.tl-head')) && /อีก ฿3,000 ถึง Silver/.test(await b.text('.tl-next')),
-      'หน้าลูกค้า: บันไดระดับ — ระดับ Member + อีก ฿3,000 ถึง Silver', await b.text('.tier-card'));
-    ok(/ได้แต้ม ×1\.5 ทุกบิล/.test(await b.text('.tl-next')), 'บอกสิทธิ์ของระดับถัดไป (แต้ม ×1.5)', await b.text('.tl-next'));
+    ok(/ระดับของคุณ Member/.test(await b.text('.tl-head')) && /อีก 150 แต้ม ถึง Silver/.test(await b.text('.tl-next')) && /150 แต้ม/.test(await b.text('.tl-labels')),
+      'หน้าลูกค้า: บันไดระดับนับแต้ม — Member + อีก 150 แต้ม ถึง Silver', await b.text('.tier-card'));
+    ok(!/ได้แต้ม ×/.test(await b.text('.tl-next')) && /แต้มสะสม 12 เดือน 0 แต้ม/.test(await b.text('.tl-next')),
+      'การ์ดไม่มีบรรทัดสิทธิ์แล้ว (ย้ายไปหน้าสิทธิ์) + บอกแต้มสะสม 12 เดือน', await b.text('.tl-next'));
+    ok(/แต้มคงเหลือ/.test(await b.text('.member-card')), 'บัตรเขียน "แต้มคงเหลือ" (คนละตัวกับแต้มสะสมที่นับระดับ)');
     ok(await b.eval(`(() => { const n = [...document.querySelectorAll('.tl-node')]; return n.length === 3 && n[0].classList.contains('on') && /Gold/.test(document.querySelector('.tl-labels').innerText); })()`),
       'เห็นทุกระดับเรียงกัน 3 จุด + ระดับปัจจุบันเป็นจุดแรก');
     ok(/Member/.test(await b.text('.mc-tier')), 'บัตรสมาชิกมีป้ายระดับ');
     await b.shot(path.join(OUT, 'n08-customer-tier.png'), { full: true });
+
+    // หน้าสิทธิ์สมาชิก
+    await b.click('.tier-ladder');
+    await b.waitFor(`document.querySelector('.tp-tabs') && document.querySelector('#tier-detail')`, 5000, 'หน้าสิทธิ์สมาชิก');
+    ok(/#tiers$/.test(await b.eval('location.hash')) && (await b.eval(`document.querySelectorAll('.tp-carousel .tier-banner').length`)) === 3 &&
+      /สมาชิก GO TO CAFE/.test(await b.text('.tp-intro')), 'กดการ์ดบันได → หน้าสิทธิ์: ข้อความร้าน + รูปบัตร 3 ระดับ');
+    ok(/Member\s*ระดับของคุณ/.test(await b.text('.tp-tabs [aria-selected=true]')) && /คุณอยู่ระดับนี้/.test(await b.text('#tier-detail')),
+      'เปิดมาที่ระดับของลูกค้า (Member)', await b.text('.tp-tabs'));
+    await b.click('[data-act=tier-tab][data-id="1"]');
+    await b.waitFor(`/Silver/.test(document.querySelector('.tp-tabs [aria-selected=true]').innerText)`, 3000, 'แท็บ Silver');
+    const silver = await b.text('#tier-detail');
+    ok(/สะสม 150 แต้มจากการซื้อ/.test(silver) && /อีก 150 แต้ม/.test(silver) && /ได้แต้ม ×1\.5 ทุกบิล/.test(silver) && /ทดลองเมนูใหม่ก่อนใคร/.test(silver),
+      'แท็บ Silver: เงื่อนไข + แต้มที่ขาด + สิทธิ์ที่ระบบใส่ (×1.5) + สิทธิ์ที่ร้านเขียน', silver);
+    await b.shot(path.join(OUT, 'n08b-tiers-page.png'), { full: true });
+    await b.click('[data-act=tier-tab][data-id="2"]');
+    await b.waitFor(`/Gold/.test(document.querySelector('.tp-tabs [aria-selected=true]').innerText)`, 3000, 'แท็บ Gold');
+    ok(/ของรางวัลเฉพาะสมาชิกระดับนี้: เมนูจานหลัก 1 ที่/.test(await b.text('#tier-detail')), 'แท็บ Gold: บอกของรางวัลเฉพาะ Gold (R005) ให้เอง', await b.text('#tier-detail'));
+    await b.eval(`document.getElementById('tier-carousel').scrollTo({ left: 0 })`);
+    await b.waitFor(`/Member/.test(document.querySelector('.tp-tabs [aria-selected=true]').innerText)`, 3000, 'ปัดกลับ → แท็บ Member');
+    ok(true, 'ปัดรูปบัตร → แท็บและรายละเอียดเปลี่ยนตาม');
+    await b.click('[data-act=tier-rules]');
+    await b.waitFor(`/เงื่อนไขสำหรับสมาชิก/.test(document.querySelector('.modal')?.innerText || '')`, 3000, 'เงื่อนไขสำหรับสมาชิก');
+    ok(/ไม่นับรวม/.test(await b.text('.modal')) && /20 บาท = 1 แต้ม/.test(await b.text('.modal')), 'เงื่อนไขสำหรับสมาชิก: ระบบสรุปกติกาให้ (อัตราแต้มของร้าน)', await b.text('.modal'));
+    await b.click('.modal [data-act=close]');
     await b.nav(`${WEB}/demo#rewards`);
     await b.waitFor(`document.querySelector('[data-act=redeem][data-id=R005]')`, 10000, 'ของรางวัล R005');
     ok(await b.eval(`(() => { const x = document.querySelector('[data-act=redeem][data-id=R005]'); return x.disabled && /Gold ขึ้นไป/.test(x.innerText) && !!x.closest('.is-locked'); })()`),

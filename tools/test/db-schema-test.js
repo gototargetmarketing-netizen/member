@@ -1,4 +1,4 @@
-// ตรวจ db/001_schema.sql บน PostgreSQL จำลองในเครื่อง (PGlite — ไม่ต้องใช้ Supabase จริง)
+// ตรวจ db/001_schema.sql (+ ไฟล์ปรับตาราง 003/004 ท้ายชุด) บน PostgreSQL จำลองในเครื่อง (PGlite — ไม่ต้องใช้ Supabase จริง)
 // รันได้จริง + กฎกันข้อมูลผิดทำงาน + ความเร็วเมื่อข้อมูลเยอะ
 // ติดตั้งครั้งแรก: cd tools/test && npm install
 // รัน: node tools/test/db-schema-test.js
@@ -94,6 +94,25 @@ async function rejects(db, sql, params, msg) {
   await rejects(db, `insert into transactions (shop_id,id,member_id,type,points,balance_after,request_id) values ('khamwan','TX-DUPCHECK01','KW-M00007','EARN',1,1,'bulk-req-12')`, [], `กันซ้ำ requestId เก่า (อยู่ลึกเกิน 2,000 รายการ) ยังจับได้: ${Date.now() - t0} ms`);
   const plan = (await db.query(`explain select id from transactions where shop_id='khamwan' and member_id='KW-M00007' order by created_at desc limit 50`)).rows.map(r => r['QUERY PLAN']).join(' ');
   ok(/Index/.test(plan), 'ค้นประวัติใช้สารบัญ (index) ไม่ไล่อ่านทั้งตาราง', plan.slice(0, 120));
+
+  console.log('\n[8] ไฟล์ปรับตาราง 003 + 004 บนข้อมูลเดิม (เหมือน Supabase ที่มีระดับแบบยอดเงินอยู่แล้ว) + รันซ้ำได้');
+  const dir = require('path').join(__dirname, '..', '..', 'db');
+  await db.exec(fs.readFileSync(require('path').join(dir, '003_delete_and_tiers.sql'), 'utf8'));
+  const m004 = fs.readFileSync(require('path').join(dir, '004_tier_points_benefits.sql'), 'utf8');
+  await db.exec(m004);
+  const rate = (await db.query(`select point_rate_baht::float8 as r from shops where id='khamwan'`)).rows[0].r;
+  const tp = (await db.query(`select id, min_points from tiers where shop_id='khamwan' order by id`)).rows.map(r => r.id + ':' + r.min_points).join(',');
+  ok(tp === `T1:0,T2:${Math.round(5000 / rate)},T3:${Math.round(15000 / rate)}`, `เกณฑ์ระดับเดิม (บาท) แปลงเป็นแต้ม ÷ ${rate}: ${tp}`);
+  const nb = (await db.query(`select count(*)::int as n from transactions where type='EARN' and base_points is null`)).rows[0].n;
+  const bad = (await db.query(`select count(*)::int as n from transactions t join shops s on s.id = t.shop_id where t.type='EARN' and t.base_points <> floor(t.amount / s.point_rate_baht)`)).rows[0].n;
+  ok(nb === 0 && bad === 0, 'บิลซื้อเดิมทุกบิลได้แต้มปกติ (ยอด ÷ อัตราแต้ม ปัดลง)');
+  await db.exec(m004);
+  const tp2 = (await db.query(`select id, min_points from tiers where shop_id='khamwan' order by id`)).rows.map(r => r.id + ':' + r.min_points).join(',');
+  ok(tp2 === tp, 'รัน 004 ซ้ำ → ไม่ error ค่าเดิมไม่เปลี่ยน');
+  await rejects(db, `insert into tiers (shop_id,id,name,min_points) values ('khamwan','T8','ซ้ำ',${Math.round(5000 / rate)})`, [], 'ระดับใช้เกณฑ์แต้มซ้ำ → ปฏิเสธ');
+  await db.query(`insert into tiers (shop_id,id,name,min_points,min_spend,benefits) values ('khamwan','T9','Platinum',99999,null,'ห้องรับรอง')`);
+  ok(true, 'ระดับใหม่ไม่ต้องมียอดเงิน (min_spend ว่างได้) + มีสิทธิพิเศษ');
+  await rejects(db, `insert into transactions (shop_id,id,member_id,type,points,balance_after,base_points) values ('khamwan','TX-NEGBASE1','KW-M00007','EARN',1,1,-5)`, [], 'แต้มปกติติดลบ → ปฏิเสธ');
 
   console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
   process.exit(fail ? 1 : 0);

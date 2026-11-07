@@ -38,9 +38,10 @@ select json_build_object(
   'birthLog', coalesce((select json_agg(l) from (
       select created_at, changed from profile_log where shop_id = $1 and member_id = (select id from m)
       order by created_at desc limit 20) l), '[]'::json),
-  -- ยอดซื้อ 12 เดือนล่าสุด (ระดับสมาชิก: บอกลูกค้าว่าขาดอีกเท่าไรถึงระดับถัดไป)
-  'spend12m', (select coalesce(sum(amount), 0)::float8 from transactions where shop_id = $1 and member_id = (select id from m)
-      and type = 'EARN' and created_at > ($4::timestamptz - interval '12 months') and created_at <= $4::timestamptz)
+  -- แต้มจากการซื้อ 12 เดือนล่าสุด (ระดับสมาชิก: บอกลูกค้าว่าขาดอีกกี่แต้มถึงระดับถัดไป)
+  'points12m', (select coalesce(sum(${T.BASE_POINTS_SQL}), 0)::int from transactions t join shops s on s.id = t.shop_id
+      where t.shop_id = $1 and t.member_id = (select id from m)
+      and t.type = 'EARN' and t.created_at > ($4::timestamptz - interval '12 months') and t.created_at <= $4::timestamptz)
 ) as data`;
 
 // ---------- ของขวัญวันเกิด (ผู้ใช้ตกลง 4 พ.ย. 2569) ----------
@@ -131,7 +132,10 @@ async function bootstrap(p, ctx) {
       .map((x) => V.publicRule(x, names)),
     birthday: null
   };
-  if (on) out.tiers = T.publicTiers(tiers);
+  if (on) {
+    out.tiers = T.publicTiers(tiers);
+    out.tierIntro = String(ctx.shop.tier_intro || ''); // ข้อความหัวหน้าสิทธิ์สมาชิก (ว่าง = หน้าเว็บใช้ข้อความตั้งต้น)
+  }
   if (!m) return out;
   out.birthday = birthdayOffer(m, now, d.coupons, d.rewards, d.birthLog, tc);
 
@@ -141,7 +145,7 @@ async function bootstrap(p, ctx) {
     m.picture = ctx.user.picture;
   }
   out.member = V.publicMember(m, on ? tiers : null);
-  if (on) out.member.tierInfo = T.tierInfo(tiers, m, d.spend12m);
+  if (on) out.member.tierInfo = T.tierInfo(tiers, m, d.points12m);
   out.history = d.tx.map(V.publicTx);
   out.coupons = d.coupons.slice(0, 100).map((cp) => V.publicCoupon(cp, now));
   return out;

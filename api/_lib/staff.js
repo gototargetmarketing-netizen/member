@@ -205,12 +205,13 @@ async function addPurchase(p, ctx) {
     // ชื่อกติกา (หรือ "ระดับ Gold") ต่อท้าย ลูกค้าเห็นในประวัติว่าได้พิเศษเพราะอะไร / รหัสเก็บใน ref ไว้ดูย้อนหลัง
     const detail = applied ? base + ' · ' + applied.name : base;
     const txId = M.newTxId();
-    await q.query(`insert into transactions (shop_id, id, created_at, member_id, type, amount, points, balance_after, detail, staff, request_id, ref, branch)
-                   values ($1, $2, $3, $4, 'EARN', $5, $6, $7, $8, $9, $10, $11, $12)`,
-      [shopId, txId, now, memberId, amount, points, balance, detail, ctx.staff.name, reqId, applied ? applied.id : '', branch]);
+    // base_points = แต้มปกติก่อนคูณ ใช้นับระดับสมาชิก (จดไว้เลย ร้านเปลี่ยนอัตราแต้มทีหลัง บิลนี้ไม่เปลี่ยน)
+    await q.query(`insert into transactions (shop_id, id, created_at, member_id, type, amount, points, balance_after, detail, staff, request_id, ref, branch, base_points)
+                   values ($1, $2, $3, $4, 'EARN', $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      [shopId, txId, now, memberId, amount, points, balance, detail, ctx.staff.name, reqId, applied ? applied.id : '', branch, basePoints]);
 
     Object.assign(m, { points: balance, total_spend: spend, visit_count: visits, last_visit_at: now });
-    // ยอด 12 เดือนถึงเกณฑ์ระดับที่สูงกว่า → ขึ้นทันที (บิลนี้คิดแต้มตามระดับเดิม บิลถัดไปได้ตัวคูณใหม่)
+    // แต้มจากการซื้อ 12 เดือนถึงเกณฑ์ระดับที่สูงกว่า → ขึ้นทันที (บิลนี้คิดแต้มตามระดับเดิม บิลถัดไปได้ตัวคูณใหม่)
     const up = on ? (await T.syncMember(q, shopId, m, tiers, now, { upgrade: true, by: ctx.staff.name })).up : null;
     const out = {
       txId, amount, pointsAdded: points, basePoints, balance, member: V.staffMember(m, on ? tiers : null),

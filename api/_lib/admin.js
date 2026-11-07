@@ -455,13 +455,15 @@ async function adminMemberDetail(p, ctx) {
   out.topBranch = Object.keys(visits).sort((a, b) => visits[b] - visits[a])[0] || '';
   out.topBranchVisits = out.topBranch ? visits[out.topBranch] : 0;
   if (on) {
-    out.tierInfo = T.tierInfo(tiers, m, await T.spend12m(ctx.db, shopId, id, now));
+    out.tierInfo = T.tierInfo(tiers, m, await T.points12m(ctx.db, shopId, id, now));
     // ชื่อระดับจากระดับปัจจุบัน — ระดับที่ยกเลิกไปแล้วไม่มีชื่อ (หน้าเว็บแสดงว่า "ระดับเดิม")
     const tname = (tid) => { const t = T.tierById(tiers, tid); return t ? t.name : ''; };
-    out.tierHistory = (await ctx.db.query(`select created_at, from_tier_id, to_tier_id, reason, spend_12m::float8 as spend, by_name
+    // แถวก่อนเปลี่ยนเป็นแต้ม (7 พ.ย. 2569) มีแต่ยอดเงิน → ส่งทั้งคู่ หน้าเว็บแสดงตัวที่มี
+    out.tierHistory = (await ctx.db.query(`select created_at, from_tier_id, to_tier_id, reason, points_12m, spend_12m::float8 as spend, by_name
         from tier_history where shop_id = $1 and member_id = $2 order by created_at desc, id desc limit 20`, [shopId, id])).rows
       .map((h) => ({ date: U.iso(h.created_at), from: h.from_tier_id || '', fromName: tname(h.from_tier_id), to: h.to_tier_id || '', toName: tname(h.to_tier_id),
-        reason: h.reason, spend12m: U.toNum(h.spend), by: String(h.by_name || '') }));
+        reason: h.reason, points12m: h.points_12m == null ? null : U.toInt(h.points_12m), spend12m: h.spend == null ? null : U.toNum(h.spend),
+        by: String(h.by_name || '') }));
   }
   const coupons = (await ctx.db.query(`select ${V.COUPON_COLS} from coupons where shop_id = $1 and member_id = $2 order by issued_at desc limit 200`, [shopId, id])).rows;
   return Object.assign(on ? { tiers: T.publicTiers(tiers) } : {}, {
@@ -910,7 +912,7 @@ async function adminUploadImage(p, ctx) {
   }
   const bytes = Buffer.from(data, 'base64');
   if (!bytes.length || bytes.length > MAX_IMAGE_BYTES || !looksLikeImage(bytes, mime)) throw userError('ไฟล์นี้ไม่ใช่รูปที่รองรับ', 'BAD_IMAGE');
-  const kind = ['promo', 'logo'].indexOf(p.kind) >= 0 ? p.kind : 'reward';
+  const kind = ['promo', 'logo', 'tier'].indexOf(p.kind) >= 0 ? p.kind : 'reward';
   // แยกโฟลเดอร์ต่อร้าน / ชื่อมีรหัสสุ่ม (ไม่ทับรูปเดิม เดาชื่อไม่ได้)
   const path = ctx.shop.id + '/' + kind + '-' + U.thaiDay(ctx.now) + '-' + U.randomCode(6) + '.' + ext;
   let url;
@@ -1052,16 +1054,30 @@ async function adminTiers(p, ctx) {
   const on = T.tiersOn(tiers);
   if (on) await T.syncDue(ctx.db, ctx.shop.id, tiers, ctx.now);
   const counts = on ? await tierCounts(ctx.db, ctx.shop.id, tiers) : [];
+  // อ่านข้อความหัวหน้าสิทธิ์ใหม่ (หลังบันทึก ค่าร้านที่โหลดไว้ตอนเริ่มคำขอยังเป็นค่าเก่า)
+  const intro = (await ctx.db.query('select tier_intro from shops where id = $1', [ctx.shop.id])).rows[0];
   return {
     enabled: on,
-    items: tiers.map((t) => ({ id: t.id, name: t.name, minSpend: t.minSpend, multiplier: t.multiplier, color: t.color,
-      members: ((counts.find((c) => c.id === t.id) || {}).count) || 0 })),
-    minTiers: T.MIN_TIERS, maxTiers: T.MAX_TIERS, multipliers: T.TIER_MULTS, keepMonths: T.KEEP_MONTHS
+    items: tiers.map((t) => ({ id: t.id, name: t.name, minPoints: t.minPoints, multiplier: t.multiplier, color: t.color,
+      image: t.image, benefits: t.benefits, members: ((counts.find((c) => c.id === t.id) || {}).count) || 0 })),
+    intro: String((intro && intro.tier_intro) || ''),
+    pointRate: cfg(ctx.shop).pointRate, // ไว้บอกเจ้าของร้านว่าเกณฑ์แต้มเท่ากับยอดซื้อประมาณเท่าไร
+    minTiers: T.MIN_TIERS, maxTiers: T.MAX_TIERS, multipliers: T.TIER_MULTS, keepMonths: T.KEEP_MONTHS,
+    maxBenefits: MAX_BENEFITS
   };
 }
 
-// ตั้งระดับทั้งชุดในครั้งเดียว (เพิ่ม / แก้ / เอาออก) — [] = ปิดใช้ระดับ
-// เปิดใช้ครั้งแรก → จัดระดับสมาชิกทุกคนตามยอด 12 เดือน / ลดเกณฑ์ → คนที่ถึงแล้วขึ้นทันที / เพิ่มเกณฑ์ → ไม่ลดทันที (คงไว้จนครบ 12 เดือน)
+// สิทธิพิเศษที่ร้านเขียนเอง: รับเป็นรายการหรือข้อความหลายบรรทัด → เก็บบรรทัดละข้อ
+const MAX_BENEFITS = 8;
+function cleanBenefits(v, tierName) {
+  const lines = (Array.isArray(v) ? v : String(v == null ? '' : v).split(/\r?\n/))
+    .map((x) => U.cleanText(x, 80, 'สิทธิพิเศษของระดับ "' + tierName + '" แต่ละข้อ')).filter(Boolean);
+  if (lines.length > MAX_BENEFITS) throw userError('สิทธิพิเศษของระดับ "' + tierName + '" ใส่ได้ไม่เกิน ' + MAX_BENEFITS + ' ข้อ', 'BAD_INPUT');
+  return lines.join('\n');
+}
+
+// ตั้งระดับทั้งชุดในครั้งเดียว (เพิ่ม / แก้ / เอาออก) — [] = ปิดใช้ระดับ / intro = ข้อความหัวหน้าสิทธิ์สมาชิก (ไม่ส่ง = ไม่แก้)
+// เปิดใช้ครั้งแรก → จัดระดับสมาชิกทุกคนตามแต้ม 12 เดือน / ลดเกณฑ์ → คนที่ถึงแล้วขึ้นทันที / เพิ่มเกณฑ์ → ไม่ลดทันที (คงไว้จนครบ 12 เดือน)
 async function adminTiersSave(p, ctx) {
   const input = Array.isArray(p.tiers) ? p.tiers : null;
   if (!input) throw userError('ข้อมูลระดับไม่ถูกต้อง', 'BAD_INPUT');
@@ -1071,10 +1087,10 @@ async function adminTiersSave(p, ctx) {
   const rows = input.map((t) => {
     t = t || {};
     const name = U.cleanText(t.name, 30, 'ชื่อระดับ', true);
-    const raw = String(t.minSpend == null ? '' : t.minSpend).replace(/,/g, '').trim();
+    const raw = String(t.minPoints == null ? '' : t.minPoints).replace(/,/g, '').trim();
     const min = Number(raw);
-    if (raw === '' || !isFinite(min) || min < 0 || min > 100000000) {
-      throw userError('ยอดซื้อของระดับ "' + name + '" ต้องเป็นตัวเลข 0–100,000,000', 'BAD_INPUT');
+    if (raw === '' || !Number.isInteger(min) || min < 0 || min > 10000000) {
+      throw userError('แต้มของระดับ "' + name + '" ต้องเป็นจำนวนเต็ม 0–10,000,000', 'BAD_INPUT');
     }
     const mult = Number(t.multiplier == null || t.multiplier === '' ? 1 : t.multiplier);
     if (T.TIER_MULTS.indexOf(mult) < 0) throw userError('ตัวคูณแต้มของระดับ "' + name + '" เลือกได้ ×1 ×1.5 ×2 หรือ ×3', 'BAD_INPUT');
@@ -1082,12 +1098,14 @@ async function adminTiersSave(p, ctx) {
     if (color && !/^#[0-9A-Fa-f]{6}$/.test(color)) throw userError('สีของระดับ "' + name + '" ต้องเป็นรหัสสีแบบ #RRGGBB', 'BAD_INPUT');
     const id = String(t.id || '').trim();
     if (id && !/^T\d{1,3}$/.test(id)) throw userError('รหัสระดับไม่ถูกต้อง', 'BAD_INPUT');
-    return { id, name, minSpend: U.round2(min), multiplier: mult, color: color.toUpperCase() };
-  }).sort((a, b) => a.minSpend - b.minSpend);
+    return { id, name, minPoints: min, multiplier: mult, color: color.toUpperCase(), image: cleanImage(t.image), benefits: cleanBenefits(t.benefits, name) };
+  }).sort((a, b) => a.minPoints - b.minPoints);
+  const hasIntro = Object.prototype.hasOwnProperty.call(p, 'intro');
+  const intro = hasIntro ? U.cleanLongText(p.intro, 200) : '';
   if (rows.length) {
-    if (rows[0].minSpend !== 0) throw userError('ระดับแรกต้องเริ่มที่ยอดซื้อ 0 บาท (สมาชิกทุกคนอย่างน้อยอยู่ระดับแรก)', 'BAD_INPUT');
+    if (rows[0].minPoints !== 0) throw userError('ระดับแรกต้องเริ่มที่ 0 แต้ม (สมาชิกทุกคนอย่างน้อยอยู่ระดับแรก)', 'BAD_INPUT');
     rows.forEach((r, i) => {
-      if (i && r.minSpend === rows[i - 1].minSpend) throw userError('แต่ละระดับต้องใช้ยอดซื้อไม่ซ้ำกัน', 'BAD_INPUT');
+      if (i && r.minPoints === rows[i - 1].minPoints) throw userError('แต่ละระดับต้องใช้แต้มไม่ซ้ำกัน', 'BAD_INPUT');
       if (rows.some((x, j) => j < i && x.name.toLowerCase() === r.name.toLowerCase())) throw userError('ชื่อระดับ "' + r.name + '" ซ้ำกัน', 'BAD_INPUT');
       if (r.id && rows.some((x, j) => j < i && x.id === r.id)) throw userError('รหัสระดับซ้ำกัน', 'BAD_INPUT');
     });
@@ -1098,6 +1116,7 @@ async function adminTiersSave(p, ctx) {
 
   await ctx.db.tx(async (q) => {
     await q.query('select id from shops where id = $1 for update', [shopId]); // แก้ระดับทีละคน
+    if (hasIntro) await q.query('update shops set tier_intro = $2 where id = $1', [shopId, intro]);
     const cur = await T.loadTiers(q, shopId);
     rows.forEach((r) => { if (r.id && !T.tierById(cur, r.id)) throw userError('ไม่พบระดับนี้ (อาจถูกแก้จากอีกเครื่อง) กรุณาเปิดหน้าใหม่', 'NOT_FOUND'); });
     const keep = rows.filter((r) => r.id).map((r) => r.id);
@@ -1130,7 +1149,7 @@ async function adminTiersSave(p, ctx) {
     }
 
     // ตั้งค่าใหม่: ย้ายเกณฑ์เดิมออกให้พ้นกันชน "เกณฑ์ห้ามซ้ำ" ระหว่างสลับค่ากันก่อน
-    await q.query('update tiers set min_spend = min_spend + 1000000000 where shop_id = $1', [shopId]);
+    await q.query('update tiers set min_points = min_points + 1000000000 where shop_id = $1', [shopId]);
     // รหัสใหม่ต่อจากรหัสที่เคยใช้ทั้งหมด (รวมระดับที่ยกเลิกไปแล้วซึ่งยังอยู่ในประวัติ) — ไม่ใช้ซ้ำ ประวัติเก่าจะได้ไม่อ่านผิด
     let maxNo = (await q.query(`select coalesce(max(substring(x from 2)::int), 0) as n from (
         select id as x from tiers where shop_id = $1
@@ -1138,17 +1157,18 @@ async function adminTiersSave(p, ctx) {
         union all select to_tier_id from tier_history where shop_id = $1) s where x ~ '^T[0-9]+$'`, [shopId])).rows[0].n;
     for (const r of rows) {
       if (r.id) {
-        await q.query('update tiers set name = $3, min_spend = $4, point_multiplier = $5, color = $6, status = \'ACTIVE\' where shop_id = $1 and id = $2',
-          [shopId, r.id, r.name, r.minSpend, r.multiplier, r.color]);
+        // min_spend = เกณฑ์ยอดเงินเดิม (ก่อน 7 พ.ย. 2569) ไม่ใช้แล้ว ล้างทิ้ง
+        await q.query(`update tiers set name = $3, min_points = $4, point_multiplier = $5, color = $6, image = $7, benefits = $8, min_spend = null,
+          status = 'ACTIVE' where shop_id = $1 and id = $2`, [shopId, r.id, r.name, r.minPoints, r.multiplier, r.color, r.image, r.benefits]);
       } else {
         r.id = 'T' + (++maxNo);
-        await q.query('insert into tiers (shop_id, id, name, min_spend, point_multiplier, color) values ($1, $2, $3, $4, $5, $6)',
-          [shopId, r.id, r.name, r.minSpend, r.multiplier, r.color]);
+        await q.query(`insert into tiers (shop_id, id, name, min_points, min_spend, point_multiplier, color, image, benefits)
+          values ($1, $2, $3, $4, null, $5, $6, $7, $8)`, [shopId, r.id, r.name, r.minPoints, r.multiplier, r.color, r.image, r.benefits]);
       }
     }
     // สมาชิกที่อยู่ระดับที่เอาออก → ย้ายไประดับใหม่ที่ใกล้ที่สุดซึ่งไม่สูงกว่าเดิม
     for (const t of removed) {
-      const target = rows.reduce((best, r) => (r.minSpend <= t.minSpend ? r : best), rows[0]);
+      const target = rows.reduce((best, r) => (r.minPoints <= t.minPoints ? r : best), rows[0]);
       const moved = (await q.query('update members set tier_id = $3 where shop_id = $1 and tier_id = $2 returning id', [shopId, t.id, target.id])).rows;
       for (const mm of moved) {
         await q.query(`insert into tier_history (shop_id, created_at, member_id, from_tier_id, to_tier_id, reason, by_name)
@@ -1157,18 +1177,19 @@ async function adminTiersSave(p, ctx) {
     }
     if (removedIds.length) await q.query('delete from tiers where shop_id = $1 and id = any($2::text[])', [shopId, removedIds]);
 
-    // จัดระดับสมาชิกทุกคนตามยอด 12 เดือน: ยังไม่มีระดับ → ตามยอด / ถึงเกณฑ์ระดับที่สูงกว่า → ขึ้น
+    // จัดระดับสมาชิกทุกคนตามแต้ม 12 เดือน: ยังไม่มีระดับ → ตามแต้ม / ถึงเกณฑ์ระดับที่สูงกว่า → ขึ้น
     const tiers = await T.loadTiers(q, shopId);
     const today = U.thaiDay(now);
-    const list = (await q.query(`select m.id, m.tier_id, to_char(m.tier_until, 'YYYY-MM-DD') as tier_until, coalesce(s.spend, 0)::float8 as spend
-      from members m left join (select member_id, sum(amount) as spend from transactions where shop_id = $1 and type = 'EARN'
-        and created_at > ($2::timestamptz - interval '12 months') and created_at <= $2 group by member_id) s on s.member_id = m.id
+    const list = (await q.query(`select m.id, m.tier_id, to_char(m.tier_until, 'YYYY-MM-DD') as tier_until, coalesce(x.pts, 0)::int as pts
+      from members m left join (select t.member_id, sum(${T.BASE_POINTS_SQL}) as pts from transactions t join shops s on s.id = t.shop_id
+        where t.shop_id = $1 and t.type = 'EARN' and t.created_at > ($2::timestamptz - interval '12 months') and t.created_at <= $2
+        group by t.member_id) x on x.member_id = m.id
       where m.shop_id = $1`, [shopId, now])).rows;
     const ch = { id: [], tier: [], since: [], until: [] };
-    const hi = { id: [], from: [], to: [], reason: [], spend: [] };
+    const hi = { id: [], from: [], to: [], reason: [], pts: [] };
     for (const m of list) {
       const curT = T.tierById(tiers, m.tier_id);
-      const best = T.qualify(tiers, m.spend);
+      const best = T.qualify(tiers, m.pts);
       let to = curT;
       let reason = '';
       if (!curT) { to = best; reason = m.tier_id ? 'ADMIN' : 'START'; } else if (best.rank > curT.rank) { to = best; reason = 'UP'; }
@@ -1178,7 +1199,7 @@ async function adminTiersSave(p, ctx) {
       else if (!until) until = T.untilFor(to, today);  // ระดับที่เดิมเป็นระดับแรก แต่ตอนนี้ไม่ใช่แล้ว
       if (!reason && until === (m.tier_until || null)) continue;
       ch.id.push(m.id); ch.tier.push(to.id); ch.since.push(reason ? now : null); ch.until.push(until);
-      if (reason) { hi.id.push(m.id); hi.from.push(m.tier_id || null); hi.to.push(to.id); hi.reason.push(reason); hi.spend.push(m.spend); }
+      if (reason) { hi.id.push(m.id); hi.from.push(m.tier_id || null); hi.to.push(to.id); hi.reason.push(reason); hi.pts.push(m.pts); }
     }
     if (ch.id.length) {
       await q.query(`update members m set tier_id = v.t, tier_since = coalesce(v.s, m.tier_since), tier_until = v.u
@@ -1186,11 +1207,11 @@ async function adminTiersSave(p, ctx) {
         where m.shop_id = $1 and m.id = v.id`, [shopId, ch.id, ch.tier, ch.since, ch.until]);
     }
     if (hi.id.length) {
-      await q.query(`insert into tier_history (shop_id, created_at, member_id, from_tier_id, to_tier_id, reason, spend_12m, by_name)
-        select $1, $2, unnest($3::text[]), unnest($4::text[]), unnest($5::text[]), unnest($6::text[]), unnest($7::numeric[]), $8`,
-      [shopId, now, hi.id, hi.from, hi.to, hi.reason, hi.spend, by]);
+      await q.query(`insert into tier_history (shop_id, created_at, member_id, from_tier_id, to_tier_id, reason, points_12m, by_name)
+        select $1, $2, unnest($3::text[]), unnest($4::text[]), unnest($5::text[]), unnest($6::text[]), unnest($7::int[]), $8`,
+      [shopId, now, hi.id, hi.from, hi.to, hi.reason, hi.pts, by]);
     }
-    console.log('ตั้งระดับสมาชิก ร้าน ' + shopId + ' (' + rows.map((r) => r.name + ' ' + r.minSpend + ' ×' + r.multiplier).join(' / ') + ') ปรับสมาชิก ' + ch.id.length + ' คน โดย ' + by);
+    console.log('ตั้งระดับสมาชิก ร้าน ' + shopId + ' (' + rows.map((r) => r.name + ' ' + r.minPoints + ' แต้ม ×' + r.multiplier).join(' / ') + ') ปรับสมาชิก ' + ch.id.length + ' คน โดย ' + by);
   });
   return adminTiers(p, ctx);
 }
@@ -1211,8 +1232,8 @@ async function adminMemberTier(p, ctx) {
     if (!m) throw userError('ไม่พบสมาชิก', 'NOT_FOUND');
     const until = T.untilFor(t, U.thaiDay(now));
     await q.query('update members set tier_id = $3, tier_since = $4, tier_until = $5::date where shop_id = $1 and id = $2', [shopId, id, t.id, now, until]);
-    await q.query(`insert into tier_history (shop_id, created_at, member_id, from_tier_id, to_tier_id, reason, spend_12m, by_name)
-      values ($1, $2, $3, $4, $5, 'ADMIN', $6, $7)`, [shopId, now, id, m.tier_id || null, t.id, await T.spend12m(q, shopId, id, now), (ctx.staff.name + ': ' + reason).slice(0, 200)]);
+    await q.query(`insert into tier_history (shop_id, created_at, member_id, from_tier_id, to_tier_id, reason, points_12m, by_name)
+      values ($1, $2, $3, $4, $5, 'ADMIN', $6, $7)`, [shopId, now, id, m.tier_id || null, t.id, await T.points12m(q, shopId, id, now), (ctx.staff.name + ': ' + reason).slice(0, 200)]);
     console.log('เปลี่ยนระดับ ' + id + ' → ' + t.name + ' ร้าน ' + shopId + ' โดย ' + ctx.staff.name + ': ' + reason);
     return { member: adminMember(await M.memberById(q, shopId, id), ctx.staff.role, tiers) };
   });

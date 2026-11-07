@@ -6,7 +6,7 @@ const { toNum, safeUrl, driveImage, cleanLongText } = require('./util');
 const SHOP_SQL = `
 select id, name, liff_id, member_prefix, point_rate_baht::float8 as point_rate_baht, welcome_points,
        max_purchase::float8 as max_purchase, confirm_purchase_over::float8 as confirm_purchase_over,
-       coupon_days, history_limit, consent_version, brand, status
+       coupon_days, history_limit, consent_version, brand, status, tier_intro
 from shops where id = $1`;
 
 // ร้านที่ติดตั้งก่อนมีหน้าตาร้านในหลังบ้าน ใช้คำนี้เป็นชื่อตั้งต้น → ถือว่า "ยังไม่ได้ตั้ง"
