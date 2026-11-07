@@ -1,6 +1,6 @@
 // หน้าลูกค้า: สมัครสมาชิก บัตรสมาชิก + QR แลกของรางวัล คูปอง ประวัติแต้ม
 // ทุกร้านใช้ไฟล์นี้ร่วมกัน — ข้อความ/สี/โลโก้มาจาก shops/<ร้าน>/config.js
-import { loadShop, applyBrand, textOn, shade } from './shop.js';
+import { loadShop, applyBrand, textOn } from './shop.js';
 import { initLine, IS_LOCAL } from './line.js';
 import { createApi, createRetryKeeper } from './api.js';
 import { applyDevParams, mountDevBar } from './devbar.js';
@@ -664,17 +664,8 @@ const tiersOn = () => !!(cfg().features && cfg().features.tiers) && !!S.data && 
 // จุดสีของระดับ (สีมาจากหลังบ้าน ตรวจรูปแบบ #RRGGBB แล้ว)
 const tierDot = color => (/^#[0-9A-Fa-f]{6}$/.test(color || '') ? `<i class="tier-dot" style="background:${color}"></i>` : '');
 
-// สีการ์ดระดับ: ไล่จากสีของระดับไปทางที่ห่างจากสีตัวอักษร (ตัวอักษรขาว → ไล่เข้มลง / ตัวอักษรเข้ม → เริ่มอ่อนกว่า)
-// ตัวอักษรจึงอ่านออกทั้งใบไม่ว่าร้านตั้งสีอะไร / สีไม่ถูกรูปแบบ → ใช้สีบัตรสมาชิกของร้าน (CSS)
 const HEX6 = /^#[0-9A-Fa-f]{6}$/;
-function tierPaint(color) {
-  if (!HEX6.test(color || '')) return '';
-  const fg = textOn(color);
-  const dark = fg === '#FFFFFF';
-  const a = dark ? color : shade(color, 0.3);
-  const b = dark ? shade(color, -0.35) : shade(color, -0.06);
-  return `--tier-a:${a};--tier-b:${b};--tier-fg:${fg}`;
-}
+const tierColor = c => (HEX6.test(c || '') ? c : '');
 
 // สิทธิ์ที่ได้เพิ่มเมื่อขึ้นระดับถัดไป (แรงจูงใจ): ตัวคูณแต้มที่สูงขึ้น + ของรางวัลที่ปลดล็อก
 function nextPerks(t, next) {
@@ -686,35 +677,44 @@ function nextPerks(t, next) {
   return perks;
 }
 
-// การ์ดระดับ (ผู้ใช้เลือกแบบ "การ์ดสีของระดับ" 7 พ.ย. 2569 — ให้เด่นกว่าการ์ดขาวเดิม)
+// การ์ดระดับแบบ "บันไดระดับ" (ผู้ใช้เลือกจากตัวอย่าง 5 แบบ 7 พ.ย. 2569 — แบบการ์ดสีใหญ่เกินและดูเหมือนบัตรสมาชิก)
+// ทุกระดับเรียงบนเส้นเดียว ลูกค้าเห็นว่าอยู่ตรงไหนและมีอะไรรออยู่ / กดทั้งการ์ด → หน้าสิทธิ์ของแต่ละระดับ
+// ร้านตั้งได้ 2–5 ระดับ: จุดอยู่กลางช่องของตัวเอง (เส้นเริ่มกลางช่องแรก จบกลางช่องสุดท้าย) ป้ายชื่อจึงตรงใต้จุดเสมอ
 function tierCard(m) {
   const t = m.tierInfo;
   if (!tiersOn() || !t) return '';
+  const tiers = S.data.tiers;
+  const n = tiers.length;
+  const rank = Math.max(0, tiers.findIndex(x => x.id === t.id));
   const next = t.next;
-  // ยอด 0 บาทก็ยังเห็นจุดเริ่มต้นของแถบ (แถบว่างทั้งเส้นดูเหมือนไม่มีอะไร)
-  const pct = next && next.minSpend > 0 ? Math.max(2, Math.min(100, Math.round(t.spend12m / next.minSpend * 100))) : 100;
+  const cur = tiers[rank];
+  // ตำแหน่งบนเส้น: ระดับห่างเท่ากัน + ความคืบหน้าในช่วงระดับนี้ → ระดับถัดไป
+  const frac = next && next.minSpend > cur.minSpend ? Math.max(0, Math.min(1, (t.spend12m - cur.minSpend) / (next.minSpend - cur.minSpend))) : 0;
+  const fill = Math.min(100, (rank + frac) / (n - 1) * 100);
+  const color = tierColor(t.color);
   const perks = next ? nextPerks(t, next) : [];
+  const node = (x, i) => {
+    const c = tierColor(x.color);
+    const left = i / (n - 1) * 100;
+    if (i === rank) {
+      return `<span class="tl-node on" style="left:${left}%;${c ? `background:${c};color:${textOn(c)};--tl-ring:${c}` : ''}">${icon('crown', 12)}</span>`;
+    }
+    return `<span class="tl-node${i < rank ? ' done' : ''}" style="left:${left}%;${c ? `border-color:${c};${i < rank ? `background:${c}` : ''}` : ''}"></span>`;
+  };
   return `
-    <section class="tier-card tier-hero" style="${tierPaint(t.color)}">
-      <div class="tier-hero-top">
-        <span class="tier-medal">${icon('crown', 22)}</span>
-        <div class="grow">
-          <div class="tier-hero-label">ระดับสมาชิกของคุณ</div>
-          <div class="tier-hero-name">${esc(t.name)}</div>
-        </div>
-        ${t.multiplier > 1 ? `<span class="tier-hero-mult">${esc(unit())} ×${t.multiplier}</span>` : ''}
-      </div>
-      ${next ? `
-        <div class="tier-hero-bar" role="progressbar" aria-label="ยอดซื้อสู่ระดับ ${esc(next.name)}" aria-valuemin="0" aria-valuemax="${next.minSpend}" aria-valuenow="${t.spend12m}"><i style="width:${pct}%"></i></div>
-        <div class="tier-hero-scale"><span>ยอดซื้อ 12 เดือน ฿${fmtMoney(t.spend12m)}</span><span>${esc(next.name)} ฿${fmtMoney(next.minSpend)}</span></div>
-        <div class="tier-hero-next">อีก <b>฿${fmtMoney(next.remaining)}</b> ถึงระดับ <b>${esc(next.name)}</b></div>
-        ${perks.length ? `<div class="tier-hero-perk">${icon('star', 15)}<span>ระดับ ${esc(next.name)}: ${esc(perks.join(' · '))}</span></div>` : ''}`
-        : '<div class="tier-hero-next"><b>คุณอยู่ระดับสูงสุดแล้ว</b> 🎉</div>'}
-      <div class="tier-hero-foot">
-        <span>${t.until ? `คงระดับนี้ถึง ${fmtDate(t.until)}` : ''}</span>
-        <button class="link" data-act="go" data-page="collect">สิทธิ์ของแต่ละระดับ ${icon('right', 14)}</button>
-      </div>
-    </section>`;
+    <button type="button" class="tier-card tier-ladder" data-act="go" data-page="collect" aria-label="ระดับของคุณ ${esc(t.name)} — ดูสิทธิ์ของแต่ละระดับ">
+      <span class="tl-head"><span>ระดับของคุณ <b>${esc(t.name)}</b>${t.multiplier > 1 ? ` <small>· ${esc(unit())} ×${t.multiplier}</small>` : ''}</span><span class="tl-more">ดูสิทธิ์ ${icon('right', 14)}</span></span>
+      <span class="tl-track" style="--tl-pad:${(50 / n).toFixed(3)}%">
+        <span class="tl-rail"><span class="tl-line"></span><span class="tl-fill" style="width:${fill.toFixed(1)}%;${color ? `background:${color}` : ''}"></span>${tiers.map(node).join('')}</span>
+      </span>
+      <span class="tl-labels" style="grid-template-columns:repeat(${n}, minmax(0, 1fr))">${tiers.map((x, i) => `
+        <span class="${i === rank ? 'on' : ''}"><b>${esc(x.name)}</b>${x.minSpend ? '฿' + fmtMoney(x.minSpend) : 'เริ่มต้น'}${x.multiplier > 1 ? ` · ×${x.multiplier}` : ''}</span>`).join('')}
+      </span>
+      <span class="tl-next">${next
+        ? `อีก <b>฿${fmtMoney(next.remaining)}</b> ถึง <b>${esc(next.name)}</b>${perks.length ? ' · ' + esc(perks.join(' · ')) : ''}`
+        : `<b>คุณอยู่ระดับสูงสุดแล้ว</b> 🎉`}
+        ${t.until ? `<small>คงระดับ ${esc(t.name)} ถึง ${fmtDate(t.until)}</small>` : ''}</span>
+    </button>`;
 }
 
 // ป้ายระดับบนบัตร: พื้นเป็นสีของระดับนั้นเอง (เดิมพื้นสีเน้นของร้าน + จุดสีระดับ ทำให้สับสนว่าระดับนี้สีอะไร)

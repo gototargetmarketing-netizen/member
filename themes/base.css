@@ -778,30 +778,27 @@ input.input-err { border-color: var(--danger); }
   .tier-f-end { grid-row: 1; grid-column: 3; }
 }
 
-/* การ์ดระดับในหน้าลูกค้า แบบสีของระดับ (ผู้ใช้เลือก 7 พ.ย. 2569) — สีมาจาก tierPaint() ใน customer.js ผ่านตัวแปร --tier-*
-   ไม่มีสี → ใช้สีบัตรสมาชิกของร้าน / ทุกส่วนใช้ --tier-fg ผสมความโปร่ง จึงอ่านออกทั้งบนพื้นเข้มและอ่อน */
-.tier-hero { position: relative; overflow: hidden; border: 0; padding: 18px;
-  background: linear-gradient(135deg, var(--tier-a, var(--card-from)), var(--tier-b, var(--card-to)));
-  color: var(--tier-fg, var(--on-card)); }
-.tier-hero::after { content: ""; position: absolute; right: -50px; top: -60px; width: 170px; height: 170px; border-radius: 50%;
-  background: color-mix(in srgb, var(--tier-fg, var(--on-card)) 9%, transparent); pointer-events: none; }
-.tier-hero > * { position: relative; z-index: 1; }
-.tier-hero-top { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
-.tier-medal { width: 46px; height: 46px; flex-shrink: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
-  background: color-mix(in srgb, var(--tier-fg, var(--on-card)) 15%, transparent);
-  border: 2px solid color-mix(in srgb, var(--tier-fg, var(--on-card)) 45%, transparent); }
-.tier-hero-label { font-size: 12.5px; opacity: .8; }
-.tier-hero-name { font-size: 26px; font-weight: 800; line-height: 1.15; letter-spacing: .3px; overflow-wrap: anywhere; }
-.tier-hero-mult { flex-shrink: 0; font-size: 13px; font-weight: 800; padding: 6px 11px; border-radius: 99px;
-  background: color-mix(in srgb, var(--tier-fg, var(--on-card)) 16%, transparent); }
-.tier-hero-bar { height: 10px; border-radius: 99px; overflow: hidden; background: color-mix(in srgb, var(--tier-fg, var(--on-card)) 22%, transparent); }
-.tier-hero-bar i { display: block; height: 100%; border-radius: 99px; background: var(--tier-fg, var(--on-card)); }
-.tier-hero-scale { display: flex; justify-content: space-between; gap: 8px; margin-top: 6px; font-size: 12.5px; opacity: .8; font-variant-numeric: tabular-nums; }
-.tier-hero-next { margin-top: 12px; font-size: 15.5px; }
-.tier-hero-next b { font-weight: 800; }
-.tier-hero-perk { display: flex; align-items: flex-start; gap: 6px; margin-top: 10px; padding: 9px 11px; border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--tier-fg, var(--on-card)) 13%, transparent); font-size: 13.5px; font-weight: 700; }
-.tier-hero-perk svg { flex-shrink: 0; margin-top: 2px; }
-.tier-hero-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 14px; font-size: 12.5px; }
-.tier-hero-foot span { opacity: .8; }
-.tier-hero .link { color: inherit; margin: 0; font-size: 13px; white-space: nowrap; }
+/* การ์ดระดับในหน้าลูกค้า แบบบันไดระดับ (ผู้ใช้เลือก 7 พ.ย. 2569) — สีของระดับมาจากหลังบ้าน ใส่เป็น style ใน tierCard()
+   ไม่มีสี → ใช้สีปุ่มของร้าน / เส้นเริ่มกลางช่องแรก จบกลางช่องสุดท้าย (--tl-pad = ครึ่งช่อง) ป้ายชื่อจึงอยู่ใต้จุดพอดี */
+.tier-ladder { display: block; width: calc(100% - 32px); text-align: left; color: var(--text); padding: 14px 14px 12px; }
+.tier-ladder > span { display: block; }
+.tl-head { display: flex !important; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13.5px; }
+.tl-head b { font-size: 16px; font-weight: 800; }
+.tl-head small { color: var(--muted); font-weight: 700; font-size: 12px; }
+.tl-more { display: inline-flex; align-items: center; gap: 2px; color: var(--button); font-weight: 700; font-size: 12.5px; white-space: nowrap; }
+.tl-track { padding: 0 var(--tl-pad); margin-top: 10px; }
+.tl-rail { position: relative; display: block; height: 24px; }
+.tl-line, .tl-fill { position: absolute; left: 0; top: 10px; height: 4px; border-radius: 99px; }
+.tl-line { right: 0; background: var(--line); }
+.tl-fill { background: var(--button); }
+.tl-node { position: absolute; top: 12px; width: 14px; height: 14px; margin: -7px 0 0 -7px; border-radius: 50%; border: 3px solid var(--button); background: var(--surface); }
+.tl-node.done { background: var(--button); }
+.tl-node.on { width: 24px; height: 24px; margin: -12px 0 0 -12px; border: 0; display: grid; place-items: center; background: var(--button); color: var(--on-button);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--tl-ring, var(--button)) 22%, transparent); }
+.tl-labels { display: grid !important; margin-top: 2px; font-size: 11px; line-height: 1.3; color: var(--muted); text-align: center; }
+.tl-labels span { min-width: 0; padding: 0 2px; overflow-wrap: anywhere; }
+.tl-labels b { display: block; color: var(--text); font-size: 12px; font-weight: 700; }
+.tl-labels .on b { font-weight: 800; }
+.tl-next { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); font-size: 13px; line-height: 1.45; }
+.tl-next b { font-weight: 800; }
+.tl-next small { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; }

@@ -191,11 +191,11 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     await b.nav('about:blank');
     await b.nav(`${WEB}/demo#home`);
     await b.waitFor(`document.querySelector('.tier-card')`, 10000, 'การ์ดระดับ');
-    ok((await b.text('.tier-hero-name')) === 'Member' && /อีก ฿3,000 ถึงระดับ Silver/.test(await b.text('.tier-card')),
-      'หน้าลูกค้า: การ์ดระดับ Member + อีก ฿3,000 ถึง Silver', await b.text('.tier-card'));
-    ok(/ระดับ Silver: ได้แต้ม ×1\.5 ทุกบิล/.test(await b.text('.tier-hero-perk')), 'บอกสิทธิ์ของระดับถัดไป (แต้ม ×1.5)', await b.text('.tier-hero-perk'));
-    ok(await b.eval(`(() => { const c = document.querySelector('.tier-hero'); return /--tier-a/.test(c.getAttribute('style')) && getComputedStyle(c).backgroundImage.includes('gradient'); })()`),
-      'การ์ดระดับใช้สีของระดับ (ไล่สี)');
+    ok(/ระดับของคุณ Member/.test(await b.text('.tl-head')) && /อีก ฿3,000 ถึง Silver/.test(await b.text('.tl-next')),
+      'หน้าลูกค้า: บันไดระดับ — ระดับ Member + อีก ฿3,000 ถึง Silver', await b.text('.tier-card'));
+    ok(/ได้แต้ม ×1\.5 ทุกบิล/.test(await b.text('.tl-next')), 'บอกสิทธิ์ของระดับถัดไป (แต้ม ×1.5)', await b.text('.tl-next'));
+    ok(await b.eval(`(() => { const n = [...document.querySelectorAll('.tl-node')]; return n.length === 3 && n[0].classList.contains('on') && /Gold/.test(document.querySelector('.tl-labels').innerText); })()`),
+      'เห็นทุกระดับเรียงกัน 3 จุด + ระดับปัจจุบันเป็นจุดแรก');
     ok(/Member/.test(await b.text('.mc-tier')), 'บัตรสมาชิกมีป้ายระดับ');
     await b.shot(path.join(OUT, 'n08-customer-tier.png'), { full: true });
     await b.nav(`${WEB}/demo#rewards`);
