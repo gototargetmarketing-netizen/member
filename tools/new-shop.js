@@ -8,7 +8,7 @@
 // หรือดับเบิลคลิก "เพิ่มร้านใหม่ - แก้แพ็กเกจ LINE CRM.command"
 //
 // ใส่คำตอบล่วงหน้าได้ (ข้ามคำถามข้อนั้น) เช่น --id baansuan --name "บ้านสวน" --liff 2012345678-AbCd --package 2
-//   --prefix BS --rate 25 --color "#2E7D32" --theme minimal --domain "" --tiers y --branches n --max-branches 3 --export y
+//   --prefix BS --rate 25 --color "#2E7D32" --theme minimal --domain "" --tiers y --branches n --max-branches 3 --export y --broadcast y
 //   --yes = ไม่ถามเลย ใช้ค่าที่ใส่ + ค่าตั้งต้น และยืนยันเอง (ชุดทดสอบใช้) / --root = โฟลเดอร์โปรเจค (ชุดทดสอบใช้สำเนา)
 //
 // สร้างให้:  shops/<ร้าน>/config.js · บรรทัดใน shops/shops.js · db/shops/<ร้าน>.sql (เพิ่มร้าน) · db/shops/<ร้าน>-owner.sql (อนุมัติเจ้าของร้าน)
@@ -27,15 +27,16 @@ const MAIN_HOST = 'member-cyan.vercel.app';
 
 // แพ็กเกจสำเร็จรูป = ค่าตั้งต้นของสวิตช์ (ปรับทีละตัวได้เสมอ) — ราคาและชื่อแพ็กเกจยังไม่สรุป เปลี่ยนที่นี่ได้
 const PACKAGES = {
-  1: { name: 'เริ่มต้น', features: { tiers: false, branches: false, export: false } },
-  2: { name: 'มาตรฐาน', features: { tiers: true, branches: false, export: true } },
-  3: { name: 'หลายสาขา', features: { tiers: true, branches: true, maxBranches: 3, export: true } },
-  4: { name: 'เลือกเองทั้งหมด', features: { tiers: false, branches: false, export: false } }
+  1: { name: 'เริ่มต้น', features: { tiers: false, branches: false, export: false, broadcast: false } },
+  2: { name: 'มาตรฐาน', features: { tiers: true, branches: false, export: true, broadcast: true } },
+  3: { name: 'หลายสาขา', features: { tiers: true, branches: true, maxBranches: 3, export: true, broadcast: true } },
+  4: { name: 'เลือกเองทั้งหมด', features: { tiers: false, branches: false, export: false, broadcast: false } }
 };
 const SWITCHES = [
   { key: 'tiers', label: 'ระดับสมาชิก + หน้าสิทธิ์สมาชิก' },
   { key: 'branches', label: 'หลายสาขา + ตารางเทียบสาขา' },
-  { key: 'export', label: 'ส่งออก Excel' }
+  { key: 'export', label: 'ส่งออก Excel' },
+  { key: 'broadcast', label: 'ส่งข้อความตามกลุ่ม (LINE OA ของร้าน)' }
 ];
 
 /* ---------- ตรวจข้อมูล (คืนข้อความผิด หรือ '' = ผ่าน) — กฎเดียวกับ check ในตาราง shops ---------- */
@@ -101,7 +102,8 @@ function featuresBlock(f) {
   const row = (code, note) => `    ${code}`.padEnd(24) + `// ${note}`; // คอมเมนต์ตรงคอลัมน์เดียวกัน อ่านง่าย
   const lines = [row(`tiers: ${!!f.tiers},`, 'ระดับสมาชิก + หน้าสิทธิ์สมาชิก'), row(`branches: ${!!f.branches},`, 'หลายสาขา + ตารางเทียบสาขา')];
   if (f.branches && f.maxBranches) lines.push(row(`maxBranches: ${f.maxBranches},`, 'จำนวนสาขาที่เปิดพร้อมกันได้ (ไม่มีบรรทัดนี้ = ไม่จำกัด)'));
-  lines.push(row(`export: ${!!f.export}`, 'ปุ่มส่งออก Excel ในหลังบ้าน'));
+  lines.push(row(`export: ${!!f.export},`, 'ปุ่มส่งออก Excel ในหลังบ้าน'));
+  lines.push(row(`broadcast: ${!!f.broadcast}`, 'เมนูส่งข้อความตามกลุ่ม (ส่งจริงได้เมื่อเชื่อม LINE OA ของร้านแล้ว)'));
   return `  // แพ็กเกจของร้าน — แก้ด้วย node tools/new-shop.js edit <ร้าน> (เราเป็นคนตั้ง เจ้าของร้านแก้เองไม่ได้)\n` +
     `  // ตอนนี้แค่ซ่อนปุ่มในหน้าเว็บ ตัวกลางยังไม่ตรวจ (ขั้น 7)\n  features: {\n${lines.join('\n')}\n  },\n`;
 }
@@ -200,7 +202,7 @@ function replaceFeatures(text, f) {
 
 // สวิตช์จากไฟล์ร้าน → รูปเดียวกับ PACKAGES (ไม่ใส่ = ปิด เหมือนที่หน้าเว็บอ่าน)
 function normFeatures(f = {}) {
-  const out = { tiers: f.tiers === true, branches: f.branches === true, export: f.export === true };
+  const out = { tiers: f.tiers === true, branches: f.branches === true, export: f.export === true, broadcast: f.broadcast === true };
   const n = Number(f.maxBranches);
   if (out.branches && Number.isInteger(n) && n > 0) out.maxBranches = n;
   return out;

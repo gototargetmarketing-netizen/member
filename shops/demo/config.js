@@ -23,7 +23,7 @@ export default {
     pointUnit: 'แต้ม'
   },
   // ร้านเดโม (ใช้เดโมขาย): เปิดทุกแพ็กเกจ — ระดับสมาชิก + หลายสาขา (ไม่ใส่ maxBranches = ไม่จำกัด) + ส่งออก Excel
-  features: { tiers: true, branches: true, export: true },
+  features: { tiers: true, branches: true, export: true, broadcast: true },
   legal: {
     privacyUrl: '',
     privacyText: 'ตัวอย่างนโยบายความเป็นส่วนตัว — ร้านจริงต้องใส่ข้อความของตัวเอง'

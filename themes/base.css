@@ -516,6 +516,25 @@ input.input-err { border-color: var(--danger); }
 .adm-grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 .back-link { display: inline-flex; align-items: center; gap: 4px; color: var(--button); font-weight: 700; text-decoration: none; }
 
+/* ส่งข้อความตามกลุ่ม (12 พ.ย. 2569): ฟอร์มคัดกลุ่มซ้าย + ผลขวา (มือถือเรียงลงมา) */
+.aud-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 16px; align-items: start; }
+.aud-side { display: grid; gap: 16px; min-width: 0; }
+.aud-range { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 8px; align-items: center; }
+.aud-days { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.aud-days-1 { grid-template-columns: minmax(0, 1fr) auto; }
+.aud-range > span, .aud-days > span { font-weight: 400; }
+.tog-picks { display: flex; flex-wrap: wrap; gap: 6px; }
+.tog-picks label { position: relative; cursor: pointer; }
+.tog-picks input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.tog-picks span { display: inline-flex; align-items: center; padding: 8px 14px; border-radius: 99px; border: 1.5px solid var(--line); font-size: 14px; font-weight: 700; color: var(--muted); }
+.tog-picks input:checked + span { border-color: var(--button); color: var(--button); background: color-mix(in srgb, var(--button) 8%, var(--surface)); }
+.tog-picks input:focus-visible + span { outline: 2px solid var(--button); outline-offset: 2px; }
+.aud-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.aud-result { display: grid; gap: 10px; min-width: 0; }
+.aud-count { display: flex; align-items: baseline; gap: 8px; font-weight: 700; }
+.aud-count b { font-size: 40px; font-weight: 800; line-height: 1.1; color: var(--button); }
+@media (max-width: 900px) { .aud-layout { grid-template-columns: 1fr; } }
+
 /* ช่วงวันที่ + ตัวกรอง */
 .range-bar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
 .chips-scroll { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; max-width: 100%; }

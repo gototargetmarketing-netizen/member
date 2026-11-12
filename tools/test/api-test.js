@@ -390,6 +390,121 @@ function fakeLine() {
     }
   }
 
+  console.log('\n[5.7] ส่งข้อความตามกลุ่ม รอบ 1: คัดกลุ่มลูกค้า (adminAudience)');
+  {
+    const da = createApp({ db: () => db, verifier: createVerifier({ fetch: fakeLine().fetch }), allowTestTokens: true, region: 'test' });
+    const OW = 'TEST:U_DEMO_OWNER:เจ้าของ';
+    const call = (action, body, tok) => da.handle(Object.assign({ action, shop: 'demo', idToken: tok || OW, requestId: crypto.randomUUID() }, body));
+    const aud = (filter, tok) => call('adminAudience', { filter }, tok);
+    const log = console.log; console.log = (...a) => { if (/^  [✓✗]/.test(String(a[0]))) log(...a); };
+    try {
+      // ทำข้อมูลให้มีทุกกรณีที่ต้องตัดออก (ยินยอมรับข่าวสารทุกคน → ต้องถูกตัดเพราะเหตุอื่น)
+      await db.query(`update members set marketing_consent = true, status = 'BLOCKED' where shop_id = 'demo' and id in ('DM-000011', 'DM-000012', 'DM-000013')`);
+      await db.query(`update members set marketing_consent = true, line_user_id = null where shop_id = 'demo' and id in ('DM-000014', 'DM-000015')`);
+      r = await call('adminTiersSave', { tiers: [{ name: 'Member', minPoints: 0, multiplier: 1 }, { name: 'Silver', minPoints: 150, multiplier: 1.5 }, { name: 'Gold', minPoints: 600, multiplier: 2 }] });
+      ok(r.ok, 'ตั้งระดับ 3 ระดับไว้ลองกรองระดับ', r);
+      const first = await aud({});
+      const tiers = first.tiers || [];
+      ok(first.ok && tiers.length === 3, 'เจ้าของร้านเปิดได้ + ได้รายชื่อระดับไว้ทำตัวเลือก', first);
+
+      // คิดผลที่ควรได้แยกเอง (ด้วย JavaScript ไม่ใช้ SQL ชุดเดียวกับตัวกลาง) แล้วเทียบ
+      const all = (await db.query(`select id, line_user_id, tier_id, joined_branch, extract(month from birth_date)::int as bm, points, total_spend::float8 as spend,
+          visit_count, extract(epoch from last_visit_at)::float8 * 1000 as lv, extract(epoch from joined_at)::float8 * 1000 as jt, status, marketing_consent as mc
+          from members where shop_id = 'demo'`)).rows;
+      const now = Date.now();
+      const ago = (d) => now - d * U.DAY_MS;
+      const has = (v) => v !== undefined && v !== null && String(v).replace(/,/g, '') !== '';
+      const n = (v) => Number(String(v).replace(/,/g, ''));
+      const match = (f) => (m) =>
+        (!f.tiers || !f.tiers.length || f.tiers.includes(m.tier_id)) &&
+        (!f.branches || !f.branches.length || f.branches.map((x) => x.toUpperCase()).includes(m.joined_branch)) &&
+        (!f.birthMonth || m.bm === Number(f.birthMonth)) &&
+        (!has(f.pointsMin) || m.points >= n(f.pointsMin)) && (!has(f.pointsMax) || m.points <= n(f.pointsMax)) &&
+        (!has(f.spendMin) || m.spend >= n(f.spendMin)) && (!has(f.spendMax) || m.spend <= n(f.spendMax)) &&
+        (!has(f.visitsMin) || m.visit_count >= n(f.visitsMin)) && (!has(f.visitsMax) || m.visit_count <= n(f.visitsMax)) &&
+        (f.lastVisit !== 'within' || (m.lv != null && m.lv >= ago(f.lastVisitDays))) &&
+        (f.lastVisit !== 'over' || (m.lv != null ? m.lv : m.jt) < ago(f.lastVisitDays)) &&
+        (!has(f.joinedDays) || m.jt >= ago(f.joinedDays));
+      const sendable = (m) => m.status === 'ACTIVE' && m.mc === true && !!m.line_user_id;
+      const expect = (f) => {
+        const hit = all.filter(match(f));
+        return {
+          matched: hit.length, sendable: hit.filter(sendable).length,
+          excluded: { noConsent: hit.filter((m) => !m.mc).length, blocked: hit.filter((m) => m.mc && m.status !== 'ACTIVE').length,
+            noLine: hit.filter((m) => m.mc && m.status === 'ACTIVE' && !m.line_user_id).length },
+          ids: new Set(hit.filter(sendable).map((m) => m.id))
+        };
+      };
+      const silver = tiers[1].id, gold = tiers[2].id;
+      const thisMonth = Number(U.thaiDay(new Date()).slice(5, 7));
+      const cases = [
+        ['ไม่ใส่เงื่อนไข = ทุกคนที่ส่งได้', {}],
+        ['แต้มคงเหลือ 100–500', { pointsMin: 100, pointsMax: 500 }],
+        ['ยอดซื้อรวมตั้งแต่ 1,000 (มีจุลภาค)', { spendMin: '1,000' }],
+        ['มา 3 ครั้งพอดี', { visitsMin: 3, visitsMax: '3' }],
+        ['เกิดเดือนนี้', { birthMonth: thisMonth }],
+        ['สมัครที่ B02 หรือ B03 (พิมพ์ตัวเล็กก็ได้)', { branches: ['B02', 'b03'] }],
+        ['มาซื้อภายใน 30 วัน', { lastVisit: 'within', lastVisitDays: 30 }],
+        ['ไม่ได้มาเกิน 180 วัน (ยังไม่เคยซื้อ นับจากวันสมัคร)', { lastVisit: 'over', lastVisitDays: '180' }],
+        ['สมัครภายใน 775 วัน', { joinedDays: 775 }],
+        ['ระดับ Gold', { tiers: [gold] }],
+        ['หลายข้อพร้อมกัน: Silver/Gold + สาขา B01 + ไม่ได้มาเกิน 60 วัน + แต้ม ≥ 50', { tiers: [silver, gold], branches: ['B01'], lastVisit: 'over', lastVisitDays: 60, pointsMin: 50 }]
+      ];
+      for (const [label, f] of cases) {
+        const got = await aud(f);
+        const exp = expect(f);
+        ok(got.ok && got.matched === exp.matched && got.sendable === exp.sendable && JSON.stringify(got.excluded) === JSON.stringify(exp.excluded) &&
+          got.items.length === Math.min(20, exp.sendable) && got.items.every((x) => exp.ids.has(x.memberId)),
+          `${label} → ตรง ${exp.matched} คน ส่งได้ ${exp.sendable} คน`, got.ok ? { got: [got.matched, got.sendable, got.excluded], exp: [exp.matched, exp.sendable, exp.excluded] } : got);
+      }
+      const e0 = expect({});
+      ok(first.matched === 2000 && first.excluded.blocked === 3 && first.excluded.noLine === 2 && e0.excluded.noConsent > 0,
+        'ตัดคนที่ไม่ยินยอมรับข่าวสาร / ถูกระงับ 3 คน / ไม่ได้สมัครผ่าน LINE 2 คน ออกเอง', first.excluded);
+      ok(first.items.every((x, i, a) => i === 0 || a[i - 1].joinedAt >= x.joinedAt) && first.previewLimit === 20, 'ตัวอย่าง 20 คน เรียงสมัครล่าสุดก่อน');
+      const text = JSON.stringify(first);
+      ok(!/U_DEMO_|"phone"|"birth|line_user/i.test(text), 'ตัวอย่างรายชื่อไม่มี LINE ID / เบอร์ / วันเกิด (LINE ID ไม่ออกจากตัวกลาง)');
+      ok(first.items[0].tier && first.items[0].tierId, 'ตัวอย่างบอกระดับของแต่ละคน');
+
+      // ใครใช้ได้
+      r = await aud({}, 'TEST:U_DEMO_ADMIN:ผู้จัดการ');
+      ok(!r.ok && r.code === 'NO_ROLE', 'ผู้จัดการใช้ไม่ได้ (เจ้าของร้านเท่านั้น)', r);
+      r = await aud({}, 'TEST:U_DEMO_CASHIER:แคชเชียร์');
+      ok(!r.ok && r.code === 'NO_ROLE', 'แคชเชียร์ใช้ไม่ได้', r);
+      r = await aud({}, 'TEST:U_DEMO_3:ลูกค้า');
+      ok(!r.ok && r.code === 'NOT_STAFF', 'ลูกค้าใช้ไม่ได้', r);
+
+      // ค่าที่ผิด → แจ้ง ไม่เดาแทน
+      const bad = [
+        ['แต้มเริ่มมากกว่าแต้มสิ้นสุด', { pointsMin: 500, pointsMax: 100 }, 'BAD_INPUT'],
+        ['แต้มติดลบ', { pointsMin: '-5' }, 'BAD_INPUT'],
+        ['แต้มมีทศนิยม', { pointsMin: '1.5' }, 'BAD_INPUT'],
+        ['เดือนเกิด 13', { birthMonth: 13 }, 'BAD_INPUT'],
+        ['เดือนเกิด 0', { birthMonth: 0 }, 'BAD_INPUT'],
+        ['มาซื้อล่าสุดไม่ใส่จำนวนวัน', { lastVisit: 'within' }, 'BAD_INPUT'],
+        ['มาซื้อล่าสุดแบบที่ไม่มี', { lastVisit: 'sometimes', lastVisitDays: 5 }, 'BAD_INPUT'],
+        ['สมัครภายใน 0 วัน', { joinedDays: 0 }, 'BAD_INPUT'],
+        ['สาขาไม่ได้ส่งเป็นรายการ', { branches: 'B01' }, 'BAD_INPUT'],
+        ['สาขาแอบใส่คำสั่ง SQL', { branches: ["B01'; drop table members;--"] }, 'BAD_INPUT'],
+        ['ระดับที่ไม่มีในร้าน', { tiers: ['T99'] }, 'BAD_TIER']
+      ];
+      for (const [label, f, code] of bad) {
+        r = await aud(f);
+        ok(!r.ok && r.code === code, `${label} → ${code}`, r);
+      }
+      ok(await count(db, `select count(*)::int n from members where shop_id = 'demo'`) === 2000, 'ตารางสมาชิกยังอยู่ครบ');
+      r = await aud('ไม่ใช่เงื่อนไข');
+      ok(r.ok && r.matched === 2000, 'เงื่อนไขที่ไม่ใช่รูปแบบที่รู้จัก = ไม่กรอง (ไม่ล่ม)', r);
+
+      // ร้านปิดใช้ระดับ → ไม่สนตัวกรองระดับ + ไม่ส่งรายชื่อระดับ
+      r = await call('adminTiersSave', { tiers: [] });
+      ok(r.ok, 'ปิดใช้ระดับสมาชิก', r);
+      r = await aud({ tiers: [gold] });
+      ok(r.ok && r.matched === 2000 && !r.tiers && r.items.every((x) => x.tier === '' && x.tierId === ''), 'ร้านไม่มีระดับ: ตัวกรองระดับไม่มีผล ไม่มีข้อมูลระดับในคำตอบ', r.ok ? r.matched : r);
+    } finally {
+      console.log = log;
+    }
+  }
+
   console.log('\n[6] ข้อความถึงผู้ใช้');
   // ทุกไฟล์ใน api/ (ไฟล์ใหม่ถูกตรวจเองโดยไม่ต้องเพิ่มชื่อ)
   const apiFiles = ['index.js'].concat(fs.readdirSync(path.join(ROOT, 'api', '_lib')).filter(f => f.endsWith('.js')).map(f => '_lib/' + f));

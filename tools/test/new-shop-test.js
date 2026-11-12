@@ -42,9 +42,10 @@ const cfgOf = (dir, id) => NS.loadModule(path.join(dir, 'shops', id, 'config.js'
   ok(JSON.stringify(schemaReserved) === JSON.stringify(NS.RESERVED), 'RESERVED เท่ากับ check ของตาราง shops', schemaReserved);
 
   console.log('\n[2] แพ็กเกจสำเร็จรูป');
-  ok(JSON.stringify(NS.PACKAGES[1].features) === JSON.stringify({ tiers: false, branches: false, export: false }), '1 เริ่มต้น = ปิดทุกสวิตช์');
+  ok(JSON.stringify(NS.PACKAGES[1].features) === JSON.stringify({ tiers: false, branches: false, export: false, broadcast: false }), '1 เริ่มต้น = ปิดทุกสวิตช์');
   ok(NS.PACKAGES[2].features.tiers && NS.PACKAGES[2].features.export && !NS.PACKAGES[2].features.branches, '2 มาตรฐาน = ระดับสมาชิก + ส่งออก ไม่มีหลายสาขา');
   ok(NS.PACKAGES[3].features.branches && NS.PACKAGES[3].features.maxBranches === 3, '3 หลายสาขา = เปิดสาขา (3 สาขา)');
+  ok(NS.PACKAGES[2].features.broadcast && NS.PACKAGES[3].features.broadcast && !NS.PACKAGES[4].features.broadcast, 'ส่งข้อความตามกลุ่ม: มาตรฐาน + หลายสาขา เปิด / เลือกเอง เริ่มปิด');
 
   console.log('\n[3] ตรวจข้อมูลผิด → ไม่สร้างอะไร');
   const S = sandbox();
@@ -76,7 +77,7 @@ const cfgOf = (dir, id) => NS.loadModule(path.join(dir, 'shops', id, 'config.js'
   ok(!r.error && r.result, 'สร้างสำเร็จ', r.error);
   const c = await cfgOf(S, 'baansuan');
   ok(c.name === "บ้านสวน 'คาเฟ่' \"เชียงใหม่\"" && c.liffId === '2012999999-AbCdEf' && c.apiUrl === '/api', 'ไฟล์ร้านอ่านได้ ชื่อ (มี \' และ ") + LIFF + ระบบใหม่ ตรง', c);
-  ok(JSON.stringify(c.features) === JSON.stringify({ tiers: true, branches: true, maxBranches: 5, export: false }), 'สวิตช์ = แพ็กเกจ 3 + ปรับเอง (5 สาขา ไม่มีส่งออก)', c.features);
+  ok(JSON.stringify(c.features) === JSON.stringify({ tiers: true, branches: true, maxBranches: 5, export: false, broadcast: true }), 'สวิตช์ = แพ็กเกจ 3 + ปรับเอง (5 สาขา ไม่มีส่งออก)', c.features);
   ok(c.colors.button === '#2E7D32' && /^#[0-9A-F]{6}$/.test(c.colors.cardFrom) && /^#[0-9A-F]{6}$/.test(c.colors.cardTo) && c.logoText === 'บ', 'สี + ตัวอักษรโลโก้', c.colors);
   ok(['name', 'liffId', 'apiUrl', 'theme', 'colors', 'font', 'texts', 'features', 'legal'].every((k) => k in c) && fs.existsSync(path.join(ROOT, 'themes', c.theme + '.css')), 'มีครบทุกช่องที่หน้าเว็บใช้ + ไฟล์ธีมมีจริง');
   const list = await shopsList(S);
@@ -140,9 +141,9 @@ const cfgOf = (dir, id) => NS.loadModule(path.join(dir, 'shops', id, 'config.js'
   console.log('\n[7] แก้แพ็กเกจร้านเดิม');
   const kwBefore = read(S, 'shops/khamwan/config.js');
   const kwCfg = await cfgOf(S, 'khamwan');
-  let e = await run(['edit', 'khamwan', '--root', S, '--tiers', 'y', '--max-branches', '', '--export', 'n']);
+  let e = await run(['edit', 'khamwan', '--root', S, '--tiers', 'y', '--max-branches', '', '--export', 'n', '--broadcast', 'y']);
   const kw = await cfgOf(S, 'khamwan');
-  ok(!e.error && JSON.stringify(kw.features) === JSON.stringify({ tiers: true, branches: true, export: false }), 'เปิดระดับ + สาขาไม่จำกัด + ปิดส่งออก', e.error || kw.features);
+  ok(!e.error && JSON.stringify(kw.features) === JSON.stringify({ tiers: true, branches: true, export: false, broadcast: true }), 'เปิดระดับ + สาขาไม่จำกัด + ปิดส่งออก + เปิดส่งข้อความ', e.error || kw.features);
   ok(JSON.stringify({ ...kw, features: 0 }) === JSON.stringify({ ...kwCfg, features: 0 }), 'ค่าอื่นในไฟล์ร้านไม่เปลี่ยน');
   const kwAfter = read(S, 'shops/khamwan/config.js');
   const outside = (t) => t.replace(/(?:^[ \t]*\/\/.*\n)*^[ \t]*features:\s*\{[^{}]*\},?.*\n/m, '');

@@ -20,6 +20,7 @@ const PAGES = [
   { id: 'coupons', label: 'คูปอง', icon: 'ticket' },
   { id: 'rewards', label: 'ของรางวัล', icon: 'gift' },
   { id: 'promos', label: 'โปรโมชัน', icon: 'star' },
+  { id: 'broadcast', label: 'ส่งข้อความ', icon: 'send' },
   { id: 'rules', label: 'แต้มพิเศษ', icon: 'coins' },
   { id: 'tiers', label: 'ระดับสมาชิก', icon: 'up' },
   { id: 'staff', label: 'พนักงาน', icon: 'shield' },
@@ -41,7 +42,7 @@ const RANGE_KEY = 'crm_admin_range';
 const BRANCH_KEY = 'crm_admin_branch';
 // ข้อความในป๊อปอัป "กำลังโหลด" ตามคำสั่ง (คำสั่งอ่านข้อมูลอื่นๆ = "กำลังโหลด...")
 const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave', 'adminMemberUpdate', 'adminRuleSave', 'adminTiersSave', 'adminMemberTier'];
-const LOADING_TEXT = { adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...', adminRewardDelete: 'กำลังลบ...', adminPromoDelete: 'กำลังลบ...', adminRuleDelete: 'กำลังลบ...' };
+const LOADING_TEXT = { adminAudience: 'กำลังคัดกลุ่มลูกค้า...', adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...', adminRewardDelete: 'กำลังลบ...', adminPromoDelete: 'กำลังลบ...', adminRuleDelete: 'กำลังลบ...' };
 
 const app = document.getElementById('app');
 const S = {
@@ -54,6 +55,8 @@ const S = {
   canDelete: {},
   tx: { type: '', staff: '', q: '', page: 1 },
   coupons: { status: '', page: 1 },
+  // ส่งข้อความตามกลุ่ม: เงื่อนไขที่เลือกไว้ (จำไว้ระหว่างสลับหน้า ไม่เก็บในเครื่อง)
+  aud: { filter: {} },
   member: null, staffItems: [], pendingAdjust: null,
   rewards: [], couponDays: 30, promos: [], settingsItems: [], pendingSettings: null,
   seq: 0 // เลขคำขอล่าสุด: ผลของคำขอเก่าที่ตอบช้ากว่าจะไม่ทับหน้าที่เปิดใหม่
@@ -78,6 +81,9 @@ const tierFeature = () => !!(cfg().features && cfg().features.tiers === true);
 /* แพ็กเกจส่งออก Excel: เปิดที่ config features.export (ไม่ใส่ = ปิด → ร้านใหม่ต้องตั้งเองตามแพ็กเกจที่ซื้อ)
  * ตอนนี้แค่ซ่อนปุ่ม — ตัวกลางยังไม่ตรวจแพ็กเกจ (ทำตอนขั้น 7 พร้อมกันทุกสวิตช์) */
 const exportFeature = () => !!(cfg().features && cfg().features.export === true);
+/* แพ็กเกจส่งข้อความตามกลุ่ม (12 พ.ย. 2569): config features.broadcast / เมนูนี้เจ้าของร้านเท่านั้น (ตัวกลางตรวจซ้ำ)
+ * ส่งจริงต้องเชื่อม LINE OA ของร้านก่อน (รอบ 2) — ตอนนี้คัดกลุ่ม + ดูจำนวนคนได้ */
+const broadcastFeature = () => !!(cfg().features && cfg().features.broadcast === true);
 const tierDot = c => (/^#[0-9A-Fa-f]{6}$/.test(c || '') ? `<i class="tier-dot" style="background:${c}"></i>` : '');
 const tierChip = (name, color) => (name ? `<span class="chip chip-tier">${tierDot(color)}${esc(name)}</span>` : '');
 const TIER_REASON = { START: 'เริ่มระดับ', UP: 'ขึ้นระดับ', DOWN: 'ลดระดับ (ครบ 12 เดือน ยอดไม่ถึง)', ADMIN: 'เปลี่ยนโดยร้าน' };
@@ -87,7 +93,9 @@ const tierDefaults = rate => [
   { name: 'Silver', minPoints: Math.round(5000 / rate), multiplier: 1.5, color: '#A8A9AD' },
   { name: 'Gold', minPoints: Math.round(20000 / rate), multiplier: 2, color: '#D4AF37' }
 ].map(t => ({ ...t, id: '', image: '', benefits: '', members: 0 }));
-const visiblePages = () => PAGES.filter(p => (p.id !== 'branches' || branchFeature()) && (p.id !== 'tiers' || tierFeature()));
+// ส่งข้อความ: ยังไม่รู้ว่าใครเข้า (เปิดลิงก์ครั้งแรก) ให้ผ่านไปก่อน แล้ว loadBroadcast ถามสิทธิ์เอง
+const visiblePages = () => PAGES.filter(p => (p.id !== 'branches' || branchFeature()) && (p.id !== 'tiers' || tierFeature()) &&
+  (p.id !== 'broadcast' || (broadcastFeature() && (!S.me || isOwner()))));
 
 document.addEventListener('click', onClick);
 document.addEventListener('submit', onSubmit);
@@ -145,6 +153,7 @@ function onClick(e) {
     case 'tiers-off': confirmTiersOff(); break;
     case 'tiers-off-confirm': doSaveTiers(el, true); break;
     case 'member-tier': openMemberTier(); break;
+    case 'aud-clear': S.aud.filter = {}; route(); break;
     case 'tier-filter': Object.assign(S.members, { tier: id || '', page: 1 }); break; // ลิงก์ #members พาไปหน้ารายชื่อที่กรองแล้ว
     case 'item-delete-confirm': doDelete(el.dataset.kind, id, el); break;
     case 'member-status': openMemberStatus(); break;
@@ -196,6 +205,7 @@ function onSubmit(e) {
     case 'member-edit': saveMemberEdit(form); break;
     case 'tiers': confirmTiers(form); break;
     case 'member-tier': saveMemberTier(form); break;
+    case 'audience': submitAudience(form); break;
     case 'settings': confirmSettings(form); break;
     case 'brand': saveBrand(form); break;
   }
@@ -432,6 +442,7 @@ function route() {
     coupons: loadCoupons,
     rewards: loadRewards,
     promos: loadPromos,
+    broadcast: loadBroadcast,
     rules: loadRules,
     tiers: loadTierPage,
     staff: loadStaff,
@@ -744,6 +755,145 @@ function renderMembers(r) {
         </tbody></table></div>
     </section>
     ${pager(r, 'members')}`;
+}
+
+/* =====================================================
+ * ส่งข้อความตามกลุ่ม — รอบ 1: คัดกลุ่มลูกค้า + ดูจำนวนคน (รอบ 2: เขียนข้อความ + ส่งผ่าน LINE OA ของร้าน)
+ * ตัวกลางกรองคนที่ส่งได้ให้เอง (ยินยอมรับข่าวสาร + สมัครผ่าน LINE + ไม่ถูกระงับ) และไม่ส่ง LINE ID ของลูกค้ามาหน้าเว็บ
+ * ===================================================== */
+const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+
+function loadBroadcast() {
+  // เปิดลิงก์ #broadcast ตรงๆ ครั้งแรก: ถามว่าใครเข้าก่อน — ผู้จัดการจะได้กลับไปหน้าภาพรวม ไม่ใช่หน้า "ไม่มีสิทธิ์เข้าหลังบ้าน"
+  if (!S.me) return fetchView('adminMe', {}, () => route());
+  if (!isOwner() || !broadcastFeature()) { location.hash = '#overview'; return; }
+  fetchView('adminAudience', { filter: S.aud.filter }, renderBroadcast);
+}
+
+function renderBroadcast(r) {
+  const f = S.aud.filter;
+  const val = k => esc(f[k] == null ? '' : String(f[k]));
+  const tiers = tierFeature() && Array.isArray(r.tiers) && r.tiers.length > 1 ? r.tiers : [];
+  const thisMonth = Number(todayKey().slice(5, 7));
+  const opt = (value, label, cur) => `<option value="${value}" ${String(cur || '') === String(value) ? 'selected' : ''}>${label}</option>`;
+  const picks = (name, list, chosen) => `<div class="tog-picks">${list.map(x => `
+    <label><input type="checkbox" name="${name}" value="${esc(x.id)}" ${(chosen || []).includes(x.id) ? 'checked' : ''}><span>${x.dot || ''}${esc(x.name)}</span></label>`).join('')}</div>`;
+  const range = (key, label) => `
+    <div class="field"><span>${label}</span>
+      <div class="aud-range"><input name="${key}Min" value="${val(key + 'Min')}" inputmode="numeric" placeholder="ตั้งแต่" aria-label="${label} ตั้งแต่">
+        <span class="muted">–</span><input name="${key}Max" value="${val(key + 'Max')}" inputmode="numeric" placeholder="ถึง" aria-label="${label} ถึง"></div></div>`;
+  document.getElementById('view').innerHTML = `
+    ${pageHead('ส่งข้อความ', 'เลือกกลุ่มลูกค้า แล้วส่งข้อความหาเฉพาะกลุ่มนั้นผ่าน LINE OA ของร้าน')}
+    <div class="aud-layout">
+      <section class="card adm-card">
+        <div class="card-head"><h2>1. เลือกกลุ่มลูกค้า</h2></div>
+        <form class="form" data-form="audience" autocomplete="off">
+          <p class="muted small">ใส่ได้หลายข้อ ลูกค้าต้องตรงทุกข้อ · เว้นว่าง = ไม่กรองข้อนั้น</p>
+          ${tiers.length ? `<div class="field"><span>ระดับสมาชิก <small>(ไม่เลือก = ทุกระดับ)</small></span>
+            ${picks('tiers', tiers.map(t => ({ id: t.id, name: t.name, dot: tierDot(t.color) })), f.tiers)}</div>` : ''}
+          ${hasBranches() ? `<div class="field"><span>สาขาที่สมัคร <small>(ไม่เลือก = ทุกสาขา)</small></span>
+            ${picks('branches', S.branches.map(b => ({ id: b.id, name: b.name + (b.status === 'ACTIVE' ? '' : ' (ปิดแล้ว)') })).concat([{ id: 'ONLINE', name: 'ออนไลน์' }]), f.branches)}</div>` : ''}
+          <label class="field"><span>เดือนเกิด</span>
+            <select name="birthMonth" class="select">${opt('', 'ทุกเดือน', f.birthMonth)}${TH_MONTHS.map((m, i) => opt(i + 1, m + (i + 1 === thisMonth ? ' (เดือนนี้)' : ''), f.birthMonth)).join('')}</select></label>
+          ${range('points', `${esc(unit())}คงเหลือ`)}
+          ${range('spend', 'ยอดซื้อรวม (บาท)')}
+          ${range('visits', 'จำนวนครั้งที่มาซื้อ')}
+          <div class="field"><span>มาซื้อครั้งล่าสุด</span>
+            <div class="aud-days">
+              <select name="lastVisit" class="select" aria-label="มาซื้อครั้งล่าสุด">${opt('', 'ไม่กำหนด', f.lastVisit)}${opt('within', 'มาภายใน', f.lastVisit)}${opt('over', 'ไม่ได้มาเกิน', f.lastVisit)}</select>
+              <input name="lastVisitDays" value="${val('lastVisitDays')}" inputmode="numeric" placeholder="จำนวน" aria-label="จำนวนวัน"><span class="muted">วัน</span>
+            </div>
+            <small>"ไม่ได้มาเกิน" รวมคนที่ยังไม่เคยซื้อ (นับจากวันสมัคร) — ใช้ชวนลูกค้าที่หายไปกลับมา</small></div>
+          <div class="field"><span>สมัครสมาชิกภายใน</span>
+            <div class="aud-days aud-days-1"><input name="joinedDays" value="${val('joinedDays')}" inputmode="numeric" placeholder="เช่น 30" aria-label="สมัครภายในกี่วัน"><span class="muted">วัน</span></div></div>
+          <div class="notice">${icon('shield', 18)}<span>ระบบเลือกให้เฉพาะลูกค้าที่<b>ยินยอมรับข่าวสาร</b> สมัครผ่าน LINE และไม่ถูกระงับ (ตามกฎหมายคุ้มครองข้อมูลส่วนบุคคล)</span></div>
+          <div class="aud-actions">
+            <button class="btn" type="button" data-act="aud-clear">ล้างเงื่อนไข</button>
+            <button class="btn btn-primary" type="submit">${icon('users', 18)} ดูจำนวนคน</button>
+          </div>
+        </form>
+      </section>
+      <div class="aud-side">
+        <section class="card adm-card aud-result" id="aud-result">${audResultHtml(r)}</section>
+        <section class="card adm-card">
+          <div class="card-head"><h2>2. เขียนข้อความและส่ง</h2></div>
+          <div class="notice">${icon('lock', 18)}<span>ใช้ได้เมื่อเชื่อม LINE OA ของร้านกับระบบแล้ว — ติดต่อผู้ดูแลระบบ</span></div>
+        </section>
+      </div>
+    </div>`;
+}
+
+function audResultHtml(r) {
+  const ex = r.excluded || {};
+  const cut = [ex.noConsent ? `ไม่ยินยอมรับข่าวสาร ${fmtNum(ex.noConsent)}` : '', ex.blocked ? `ถูกระงับ ${fmtNum(ex.blocked)}` : '',
+    ex.noLine ? `ไม่ได้สมัครผ่าน LINE ${fmtNum(ex.noLine)}` : ''].filter(Boolean);
+  const tiers = tierFeature() && Array.isArray(r.tiers) && r.tiers.length > 1 ? r.tiers : [];
+  const color = id => (tiers.find(t => t.id === id) || {}).color;
+  return `
+    <div class="card-head"><h2>กลุ่มที่เลือก</h2></div>
+    <div class="aud-count"><span>ส่งได้</span><b>${fmtNum(r.sendable)}</b><span>คน</span></div>
+    <p class="muted small">ตรงเงื่อนไข ${fmtNum(r.matched)} คน${cut.length ? ` · ไม่นับ: ${cut.join(' · ')}` : ''}</p>
+    ${r.items.length ? `
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>ชื่อ</th>${tiers.length ? '<th>ระดับ</th>' : ''}<th class="num">${esc(unit())}</th><th class="num">ยอดซื้อรวม</th><th class="num">ครั้ง</th><th>มาล่าสุด</th></tr></thead>
+        <tbody>${r.items.map(x => `
+          <tr class="row-link" data-act="member" data-id="${esc(x.memberId)}">
+            <td class="strong">${memberLink(x.memberId, x.name)}</td>
+            ${tiers.length ? `<td class="nowrap">${tierChip(x.tier, color(x.tierId))}</td>` : ''}
+            <td class="num">${fmtNum(x.points)}</td>
+            <td class="num">฿${fmtMoney(x.totalSpend)}</td>
+            <td class="num">${fmtNum(x.visitCount)}</td>
+            <td class="nowrap">${x.lastVisitAt ? fmtDate(x.lastVisitAt) : '-'}</td>
+          </tr>`).join('')}
+        </tbody></table></div>
+      <p class="muted small">${r.sendable > r.items.length ? `ตัวอย่าง ${fmtNum(r.items.length)} คนที่สมัครล่าสุด จากทั้งหมด ${fmtNum(r.sendable)} คน` : `แสดงครบทั้ง ${fmtNum(r.items.length)} คน`}</p>`
+    : `<div class="notice">${icon('alert', 18)}<span>ไม่มีลูกค้าที่ส่งได้ตามเงื่อนไขนี้ ลองลดเงื่อนไขลง</span></div>`}`;
+}
+
+// อ่านฟอร์ม + ตรวจเบื้องต้น (ตัวกลางตรวจซ้ำเสมอ) → null = ผิด (แจ้งแล้ว)
+function readAudience(form) {
+  const f = form.elements;
+  const v = name => (f[name] ? String(f[name].value).replace(/,/g, '').trim() : '');
+  const pick = name => [...form.querySelectorAll(`input[name="${name}"]:checked`)].map(x => x.value);
+  const filter = {
+    tiers: pick('tiers'), branches: pick('branches'), birthMonth: v('birthMonth'),
+    pointsMin: v('pointsMin'), pointsMax: v('pointsMax'), spendMin: v('spendMin'), spendMax: v('spendMax'),
+    visitsMin: v('visitsMin'), visitsMax: v('visitsMax'), lastVisit: v('lastVisit'), lastVisitDays: v('lastVisitDays'), joinedDays: v('joinedDays')
+  };
+  const pairs = [['points', `${unit()}คงเหลือ`], ['spend', 'ยอดซื้อรวม'], ['visits', 'จำนวนครั้งที่มาซื้อ']];
+  for (const [k, label] of pairs) {
+    const lo = filter[k + 'Min'], hi = filter[k + 'Max'];
+    if ((lo && !/^\d+$/.test(lo)) || (hi && !/^\d+$/.test(hi))) { toast(`${label}: ใส่เป็นตัวเลขจำนวนเต็ม`, 'err'); return null; }
+    if (lo && hi && Number(lo) > Number(hi)) { toast(`${label}: ค่าเริ่มต้องไม่มากกว่าค่าสิ้นสุด`, 'err'); return null; }
+  }
+  for (const [k, label] of [['lastVisitDays', 'มาซื้อครั้งล่าสุด'], ['joinedDays', 'สมัครสมาชิกภายใน']]) {
+    if (filter[k] && !(/^\d+$/.test(filter[k]) && Number(filter[k]) >= 1)) { toast(`${label}: ใส่จำนวนวันตั้งแต่ 1 ขึ้นไป`, 'err'); return null; }
+  }
+  if (filter.lastVisit && !filter.lastVisitDays) { toast('มาซื้อครั้งล่าสุด: ใส่จำนวนวันด้วย', 'err'); return null; }
+  if (!filter.lastVisit) filter.lastVisitDays = '';
+  return filter;
+}
+
+// กด "ดูจำนวนคน": อัปเดตเฉพาะกล่องผล (ฟอร์มไม่ถูกวาดใหม่ — ค่าที่พิมพ์ไว้ไม่หาย แม้ตัวกลางตอบว่าเงื่อนไขผิด)
+async function submitAudience(form) {
+  const filter = readAudience(form);
+  if (!filter) return;
+  const btn = form.querySelector('button[type="submit"]');
+  setBusy(btn, true);
+  try {
+    const r = await S.api.call('adminAudience', { filter });
+    S.aud.filter = filter;
+    const box = document.getElementById('aud-result');
+    if (box) {
+      box.innerHTML = audResultHtml(r);
+      // บนมือถือกล่องผลอยู่ใต้ฟอร์ม → เลื่อนให้เห็นผลทันที
+      if (window.matchMedia('(max-width: 900px)').matches) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    setBusy(btn, false);
+  }
 }
 
 /* =====================================================

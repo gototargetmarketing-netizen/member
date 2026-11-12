@@ -58,7 +58,7 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
     { name: `ระดับสาม ${SECRET}`, minPoints: 100, multiplier: 2 }] }));
   const idsB = [];
   for (const [i, u] of ['U_B1', 'U_B2', 'U_B3'].entries()) {
-    const r = await must('สมัคร B', call(B, u, 'register', { consentPrivacy: true, firstName: 'ลูกค้า', lastName: SECRET, birthDate: '1990-03-0' + (i + 1), phone: '086111111' + (i + 1) }));
+    const r = await must('สมัคร B', call(B, u, 'register', { consentPrivacy: true, consentMarketing: true, firstName: 'ลูกค้า', lastName: SECRET, birthDate: '1990-03-0' + (i + 1), phone: '086111111' + (i + 1) }));
     idsB.push(r.member.memberId);
     await must('ซื้อ B', call(B, 'OB', 'addPurchase', { memberId: r.member.memberId, amount: 500, branchId: 'B001' })); // ร้านที่มีสาขาต้องบอกสาขา
   }
@@ -72,7 +72,7 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
   await must('ระดับ A', call(A, 'OA', 'adminTiersSave', { tiers: [{ name: 'ธรรมดา', minPoints: 0, multiplier: 1 }, { name: 'พิเศษ', minPoints: 50, multiplier: 1.5 }] }));
   const idsA = [];
   for (const [i, u] of ['U_A1', 'U_A2'].entries()) {
-    const r = await must('สมัคร A', call(A, u, 'register', { consentPrivacy: true, firstName: 'ลูกค้า', lastName: 'ร้านเอ', birthDate: '1991-04-0' + (i + 1), phone: '087111111' + (i + 1) }));
+    const r = await must('สมัคร A', call(A, u, 'register', { consentPrivacy: true, consentMarketing: true, firstName: 'ลูกค้า', lastName: 'ร้านเอ', birthDate: '1991-04-0' + (i + 1), phone: '087111111' + (i + 1) }));
     idsA.push(r.member.memberId);
     await must('ซื้อ A', call(A, 'OA', 'addPurchase', { memberId: r.member.memberId, amount: 1000, branchId: 'B001' }));
   }
@@ -125,6 +125,11 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
       { as: OA, body: { q: SECRET }, check: (r) => r.ok && r.total === 0, note: 'ค้นชื่อลูกค้าร้าน B → 0 คน' },
       { as: OA, body: { q: '0861111113' }, check: (r) => r.ok && r.total === 0, note: 'ค้นเบอร์ลูกค้าร้าน B → 0 คน' },
       { as: OA, body: { branch: 'B002' } }, { as: OA, body: { tier: 'T3' } }],
+    // คัดกลุ่มส่งข้อความ (วางก่อนคำสั่งที่แก้ระดับ/สถานะของร้าน A): ร้าน A มีคนยินยอมรับข่าวสาร 2 คน (สมาชิกที่ชนรหัสไม่ได้ยินยอม) — ร้าน B มี 3 คนต้องไม่ถูกนับ
+    adminAudience: [{ as: OA, body: {}, check: (r) => r.ok && r.matched === 3 && r.sendable === 2 && r.items.length === 2 && r.items.every((x) => idsA.includes(x.memberId)),
+      note: 'คัดกลุ่มเจอเฉพาะลูกค้าร้าน A (ตรง 3 ส่งได้ 2 — ไม่นับลูกค้าร้าน B)' },
+    { as: OA, body: { filter: { branches: ['B002'] } }, check: (r) => r.ok && r.matched === 0, note: 'สาขาที่มีเฉพาะร้าน B → ไม่เจอใคร' },
+    { as: OA, body: { filter: { tiers: ['T3'] } }, reject: true, note: 'ระดับที่มีเฉพาะร้าน B' }],
     adminMember: [{ as: OA, body: { memberId: onlyB }, reject: true },
       { as: OA, body: { memberId: clash }, check: (r) => r.ok && JSON.stringify(r).includes('ชนรหัส'), note: 'เปิดรหัสที่ชนกัน → ข้อมูลคนของร้าน A' }],
     adminTransactions: [{ as: OA, body: {} }, { as: OA, body: { q: cpB1 } }, { as: OA, body: { branch: 'B002' } }],

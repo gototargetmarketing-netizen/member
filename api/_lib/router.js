@@ -10,8 +10,9 @@ const { SHOP_SQL, publicBrand } = require('./shop');
 const customer = require('./customer');
 const staff = require('./staff');
 const admin = require('./admin');
+const broadcast = require('./broadcast');
 
-const API_VERSION = '0.6.1'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก / 0.6.1 = ลบคำสั่งวัดความเร็วชั่วคราว (speedCard)
+const API_VERSION = '0.7.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก / 0.6.1 = ลบคำสั่งวัดความเร็วชั่วคราว (speedCard) / 0.7 = ส่งข้อความตามกลุ่ม รอบ 1 (คัดกลุ่ม)
 const { ALL_STAFF, MANAGERS } = staff;
 const OWNER = ['OWNER'];
 const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/; // ตรงกับเงื่อนไขในตาราง shops
@@ -75,7 +76,9 @@ const ACTIONS = {
   // ระดับสมาชิก (ขั้น 4): ผู้จัดการดูได้ / ตั้งระดับและเปลี่ยนระดับให้สมาชิก เฉพาะเจ้าของร้าน (มีผลกับต้นทุนเหมือนอัตราแต้ม)
   adminTiers: { shop: true, auth: true, roles: MANAGERS, run: admin.adminTiers },
   adminTiersSave: { shop: true, auth: true, roles: OWNER, run: admin.adminTiersSave },
-  adminMemberTier: { shop: true, auth: true, roles: OWNER, run: admin.adminMemberTier }
+  adminMemberTier: { shop: true, auth: true, roles: OWNER, run: admin.adminMemberTier },
+  // ส่งข้อความตามกลุ่ม (12 พ.ย. 2569): เจ้าของร้านเท่านั้น — ส่งผิดเรียกคืนไม่ได้ + ใช้โควตาข้อความของ OA ร้าน
+  adminAudience: { shop: true, auth: true, roles: OWNER, run: broadcast.adminAudience }
 };
 
 const ms = (t0) => Math.round((performance.now() - t0) * 10) / 10;

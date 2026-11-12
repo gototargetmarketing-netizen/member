@@ -301,6 +301,68 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     ok(!gc.color || hex(ringColor) === gc.color.toUpperCase(), 'วงแหวนเป็นสีของระดับ Gold', { ringColor, tierColor: gc.color });
     await b.shot(path.join(OUT, 'n12-customer-ring-gold.png'), { full: true });
 
+    console.log('\n[8] ส่งข้อความตามกลุ่ม รอบ 1: คัดกลุ่มลูกค้า');
+    const SENDABLE = `status = 'ACTIVE' and marketing_consent and line_user_id is not null`;
+    await b.eval(asUser('U_DEMO_OWNER', 'เจ้าของร้าน'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo/admin#broadcast`); // เปิดลิงก์หน้านี้ตรงๆ ครั้งแรก (ยังไม่รู้ว่าใครเข้า)
+    await b.waitFor(`document.querySelector('form[data-form=audience]') && document.querySelector('.aud-count')`, 10000, 'หน้าส่งข้อความ');
+    ok(await b.eval(`!!document.querySelector('.adm-nav a[data-page=broadcast].active')`), 'เมนู "ส่งข้อความ" (เจ้าของร้าน + แพ็กเกจเปิด) เปิดจากลิงก์ตรงได้');
+    const [allSend] = await sql(`select count(*)::int as n from members where shop_id = 'demo' and ${SENDABLE}`);
+    ok(num(await b.text('.aud-count')) === allSend.n, `ไม่ใส่เงื่อนไข → ส่งได้ ${allSend.n} คน (ตรงกับฐานข้อมูล)`, await b.text('.aud-count'));
+    ok(await b.eval(`document.querySelectorAll('.aud-result tbody tr').length`) === 20, 'ตัวอย่างรายชื่อ 20 คน');
+    const [nb] = await sql(`select count(*)::int as n from branches where shop_id = 'demo'`);
+    ok(await b.eval(`document.querySelectorAll('input[name=tiers]').length === 3 && document.querySelectorAll('input[name=branches]').length === ${nb.n + 1}`),
+      `ตัวเลือกระดับ 3 ระดับ + สาขา ${nb.n} สาขา + ออนไลน์`);
+    ok(await b.eval(`document.documentElement.scrollWidth <= window.innerWidth`), 'มือถือ: หน้าไม่ล้นจอด้านข้าง');
+    await b.shot(path.join(OUT, 'n13-broadcast-all.png'), { full: true });
+
+    // เลือก Gold + แต้มตั้งแต่ 50 → เทียบกับฐานข้อมูล
+    await b.eval(`[...document.querySelectorAll('input[name=tiers]')].find((x) => /Gold/.test(x.parentElement.innerText)).click()`);
+    await b.type('form[data-form=audience] input[name=pointsMin]', '50');
+    await b.click('form[data-form=audience] button[type=submit]');
+    await b.waitFor(`document.querySelector('.aud-count b').innerText.replace(/\\D/g, '') !== '${allSend.n}'`, 8000, 'จำนวนคนเปลี่ยน');
+    const [gold50] = await sql(`select count(*)::int as n from members m join tiers t on t.shop_id = m.shop_id and t.id = m.tier_id
+      where m.shop_id = 'demo' and t.name = 'Gold' and m.points >= 50 and m.${SENDABLE.replace(/ and /g, ' and m.')}`);
+    ok(num(await b.text('.aud-count')) === gold50.n && gold50.n > 0, `Gold + ${'แต้ม'}ตั้งแต่ 50 → ส่งได้ ${gold50.n} คน (ตรงกับฐานข้อมูล)`, await b.text('.aud-count'));
+    ok(await b.eval(`[...document.querySelectorAll('.aud-result tbody tr')].every((tr) => /Gold/.test(tr.innerText))`), 'ตัวอย่างรายชื่อเป็น Gold ทุกคน');
+    ok(await b.eval(`document.querySelector('input[name=pointsMin]').value === '50'`), 'ฟอร์มยังเก็บค่าที่ใส่ไว้');
+    await b.shot(path.join(OUT, 'n14-broadcast-gold.png'), { full: true });
+
+    // ค่าผิด → เตือน ไม่ส่งคำขอ ผลเดิมยังอยู่
+    await b.type('form[data-form=audience] input[name=pointsMax]', '10');
+    await b.click('form[data-form=audience] button[type=submit]');
+    await b.waitFor(`/ค่าเริ่มต้องไม่มากกว่า/.test((document.querySelector('.toast.show') || {}).innerText || '')`, 3000, 'เตือนช่วงแต้มผิด');
+    ok(num(await b.text('.aud-count')) === gold50.n, 'แต้มเริ่มมากกว่าแต้มสิ้นสุด → เตือน และผลเดิมยังอยู่');
+
+    // ล้างเงื่อนไข
+    await b.click('[data-act=aud-clear]');
+    await b.waitFor(`document.querySelector('.aud-count b') && document.querySelector('.aud-count b').innerText.replace(/\\D/g, '') === '${allSend.n}'`, 8000, 'ล้างเงื่อนไข');
+    ok(await b.eval(`document.querySelector('input[name=pointsMin]').value === '' && !document.querySelector('input[name=tiers]:checked')`), 'ล้างเงื่อนไข → กลับเป็นทุกคนที่ส่งได้');
+
+    // กดชื่อในตัวอย่าง → หน้าสมาชิกคนนั้น
+    const firstId = await b.eval(`document.querySelector('.aud-result tbody tr').dataset.id`);
+    await b.click('.aud-result tbody tr a');
+    await b.waitFor(`/^#member\\//.test(location.hash) && document.querySelector('.member-head')`, 8000, 'หน้าสมาชิก');
+    ok(decodeURIComponent(await b.eval('location.hash')) === '#member/' + firstId, 'กดชื่อในตัวอย่าง → หน้าสมาชิกคนนั้น');
+
+    // ผู้จัดการ: ไม่มีเมนู + เปิดลิงก์ตรงก็กลับไปหน้าภาพรวม (ไม่ใช่หน้าไม่มีสิทธิ์)
+    await sql(`insert into staff (shop_id, line_user_id, name, role, status) values ('demo', 'U_E2E_ADMIN', 'ผู้จัดการทดสอบ', 'ADMIN', 'ACTIVE') on conflict do nothing`);
+    await b.eval(asUser('U_E2E_ADMIN', 'ผู้จัดการทดสอบ'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo/admin#broadcast`);
+    await b.waitFor(`document.querySelector('.adm-nav') && document.querySelector('.kpis')`, 10000, 'หลังบ้านของผู้จัดการ');
+    ok(await b.eval(`!document.querySelector('.adm-nav a[data-page=broadcast]') && !document.querySelector('form[data-form=audience]')`),
+      'ผู้จัดการ: ไม่มีเมนูส่งข้อความ เปิดลิงก์ตรงแล้วไปหน้าภาพรวม');
+
+    // ร้านที่ไม่ได้ซื้อแพ็กเกจนี้ → เจ้าของร้านก็ไม่เห็นเมนู
+    await b.setFeatures('demo', { tiers: true, branches: true, export: true, broadcast: false });
+    await b.eval(asUser('U_DEMO_OWNER', 'เจ้าของร้าน'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo/admin#broadcast`);
+    await b.waitFor(`document.querySelector('.adm-nav') && document.querySelector('.kpis')`, 10000, 'หลังบ้าน (แพ็กเกจไม่มีส่งข้อความ)');
+    ok(await b.eval(`!document.querySelector('.adm-nav a[data-page=broadcast]')`), 'แพ็กเกจไม่มีส่งข้อความ → เจ้าของร้านไม่เห็นเมนู');
+
     const errs = b.logs.filter((l) => /EXCEPTION|console\.error/.test(l));
     ok(errs.length === 0, 'ไม่มีข้อผิดพลาดในหน้าเว็บ', errs);
   } catch (e) {
