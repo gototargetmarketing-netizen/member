@@ -353,9 +353,14 @@ async function addShop(ctx, q, flags) {
 ${a.domain ? 5 : 4}) ให้เจ้าของร้านเปิด https://liff.line.me/${a.liff}/staff ผ่าน LINE (จะขึ้นว่ารออนุมัติ)
    แล้ววาง db/shops/${a.id}-owner.sql ใน Supabase กด Run → เป็นเจ้าของร้าน ตั้งค่าที่เหลือในหลังบ้านได้เอง
 ${a.domain ? 6 : 5}) ลิงก์ของร้าน: ลูกค้า https://liff.line.me/${a.liff}
-   พนักงาน https://liff.line.me/${a.liff}/staff · หลังบ้าน https://liff.line.me/${a.liff}/admin`);
+   พนักงาน https://liff.line.me/${a.liff}/staff · หลังบ้าน https://liff.line.me/${a.liff}/admin${a.features.broadcast ? `
+${a.domain ? 7 : 6}) ${OA_STEPS(a.id)}` : ''}`);
   return a;
 }
+
+// แพ็กเกจส่งข้อความตามกลุ่ม: ส่งได้จริงเมื่อเชื่อม LINE OA ของร้านแล้ว (ไม่เชื่อม = หน้าส่งข้อความขึ้นว่ายังไม่เชื่อม)
+const OA_STEPS = (id) => `เชื่อม LINE OA ของร้าน (แพ็กเกจส่งข้อความ): OA ต้องอยู่ Provider เดียวกับช่อง LIFF ของร้าน → เปิด Messaging API
+   → ออก Channel access token (long-lived) → ตั้งใน Vercel ชื่อ LINE_OA_TOKEN_${id.toUpperCase().replace(/-/g, '_')} (ทำตอนอยู่ด้วยกัน ห้ามส่งในแชต) → Redeploy`;
 
 /* ---------- โหมด 2: แก้แพ็กเกจร้านเดิม ---------- */
 async function editShop(ctx, q, flags, shopArg) {
@@ -387,6 +392,7 @@ async function editShop(ctx, q, flags, shopArg) {
     warn.push(`จำกัด ${after.maxBranches} สาขา: ถ้าร้านเปิดสาขาอยู่เกินนี้ สาขาเดิมยังใช้ได้ แต่เพิ่ม/เปิดสาขาใหม่ไม่ได้จนกว่าจะปิดให้เหลือไม่เกิน ${after.maxBranches}`);
   }
   if (after.tiers && !before.tiers && shop.config.apiUrl !== '/api') warn.push('ร้านนี้ยังใช้ระบบเดิม ระดับสมาชิกจะใช้ได้หลังย้ายมาระบบใหม่');
+  if (after.broadcast && !before.broadcast) warn.push(OA_STEPS(id));
   if (warn.length) console.log('\n⚠️  ' + warn.join('\n⚠️  '));
   if (!(await confirm(q, flags))) { console.log('ยกเลิก ไม่ได้แก้ไฟล์'); return null; }
 

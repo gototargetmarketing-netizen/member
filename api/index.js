@@ -5,6 +5,7 @@ const { createApp, API_VERSION } = require('./_lib/router');
 const { getDb } = require('./_lib/db');
 const { createVerifier } = require('./_lib/line');
 const { createStorage } = require('./_lib/storage');
+const { createOa, tokenFor } = require('./_lib/lineoa');
 
 const MAX_BODY = 4 * 1024 * 1024; // Vercel รับไม่เกิน 4.5 MB ต่อคำขออยู่แล้ว (รูปที่อัปโหลดต้องย่อก่อนส่ง)
 
@@ -54,6 +55,8 @@ const app = createApp({
   db: getDb,
   verifier: createVerifier(),
   storage: () => storage || (storage = createStorage()), // ที่เก็บรูป (ใช้เฉพาะตอนอัปโหลด)
+  // LINE OA ของร้าน (ส่งข้อความตามกลุ่ม): รหัสอยู่ใน Vercel ชื่อ LINE_OA_TOKEN_<ร้าน> — ไม่มี = ร้านนี้ยังไม่ได้เชื่อม
+  oa: (shopId) => { const token = tokenFor(shopId); return token ? createOa({ token }) : null; },
   // รหัสทดสอบใช้ได้เฉพาะเมื่อตั้ง CRM_TEST_TOKENS=on และไม่ใช่เว็บจริงเด็ดขาด
   allowTestTokens: process.env.CRM_TEST_TOKENS === 'on' && process.env.VERCEL_ENV !== 'production',
   region: process.env.VERCEL_REGION || 'local' // ใช้ยืนยันว่าตัวกลางรันที่สิงคโปร์ (sin1) จริง

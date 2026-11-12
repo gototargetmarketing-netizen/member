@@ -12,7 +12,7 @@ const staff = require('./staff');
 const admin = require('./admin');
 const broadcast = require('./broadcast');
 
-const API_VERSION = '0.7.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก / 0.6.1 = ลบคำสั่งวัดความเร็วชั่วคราว (speedCard) / 0.7 = ส่งข้อความตามกลุ่ม รอบ 1 (คัดกลุ่ม)
+const API_VERSION = '0.8.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก / 0.6.1 = ลบคำสั่งวัดความเร็วชั่วคราว (speedCard) / 0.7 = ส่งข้อความตามกลุ่ม รอบ 1 (คัดกลุ่ม) / 0.8 = รอบ 2 (ส่งผ่าน LINE OA ของร้าน)
 const { ALL_STAFF, MANAGERS } = staff;
 const OWNER = ['OWNER'];
 const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/; // ตรงกับเงื่อนไขในตาราง shops
@@ -78,7 +78,11 @@ const ACTIONS = {
   adminTiersSave: { shop: true, auth: true, roles: OWNER, run: admin.adminTiersSave },
   adminMemberTier: { shop: true, auth: true, roles: OWNER, run: admin.adminMemberTier },
   // ส่งข้อความตามกลุ่ม (12 พ.ย. 2569): เจ้าของร้านเท่านั้น — ส่งผิดเรียกคืนไม่ได้ + ใช้โควตาข้อความของ OA ร้าน
-  adminAudience: { shop: true, auth: true, roles: OWNER, run: broadcast.adminAudience }
+  adminAudience: { shop: true, auth: true, roles: OWNER, run: broadcast.adminAudience },
+  adminBroadcastInfo: { shop: true, auth: true, roles: OWNER, run: broadcast.adminBroadcastInfo },
+  adminBroadcastTest: { shop: true, auth: true, roles: OWNER, run: broadcast.adminBroadcastTest },
+  adminBroadcastSend: { shop: true, auth: true, roles: OWNER, run: broadcast.adminBroadcastSend },
+  adminBroadcastResume: { shop: true, auth: true, roles: OWNER, run: broadcast.adminBroadcastResume }
 };
 
 const ms = (t0) => Math.round((performance.now() - t0) * 10) / 10;
@@ -91,7 +95,7 @@ function actWhoami(body, ctx) {
   return { userId: ctx.user.userId, name: ctx.user.name, via: ctx.via, region: ctx.region, ms: ms(ctx.t0) };
 }
 
-// deps: { db(): {query, tx}, verifier: {verify}, storage(): {upload}, allowTestTokens, region, now() }
+// deps: { db(): {query, tx}, verifier: {verify}, storage(): {upload}, oa(shopId): LINE OA ของร้าน | null, allowTestTokens, region, now() }
 function createApp(deps) {
   let served = 0;
 

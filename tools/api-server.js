@@ -14,6 +14,7 @@
 //
 // พิเศษสำหรับทดสอบ (เปิดเฉพาะในเครื่องนี้ 127.0.0.1):
 //   /__sql      = ชุดทดสอบแก้ข้อมูลจำลองตรงๆ (เช่น ย้อนวันสมัคร) — ฐานข้อมูลอยู่ในหน่วยความจำ ปิดแล้วหายหมด
+//   /__oa       = LINE OA จำลองของร้าน demo (ไม่ส่งจริง): GET ดูสิ่งที่ "ส่ง" ไป / POST ตั้งโควตา เพื่อน หรือให้ผิดพลาด
 const http = require('http');
 const path = require('path');
 const fs = require('fs');
@@ -25,6 +26,7 @@ const { createTestDb } = require(path.join(__dirname, 'test', 'pglite-db.js'));
 const { createApp } = require(path.join(ROOT, 'api', '_lib', 'router.js'));
 const { createHandler } = require(path.join(ROOT, 'api', 'index.js'));
 const { createVerifier } = require(path.join(ROOT, 'api', '_lib', 'line.js'));
+const { createFakeOa } = require(path.join(__dirname, 'test', 'fake-oa.js'));
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml', '.json': 'application/json', '.ico': 'image/x-icon' };
@@ -115,8 +117,11 @@ async function readJson(req) {
   if (MOCK_LINE) await db.query(`update shops set liff_id = '1234567890-MockLiff'`);
   const uploads = [];
   const log = [];
+  // ร้าน demo เชื่อม LINE OA จำลองไว้ (ลองหน้าส่งข้อความได้ทันที) / โหมดเลียนแบบไม่มี OA (ระบบเดิมไม่มีเรื่องนี้)
+  const fakeOa = createFakeOa({ name: 'OA ทดลอง', basicId: '@demo-oa', limit: 300 });
   const app = createApp({
     db: () => db, verifier: MOCK_LINE ? mockVerifier() : createVerifier(), storage: () => fakeStorage(uploads),
+    oa: (shop) => (!COMPAT && shop === 'demo' ? fakeOa.oa : null),
     allowTestTokens: !MOCK_LINE, region: 'local'
   });
   // จดทุกคำขอ (ให้ชุดทดสอบตรวจว่าหน้าเว็บส่งอะไรมา) + หน่วงเหมือน gas-server ในโหมดเลียนแบบ
@@ -167,6 +172,15 @@ async function readJson(req) {
       if (COMPAT && pathname === '/__dump') return json(res, await dumpSheets(db));
       if (COMPAT && pathname === '/__log') return json(res, log);
       if (pathname === '/__uploads') return json(res, uploads);
+      if (pathname === '/__oa' && !COMPAT) {
+        const st = fakeOa.state;
+        if (req.method === 'POST') { // { limit, used, friends: [..] | null, failAll: 401 | null }
+          const op = await readJson(req);
+          ['limit', 'used', 'failAll'].forEach((k) => { if (k in op) st[k] = op[k]; });
+          if ('friends' in op) st.friends = op.friends ? new Set(op.friends) : null;
+        }
+        return json(res, { limit: st.limit, used: st.used, pushes: st.pushes, multicasts: st.multicasts.map((m) => ({ count: m.to.length, to: m.to, messages: m.messages })) });
+      }
     } catch (e) {
       return json(res, { ok: false, error: e.message }, 400);
     }

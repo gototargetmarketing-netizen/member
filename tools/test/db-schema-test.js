@@ -114,6 +114,22 @@ async function rejects(db, sql, params, msg) {
   ok(true, 'ระดับใหม่ไม่ต้องมียอดเงิน (min_spend ว่างได้) + มีสิทธิพิเศษ');
   await rejects(db, `insert into transactions (shop_id,id,member_id,type,points,balance_after,base_points) values ('khamwan','TX-NEGBASE1','KW-M00007','EARN',1,1,-5)`, [], 'แต้มปกติติดลบ → ปฏิเสธ');
 
+  console.log('\n[9] ไฟล์ปรับตาราง 005 ประวัติการส่งข้อความ + รันซ้ำได้');
+  const m005 = fs.readFileSync(require('path').join(dir, '005_broadcasts.sql'), 'utf8');
+  await db.exec(m005);
+  await db.exec(m005);
+  const rls5 = (await db.query(`select relrowsecurity as on from pg_class where relname = 'broadcasts'`)).rows[0];
+  ok(rls5 && rls5.on === true, 'วาง 005 (สองรอบ ไม่ error) → มีตาราง broadcasts และปิดจากภายนอก (RLS)');
+  const bc = (id, req, extra = '') => `insert into broadcasts (shop_id, id, request_id, created_by, recipients, total${extra ? ', ' + extra.split('=')[0] : ''})
+    values ('khamwan', '${id}', '${req}', 'U_OWNER', array['KW-M00007'], 1${extra ? ', ' + extra.split('=')[1] : ''})`;
+  await db.query(bc('BC-AAAA0001', 'req-aaaa-0001'));
+  ok(true, 'จดการส่ง 1 ครั้งได้ (ค่าตั้งต้น: กำลังส่ง / ส่งแล้ว 0)');
+  await rejects(db, bc('BC-AAAA0002', 'req-aaaa-0001'), [], 'รหัสคำขอซ้ำในร้านเดียวกัน → ปฏิเสธ (กดซ้ำไม่เกิดการส่งรอบใหม่)');
+  await rejects(db, bc('XX-1', 'req-aaaa-0003'), [], 'รหัสการส่งผิดรูปแบบ → ปฏิเสธ');
+  await rejects(db, bc('BC-AAAA0004', 'req-aaaa-0004', "status='SENT'"), [], 'สถานะแปลก → ปฏิเสธ');
+  await rejects(db, bc('BC-AAAA0005', 'req-aaaa-0005', 'sent=-1'), [], 'จำนวนที่ส่งติดลบ → ปฏิเสธ');
+  await rejects(db, `insert into broadcasts (shop_id, id, request_id, created_by, recipients, total) values ('nosuch', 'BC-AAAA0006', 'req-aaaa-0006', 'U', '{}', 0)`, [], 'ร้านที่ไม่มี → ปฏิเสธ');
+
   console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(1); });

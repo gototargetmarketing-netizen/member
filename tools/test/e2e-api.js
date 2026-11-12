@@ -301,7 +301,7 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     ok(!gc.color || hex(ringColor) === gc.color.toUpperCase(), 'วงแหวนเป็นสีของระดับ Gold', { ringColor, tierColor: gc.color });
     await b.shot(path.join(OUT, 'n12-customer-ring-gold.png'), { full: true });
 
-    console.log('\n[8] ส่งข้อความตามกลุ่ม รอบ 1: คัดกลุ่มลูกค้า');
+    console.log('\n[8] ส่งข้อความตามกลุ่ม: คัดกลุ่มลูกค้า (รอบ 1) + เขียนข้อความและส่งผ่าน LINE OA (รอบ 2)');
     const SENDABLE = `status = 'ACTIVE' and marketing_consent and line_user_id is not null`;
     await b.eval(asUser('U_DEMO_OWNER', 'เจ้าของร้าน'));
     await b.nav('about:blank');
@@ -339,6 +339,52 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     await b.click('[data-act=aud-clear]');
     await b.waitFor(`document.querySelector('.aud-count b') && document.querySelector('.aud-count b').innerText.replace(/\\D/g, '') === '${allSend.n}'`, 8000, 'ล้างเงื่อนไข');
     ok(await b.eval(`document.querySelector('input[name=pointsMin]').value === '' && !document.querySelector('input[name=tiers]:checked')`), 'ล้างเงื่อนไข → กลับเป็นทุกคนที่ส่งได้');
+
+    // ---- รอบ 2: เขียนข้อความ + ส่งผ่าน LINE OA (เซิร์ฟเวอร์ในเครื่องใช้ OA จำลอง โควตา 300 ไม่ส่งจริง) ----
+    const oaState = async (set) => (await fetch('http://localhost:8105/__oa', set ? { method: 'POST', body: JSON.stringify(set) } : {})).json();
+    await b.waitFor(`document.querySelector('form[data-form=broadcast]')`, 8000, 'กล่องเขียนข้อความ (เชื่อม OA แล้ว)');
+    ok(/OA ทดลอง/.test(await b.text('#bc-send')) && /เหลือ 300 \/ 300/.test(await b.text('#bc-send')), 'เชื่อม LINE OA แล้ว: เห็นชื่อ OA + โควตาเดือนนี้', await b.text('#bc-send'));
+    ok(/ยังไม่เคยส่งข้อความ/.test(await b.text('#bc-history')), 'ประวัติการส่งยังว่าง');
+    ok(await b.eval(`document.getElementById('bc-send-btn').disabled`), 'ยังไม่พิมพ์ข้อความ → ปุ่มส่งกดไม่ได้');
+    const msg = 'สวัสดีค่ะ\nสมาชิก Gold รับส่วนลด 20%';
+    await b.eval(`(() => { const t = document.querySelector('form[data-form=broadcast] textarea[name=text]'); t.value = ${JSON.stringify(msg)}; t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+    ok((await b.text('#bc-preview .lp-bubble')) === msg && /OA ทดลอง/.test(await b.text('#bc-preview')), 'ตัวอย่างในแชต LINE ขึ้นตามที่พิมพ์ (ขึ้นบรรทัดใหม่ได้)');
+    await b.click('[data-act=bc-test]');
+    await b.waitFor(`/ส่งทดสอบแล้ว/.test((document.querySelector('.toast.show') || {}).innerText || '')`, 8000, 'ส่งทดสอบ');
+    let st = await oaState();
+    ok(st.pushes.length === 1 && st.pushes[0].to === 'U_DEMO_OWNER' && st.pushes[0].messages[0].text === msg, 'ส่งทดสอบ → ถึงเจ้าของร้านคนเดียว', st.pushes);
+
+    // ทุกคนที่ส่งได้ (เกิน 300) → โควตาไม่พอ กดยืนยันไม่ได้
+    await b.waitFor(`/ส่งให้ ${allSend.n.toLocaleString('en-US')} คน/.test(document.getElementById('bc-send-btn').innerText) && !document.getElementById('bc-send-btn').disabled`, 8000, 'ปุ่มส่งพร้อม');
+    await b.click('#bc-send-btn');
+    await b.waitFor(`document.querySelector('.modal [data-act=bc-send-confirm]')`, 3000, 'หน้ายืนยันส่ง');
+    ok(/ไม่พอส่ง/.test(await b.text('.modal')) && await b.eval(`document.querySelector('.modal [data-act=bc-send-confirm]').disabled`), 'โควตา LINE OA ไม่พอ → บอกในหน้ายืนยัน กดส่งไม่ได้');
+    await b.click('.modal [data-act=close]');
+
+    // แก้เงื่อนไขแล้วยังไม่กดดูจำนวน → ส่งไม่ได้
+    await b.eval(`[...document.querySelectorAll('input[name=tiers]')].find((x) => /Gold/.test(x.parentElement.innerText)).click()`);
+    await sleep(150);
+    ok(await b.eval(`document.getElementById('bc-send-btn').disabled && /ดูจำนวนคน/.test(document.getElementById('bc-send-btn').innerText)`), 'แก้เงื่อนไขแล้วยังไม่กด "ดูจำนวนคน" → ปุ่มส่งล็อก');
+    await b.click('form[data-form=audience] button[type=submit]');
+    const [goldN] = await sql(`select count(*)::int as n from members m join tiers t on t.shop_id = m.shop_id and t.id = m.tier_id
+      where m.shop_id = 'demo' and t.name = 'Gold' and m.${SENDABLE.replace(/ and /g, ' and m.')}`);
+    await b.waitFor(`/ส่งให้ ${goldN.n} คน/.test(document.getElementById('bc-send-btn').innerText) && !document.getElementById('bc-send-btn').disabled`, 8000, 'ปุ่มส่ง Gold');
+    await b.click('#bc-send-btn');
+    await b.waitFor(`document.querySelector('.modal [data-act=bc-send-confirm]')`, 3000, 'หน้ายืนยันส่ง Gold');
+    ok(new RegExp(`ส่งให้\\s*${goldN.n}\\s*คน`).test(await b.text('.modal')) && /ยกเลิกหรือแก้ไขไม่ได้/.test(await b.text('.modal')), `หน้ายืนยัน: ส่งให้ ${goldN.n} คน + เตือนว่าส่งแล้วยกเลิกไม่ได้`);
+    await b.shot(path.join(OUT, 'n15-broadcast-confirm.png'));
+    await b.click('.modal [data-act=bc-send-confirm]');
+    await b.waitFor(`/ส่งแล้ว/.test((document.querySelector('.toast.show') || {}).innerText || '')`, 10000, 'ส่งแล้ว');
+    await b.waitFor(`/ส่งครบ/.test(document.querySelector('#bc-history').innerText)`, 8000, 'ประวัติการส่ง');
+    st = await oaState();
+    const toIds = st.multicasts.flatMap((m) => m.to);
+    const [goldIds] = await sql(`select array_agg(m.line_user_id order by m.line_user_id) as ids from members m join tiers t on t.shop_id = m.shop_id and t.id = m.tier_id
+      where m.shop_id = 'demo' and t.name = 'Gold' and m.${SENDABLE.replace(/ and /g, ' and m.')}`);
+    ok(JSON.stringify([...toIds].sort()) === JSON.stringify(goldIds.ids), `ส่งถึงลูกค้า Gold ที่ส่งได้ครบ ${goldN.n} คน ไม่เกินกลุ่ม`);
+    ok(new RegExp(`${goldN.n} / ${goldN.n}`).test(await b.text('#bc-history')) && /สวัสดีค่ะ/.test(await b.text('#bc-history')), 'ประวัติ: ข้อความ + ส่งครบ x / x คน');
+    ok(await b.eval(`document.querySelector('form[data-form=broadcast] textarea').value === '' && document.getElementById('bc-send-btn').disabled`), 'ส่งแล้วล้างข้อความ (กันเผลอส่งซ้ำ)');
+    ok(/เหลือ \d+ \/ 300/.test(await b.text('#bc-send')) && !/เหลือ 300 \/ 300/.test(await b.text('#bc-send')), 'โควตาที่เหลืออัปเดตหลังส่ง');
+    await b.shot(path.join(OUT, 'n16-broadcast-sent.png'), { full: true });
 
     // กดชื่อในตัวอย่าง → หน้าสมาชิกคนนั้น
     const firstId = await b.eval(`document.querySelector('.aud-result tbody tr').dataset.id`);

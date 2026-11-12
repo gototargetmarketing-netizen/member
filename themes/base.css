@@ -531,9 +531,28 @@ input.input-err { border-color: var(--danger); }
 .tog-picks input:focus-visible + span { outline: 2px solid var(--button); outline-offset: 2px; }
 .aud-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .aud-result { display: grid; gap: 10px; min-width: 0; }
+/* ตัวอย่างรายชื่อเลื่อนในกรอบ — บนมือถือกล่องเขียนข้อความจะได้อยู่ไม่ไกล */
+.aud-result .tbl-wrap { max-height: 420px; overflow-y: auto; }
+.aud-result .tbl th { position: sticky; top: 0; z-index: 1; }
 .aud-count { display: flex; align-items: baseline; gap: 8px; font-weight: 700; }
 .aud-count b { font-size: 40px; font-weight: 800; line-height: 1.1; color: var(--button); }
 @media (max-width: 900px) { .aud-layout { grid-template-columns: 1fr; } }
+/* ส่งข้อความ: OA ของร้าน + ตัวอย่างหน้าตาในแชต LINE (ใช้สีของธีม ไม่ใช่สีของ LINE เอง) */
+.bc-oa { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bc-oa .grow { min-width: 150px; } /* ชื่อ OA ไม่ถูกบีบ — ป้ายโควตาขึ้นบรรทัดใหม่แทน */
+.bc-av { width: 40px; height: 40px; border-radius: 50%; overflow: hidden; background: var(--surface2); color: var(--muted); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.bc-av img { width: 100%; height: 100%; object-fit: cover; }
+.bc-av-sm { width: 30px; height: 30px; }
+.bc-counter { text-align: right; }
+.bc-preview { background: color-mix(in srgb, var(--button) 9%, var(--surface2)); border-radius: var(--radius-sm); padding: 14px; font-weight: 400; }
+.lp { display: flex; gap: 8px; align-items: flex-start; }
+.lp-body { display: grid; gap: 6px; min-width: 0; max-width: 260px; }
+.lp-name { font-size: 12px; color: var(--muted); }
+.lp-img { display: block; width: 100%; border-radius: 14px; }
+.lp-bubble { background: var(--surface); color: var(--text); border-radius: 4px 16px 16px 16px; padding: 9px 12px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+.bc-text { min-width: 180px; max-width: 360px; overflow-wrap: anywhere; }
+.text-danger { color: var(--danger); }
+.spin-dark { border-color: var(--line); border-top-color: var(--muted); }
 
 /* ช่วงวันที่ + ตัวกรอง */
 .range-bar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }

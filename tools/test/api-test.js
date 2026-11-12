@@ -505,6 +505,190 @@ function fakeLine() {
     }
   }
 
+  console.log('\n[5.8] ส่งข้อความตามกลุ่ม รอบ 2: ส่งผ่าน LINE OA ของร้าน (OA จำลอง ไม่ส่งจริง)');
+  {
+    const { createFakeOa } = require('./fake-oa');
+    const { OaError } = require(path.join(ROOT, 'api', '_lib', 'lineoa.js'));
+    const fake = createFakeOa({ limit: 1000 });
+    let oaOn = false;
+    const da = createApp({
+      db: () => db, verifier: createVerifier({ fetch: fakeLine().fetch }), allowTestTokens: true, region: 'test',
+      storage: () => ({ upload: async (p) => 'https://storage.test/storage/v1/object/public/images/' + p }),
+      oa: (shop) => (oaOn && shop === 'demo' ? fake.oa : null)
+    });
+    const OW = 'TEST:U_DEMO_OWNER:เจ้าของ';
+    const call = (action, body, tok) => da.handle(Object.assign({ action, shop: 'demo', idToken: tok || OW, requestId: crypto.randomUUID() }, body));
+    const draft = { text: 'โปรวันนี้ ลด 20%\nเฉพาะสมาชิก' };
+    const sendableIds = async () => (await db.query(`select line_user_id from members where shop_id = 'demo' and status = 'ACTIVE' and marketing_consent and line_user_id is not null`)).rows.map((x) => x.line_user_id).sort();
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+    const log = console.log; console.log = (...a) => { if (/^  [✓✗]/.test(String(a[0]))) log(...a); };
+    const err = console.error; console.error = () => {};
+    try {
+      // ---- ยังไม่เชื่อม OA ----
+      r = await call('adminBroadcastInfo', {});
+      ok(r.ok && r.connected === false && Array.isArray(r.history) && r.history.length === 0, 'ร้านยังไม่ได้เชื่อม OA → เปิดหน้าได้ บอกว่ายังไม่เชื่อม', r);
+      r = await call('adminBroadcastSend', { filter: {}, draft, expect: 1 });
+      ok(!r.ok && r.code === 'OA_NOT_CONNECTED', 'ยังไม่เชื่อม → ส่งไม่ได้ แม้เรียกคำสั่งตรง', r);
+      r = await call('adminBroadcastTest', { draft });
+      ok(!r.ok && r.code === 'OA_NOT_CONNECTED', 'ยังไม่เชื่อม → ส่งทดสอบไม่ได้');
+      oaOn = true;
+
+      r = await call('adminBroadcastInfo', {});
+      ok(r.ok && r.connected && r.oa.name === 'OA ทดลอง' && r.oa.basicId === '@demo-oa' && r.quota.limited && r.quota.limit === 1000 && r.quota.remaining === 1000 && r.ownerIsFriend === true,
+        'เชื่อมแล้ว → ชื่อ OA + โควตาเดือนนี้ + เจ้าของร้านเป็นเพื่อน OA', r);
+
+      // ---- ตรวจข้อความ ----
+      const badDrafts = [
+        ['ไม่มีทั้งข้อความและรูป', {}, 'BAD_MESSAGE'],
+        ['มีแต่ช่องว่าง', { text: '   \n  ' }, 'BAD_MESSAGE'],
+        ['ข้อความยาวเกิน 2,000 ตัว', { text: 'ก'.repeat(2001) }, 'BAD_MESSAGE'],
+        ['รูปลิงก์ http', { image: 'http://storage.test/a.jpg' }, 'BAD_IMAGE'],
+        ['รูป WebP (LINE ไม่รับ)', { image: 'https://storage.test/a.webp' }, 'BAD_IMAGE'],
+        ['ลิงก์ที่ไม่ใช่รูป', { text: 'x', image: 'https://storage.test/a.html' }, 'BAD_IMAGE']
+      ];
+      for (const [label, d, code] of badDrafts) {
+        r = await call('adminBroadcastTest', { draft: d });
+        ok(!r.ok && r.code === code, `${label} → ${code}`, r);
+      }
+      ok(fake.state.pushes.length === 0, 'ข้อความที่ผิด → ไม่มีอะไรถูกส่ง');
+
+      // ---- ส่งทดสอบหาตัวเอง ----
+      r = await call('adminBroadcastTest', { draft: { text: 'ทดสอบ', image: 'https://storage.test/storage/v1/object/public/images/demo/broadcast-x.jpg' } });
+      const p0 = fake.state.pushes[0];
+      ok(r.ok && fake.state.pushes.length === 1 && p0.to === 'U_DEMO_OWNER' && p0.messages.length === 2 && p0.messages[0].type === 'image' &&
+        p0.messages[0].previewImageUrl === p0.messages[0].originalContentUrl && p0.messages[1].type === 'text' && p0.messages[1].text === 'ทดสอบ' && UUID.test(p0.key),
+        'ส่งทดสอบ → ถึงเจ้าของร้านคนเดียว (รูปก่อน แล้วข้อความ)', fake.state.pushes);
+      const rid0 = crypto.randomUUID();
+      await call('adminBroadcastTest', { draft, requestId: rid0 });
+      r = await call('adminBroadcastTest', { draft, requestId: rid0 });
+      ok(r.ok && fake.state.pushes.length === 2, 'กดส่งทดสอบซ้ำ (รหัสคำขอเดิม) → LINE ไม่ส่งซ้ำ');
+      fake.state.friends = new Set(['U_DEMO_1']);
+      r = await call('adminBroadcastTest', { draft });
+      ok(!r.ok && r.code === 'NOT_FRIEND', 'เจ้าของร้านยังไม่เป็นเพื่อน OA → บอกให้เพิ่มเพื่อนก่อน', r);
+      r = await call('adminBroadcastInfo', {});
+      ok(r.ok && r.connected && r.ownerIsFriend === false, 'หน้าส่งข้อความรู้ว่าเจ้าของร้านยังไม่เป็นเพื่อน');
+      fake.state.friends = null;
+
+      // ---- ส่งจริง: ด่านก่อนส่ง ----
+      const N = (await call('adminAudience', { filter: {} })).sendable;
+      const all = await sendableIds();
+      ok(N === all.length && N > 1000, `กลุ่ม "ทุกคนที่ส่งได้" = ${N} คน (มากกว่า 1 ชุด 500 คน)`);
+      const before = fake.state.multicasts.length;
+      r = await call('adminBroadcastSend', { filter: {}, draft, expect: N });
+      ok(!r.ok && r.code === 'QUOTA_NOT_ENOUGH' && /เหลือ/.test(r.error), 'โควตาเดือนนี้ไม่พอ → ไม่ส่งเลย บอกว่าเหลือเท่าไร', r);
+      fake.state.limit = null; // แพ็กเกจไม่จำกัด
+      r = await call('adminBroadcastSend', { filter: {}, draft, expect: N - 1 });
+      ok(!r.ok && r.code === 'AUDIENCE_CHANGED' && r.error.includes(U.fmtNum(N)), 'จำนวนคนไม่ตรงกับที่เห็นตอนยืนยัน → ไม่ส่ง ให้ตรวจใหม่', r);
+      r = await call('adminBroadcastSend', { filter: { pointsMin: 999999999 }, draft, expect: 0 });
+      ok(!r.ok && r.code === 'NO_RECIPIENTS', 'กลุ่มว่าง → ไม่ส่ง');
+      ok(fake.state.multicasts.length === before && await count(db, `select count(*)::int n from broadcasts`) === 0, 'ด่านก่อนส่งไม่ผ่าน → ไม่มีอะไรถูกส่ง ไม่มีประวัติ');
+
+      // ---- ส่งครบ ----
+      const rid = crypto.randomUUID();
+      r = await call('adminBroadcastSend', { filter: {}, draft, expect: N, requestId: rid });
+      const bc = r.broadcast || {};
+      const mine = fake.state.multicasts.slice(before);
+      const got = mine.flatMap((m) => m.to);
+      ok(r.ok && bc.status === 'DONE' && bc.sent === N && bc.total === N && /^BC-/.test(bc.id), `ส่งครบ ${N} คน`, r);
+      ok(mine.length === Math.ceil(N / 500) && mine.every((m) => m.to.length <= 500), `แบ่งส่ง ${mine.length} ชุด ชุดละไม่เกิน 500 คน`);
+      ok(JSON.stringify([...got].sort()) === JSON.stringify(all) && new Set(got).size === got.length, 'ถึงทุกคนที่ส่งได้ ไม่ซ้ำ ไม่มีคนที่ไม่ยินยอม / ถูกระงับ / ไม่มี LINE');
+      ok(mine.every((m) => UUID.test(m.key)) && new Set(mine.map((m) => m.key)).size === mine.length, 'แต่ละชุดมีรหัสกันส่งซ้ำของตัวเอง');
+      ok(mine.every((m) => m.messages.length === 1 && m.messages[0].type === 'text' && m.messages[0].text === draft.text), 'ข้อความที่ส่งตรงกับที่พิมพ์ (ขึ้นบรรทัดใหม่ได้)');
+      const row = (await db.query(`select * from broadcasts where id = $1`, [bc.id])).rows[0];
+      ok(row && row.recipients.length === N && row.created_by === 'U_DEMO_OWNER' && row.batches_done.length === mine.length && row.finished_at && !/U_DEMO_\d/.test(JSON.stringify(row.recipients)),
+        'จดประวัติ: ผู้ส่ง / รหัสสมาชิกผู้รับ (ไม่เก็บ LINE ID) / ชุดที่ส่งแล้ว', row && { n: row.recipients.length, done: row.batches_done });
+      r = await call('adminBroadcastSend', { filter: {}, draft, expect: N, requestId: rid });
+      ok(r.ok && r.broadcast.id === bc.id && fake.state.multicasts.length === before + mine.length, 'กดส่งซ้ำ / เน็ตหลุดแล้วส่งใหม่ (รหัสคำขอเดิม) → ไม่ส่งซ้ำ ได้ผลเดิม');
+
+      // ---- ส่งไม่ครบ (LINE ปฏิเสธชุดที่ 2) แล้วกด "ส่งต่อ" ----
+      const orig = fake.oa.multicast;
+      let k = 0;
+      fake.oa.multicast = async (...a) => { if (++k === 2) throw new OaError(429, 'You have reached your monthly limit.'); return orig(...a); };
+      const b1 = fake.state.multicasts.length;
+      r = await call('adminBroadcastSend', { filter: {}, draft: { text: 'รอบสอง' }, expect: N });
+      const part = r.broadcast || {};
+      ok(r.ok && part.status === 'PARTIAL' && part.sent === 500 && part.error === 'OA_LIMIT' && part.canResume === true, 'ชุดที่ 2 ไม่ผ่าน → หยุด สถานะ "ส่งไม่ครบ" ส่งไปแล้ว 500 คน', part);
+      fake.oa.multicast = orig;
+      // ระหว่างรอ มีลูกค้าในชุดที่ยังไม่ได้ส่ง ขอเลิกรับข่าวสาร → ตอนส่งต่อต้องไม่ส่งให้คนนั้น
+      const firstBatch = new Set(fake.state.multicasts[b1].to);
+      const quitter = all.find((u) => !firstBatch.has(u));
+      await db.query(`update members set marketing_consent = false where shop_id = 'demo' and line_user_id = $1`, [quitter]);
+      r = await call('adminBroadcastResume', { id: part.id });
+      const resumed = fake.state.multicasts.slice(b1);
+      const got2 = resumed.flatMap((m) => m.to);
+      ok(r.ok && r.broadcast.status === 'DONE' && r.broadcast.sent === N - 1, 'กด "ส่งต่อ" → ส่งครบ (ไม่นับคนที่เพิ่งเลิกรับข่าวสาร)', r.broadcast);
+      ok(new Set(got2).size === got2.length && got2.length === N - 1 && !got2.includes(quitter), 'ส่งต่อเฉพาะชุดที่ค้าง ไม่มีใครได้ซ้ำ');
+      r = await call('adminBroadcastResume', { id: part.id });
+      ok(r.ok && r.broadcast.status === 'DONE' && fake.state.multicasts.length === b1 + resumed.length, 'กด "ส่งต่อ" อันที่ครบแล้ว → ไม่ส่งอะไรเพิ่ม');
+      await db.query(`update members set marketing_consent = true where shop_id = 'demo' and line_user_id = $1`, [quitter]);
+
+      // ---- LINE รับชุดแรกแล้ว แต่คำตอบหายระหว่างทาง → ลองใหม่ด้วยรหัสเดิม LINE ตอบ 409 = ถือว่าส่งแล้ว ----
+      k = 0;
+      fake.oa.multicast = async (...a) => { const out = await orig(...a); if (++k === 1) throw new OaError(502, 'Bad gateway'); return out; };
+      const b2 = fake.state.multicasts.length;
+      r = await call('adminBroadcastSend', { filter: { branches: ['B02'] }, draft: { text: 'รอบสาม' }, expect: (await call('adminAudience', { filter: { branches: ['B02'] } })).sendable });
+      fake.oa.multicast = orig;
+      ok(r.ok && r.broadcast.status === 'DONE' && fake.state.multicasts.length === b2 + 1, 'ส่งถึง LINE แล้วแต่คำตอบหาย → ลองใหม่ได้ 409 → ไม่ส่งซ้ำ สถานะครบ', r.broadcast);
+
+      // ---- รหัส OA หมดอายุ ----
+      fake.oa.multicast = async () => { throw new OaError(401, 'Authentication failed'); };
+      const nB3 = (await call('adminAudience', { filter: { branches: ['B03'] } })).sendable;
+      r = await call('adminBroadcastSend', { filter: { branches: ['B03'] }, draft, expect: nB3 });
+      fake.oa.multicast = orig;
+      ok(r.ok && r.broadcast.status === 'FAILED' && r.broadcast.sent === 0 && r.broadcast.error === 'OA_TOKEN' && r.broadcast.canResume, 'รหัส OA ใช้ไม่ได้ → "ไม่สำเร็จ" ส่งต่อได้หลังแก้รหัส', r.broadcast);
+      const failedId = r.broadcast.id;
+      fake.state.failAll = 401;
+      r = await call('adminBroadcastInfo', {});
+      ok(r.ok && r.connected === false && r.problem === 'OA_TOKEN' && /ผู้ดูแลระบบ/.test(r.problemText), 'หน้าส่งข้อความบอกว่าการเชื่อม OA มีปัญหา', r);
+      fake.state.failAll = null;
+      r = await call('adminBroadcastResume', { id: failedId });
+      ok(r.ok && r.broadcast.status === 'DONE' && r.broadcast.sent === nB3, 'แก้รหัสแล้วกด "ส่งต่อ" → ส่งครบ');
+
+      // ---- เครื่องหยุดกลางทาง (สถานะ "กำลังส่ง" ค้าง) ----
+      await db.query(`insert into broadcasts (shop_id, id, request_id, created_by, message_text, recipients, total, status, updated_at)
+        values ('demo', 'BC-STUCK001', 'stuck-request-1', 'U_DEMO_OWNER', 'ค้าง', array['DM-000001', 'DM-000002'], 2, 'SENDING', now() - interval '5 minutes'),
+               ('demo', 'BC-BUSY0001', 'busy-request-1', 'U_DEMO_OWNER', 'กำลังส่ง', array['DM-000003'], 1, 'SENDING', now())`);
+      r = await call('adminBroadcastInfo', {});
+      const stuck = r.history.find((x) => x.id === 'BC-STUCK001');
+      const busy = r.history.find((x) => x.id === 'BC-BUSY0001');
+      ok(stuck && stuck.status === 'STALLED' && stuck.canResume && busy && busy.status === 'SENDING' && !busy.canResume, 'ค้างเกิน 90 วินาที = "หยุดกลางทาง" ส่งต่อได้ / เพิ่งเริ่ม = กำลังส่ง', { stuck, busy });
+      r = await call('adminBroadcastResume', { id: 'BC-BUSY0001' });
+      ok(!r.ok && r.code === 'BUSY', 'กด "ส่งต่อ" อันที่กำลังส่งอยู่ → รอก่อน (กันส่งพร้อมกันสองที่)', r);
+      r = await call('adminBroadcastResume', { id: 'BC-STUCK001' });
+      ok(r.ok && r.broadcast.status === 'DONE', 'ส่งต่ออันที่หยุดกลางทางได้');
+      r = await call('adminBroadcastResume', { id: 'BC-NOPE0001' });
+      ok(!r.ok && r.code === 'NOT_FOUND', 'ส่งต่อรหัสที่ไม่มี → NOT_FOUND');
+      r = await call('adminBroadcastResume', { id: "x'; drop table broadcasts;--" });
+      ok(!r.ok && r.code === 'NOT_FOUND', 'รหัสแปลกๆ → NOT_FOUND');
+
+      // ---- ประวัติ ----
+      r = await call('adminBroadcastInfo', {});
+      ok(r.ok && r.history.length === 6 && r.history.every((x, i, a) => i === 0 || a[i - 1].createdAt >= x.createdAt) && r.history.some((x) => x.text === 'รอบสาม'),
+        'ประวัติการส่ง ล่าสุดก่อน', r.history.map((x) => x.id + ':' + x.status));
+      ok(!/U_DEMO_\d|recipients/.test(JSON.stringify(r)), 'ประวัติไม่มีรายชื่อผู้รับ / LINE ID');
+
+      // ---- รูปสำหรับข้อความ LINE ----
+      const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+      r = await call('adminUploadImage', { kind: 'broadcast', mime: 'image/png', data: png });
+      ok(r.ok && /\/demo\/broadcast-\d{4}-\d{2}-\d{2}-[A-Z0-9]{6}\.png$/.test(r.url), 'อัปโหลดรูปสำหรับข้อความ (PNG)', r);
+      const webp = Buffer.from('RIFF\x00\x00\x00\x00WEBPVP8 ', 'binary').toString('base64');
+      r = await call('adminUploadImage', { kind: 'broadcast', mime: 'image/webp', data: webp });
+      ok(!r.ok && r.code === 'BAD_IMAGE', 'รูป WebP สำหรับข้อความ LINE → ไม่รับ', r);
+      const big = Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF]), Buffer.alloc(1024 * 1024)]).toString('base64');
+      r = await call('adminUploadImage', { kind: 'broadcast', mime: 'image/jpeg', data: big });
+      ok(!r.ok && r.code === 'BAD_IMAGE' && /1MB/.test(r.error), 'รูปเกิน 1MB สำหรับข้อความ LINE → ไม่รับ', r);
+
+      // ---- ใครใช้ได้ ----
+      for (const a of ['adminBroadcastInfo', 'adminBroadcastTest', 'adminBroadcastSend', 'adminBroadcastResume']) {
+        r = await call(a, { draft, filter: {}, expect: 1, id: 'BC-STUCK001' }, 'TEST:U_DEMO_ADMIN:ผู้จัดการ');
+        ok(!r.ok && r.code === 'NO_ROLE', `${a}: ผู้จัดการใช้ไม่ได้`, r);
+      }
+    } finally {
+      console.log = log;
+      console.error = err;
+    }
+  }
+
   console.log('\n[6] ข้อความถึงผู้ใช้');
   // ทุกไฟล์ใน api/ (ไฟล์ใหม่ถูกตรวจเองโดยไม่ต้องเพิ่มชื่อ)
   const apiFiles = ['index.js'].concat(fs.readdirSync(path.join(ROOT, 'api', '_lib')).filter(f => f.endsWith('.js')).map(f => '_lib/' + f));

@@ -22,6 +22,12 @@ end
 $$;
 
 -- ล้างของเดิม (ลำดับตามการอ้างถึงกันของตาราง: ลูกก่อนแม่)
+-- ประวัติการส่งข้อความ (005) — ฐานข้อมูลที่ยังไม่ได้วาง 005 ไม่มีตารางนี้ จึงเช็กก่อน
+do $$
+begin
+  if to_regclass('public.broadcasts') is not null then delete from broadcasts where shop_id = 'demo'; end if;
+end
+$$;
 delete from request_log  where shop_id = 'demo';
 delete from tier_history where shop_id = 'demo';
 delete from profile_log  where shop_id = 'demo';

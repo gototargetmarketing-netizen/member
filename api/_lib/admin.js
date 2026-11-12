@@ -892,6 +892,7 @@ async function adminBrandSave(p, ctx) {
 // ---------- อัปโหลดรูป ----------
 const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const BROADCAST_IMAGE_BYTES = 1024 * 1024;
 
 // ดูจากหัวไฟล์ (ไม่เชื่อชนิดไฟล์ที่หน้าเว็บบอกมา)
 function looksLikeImage(b, mime) {
@@ -912,7 +913,11 @@ async function adminUploadImage(p, ctx) {
   }
   const bytes = Buffer.from(data, 'base64');
   if (!bytes.length || bytes.length > MAX_IMAGE_BYTES || !looksLikeImage(bytes, mime)) throw userError('ไฟล์นี้ไม่ใช่รูปที่รองรับ', 'BAD_IMAGE');
-  const kind = ['promo', 'logo', 'tier'].indexOf(p.kind) >= 0 ? p.kind : 'reward';
+  const kind = ['promo', 'logo', 'tier', 'broadcast'].indexOf(p.kind) >= 0 ? p.kind : 'reward';
+  // รูปในข้อความ LINE: LINE รับเฉพาะ JPG/PNG และรูปตัวอย่างในแชตไม่เกิน 1MB (หน้าเว็บย่อให้แล้ว ที่นี่ตรวจซ้ำ)
+  if (kind === 'broadcast' && (mime === 'image/webp' || bytes.length > BROADCAST_IMAGE_BYTES)) {
+    throw userError('รูปสำหรับข้อความ LINE ต้องเป็น JPG หรือ PNG ไม่เกิน 1MB', 'BAD_IMAGE');
+  }
   // แยกโฟลเดอร์ต่อร้าน / ชื่อมีรหัสสุ่ม (ไม่ทับรูปเดิม เดาชื่อไม่ได้)
   const path = ctx.shop.id + '/' + kind + '-' + U.thaiDay(ctx.now) + '-' + U.randomCode(6) + '.' + ext;
   let url;

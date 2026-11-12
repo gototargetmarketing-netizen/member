@@ -31,7 +31,10 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
   console.log = (...a) => { if (/^ {2}[✓✗]|^\n?\[|^ผล/.test(String(a[0]))) log(...a); }; // ซ่อนบันทึกของระบบ
   const errLog = console.error;
   console.error = () => {};
-  const app = createApp({ db: () => db, verifier: {}, allowTestTokens: true, region: 'test' });
+  // LINE OA จำลองแยกร้าน — ชื่อ OA ร้าน B มีคำลับ: ร้าน A เห็นชื่อนี้ = ใช้ OA ผิดร้าน
+  const { createFakeOa } = require('./fake-oa');
+  const oas = { [A]: createFakeOa({ name: 'OA ร้านเอ', limit: null }), [B]: createFakeOa({ name: 'OA ร้านบี ' + SECRET, limit: null }) };
+  const app = createApp({ db: () => db, verifier: {}, allowTestTokens: true, region: 'test', oa: (shop) => (oas[shop] ? oas[shop].oa : null) });
   const call = (shop, user, action, body) => app.handle(Object.assign({ shop, idToken: `TEST:${user}:${user}`, action, requestId: crypto.randomUUID() }, body || {}));
   const must = async (label, p) => { const r = await p; if (!r.ok) throw new Error(label + ': ' + JSON.stringify(r)); return r; };
 
@@ -62,6 +65,8 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
     idsB.push(r.member.memberId);
     await must('ซื้อ B', call(B, 'OB', 'addPurchase', { memberId: r.member.memberId, amount: 500, branchId: 'B001' })); // ร้านที่มีสาขาต้องบอกสาขา
   }
+  // ร้าน B เคยส่งข้อความตามกลุ่ม 1 ครั้ง (ข้อความมีคำลับ)
+  const bcB = (await must('ส่งข้อความ B', call(B, 'OB', 'adminBroadcastSend', { filter: {}, draft: { text: 'ข่าวร้านบี ' + SECRET }, expect: 3 }))).broadcast.id;
   const cpB1 = (await must('แลก B', call(B, 'U_B1', 'redeem', { rewardId: 'R002' }))).coupon.code;
   const cpB2 = (await must('แลก B', call(B, 'U_B2', 'redeem', { rewardId: 'R001' }))).coupon.code;
   // ร้าน A: อย่างละน้อยกว่า (รหัสชุดแรกชนกับร้าน B)
@@ -130,6 +135,16 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
       note: 'คัดกลุ่มเจอเฉพาะลูกค้าร้าน A (ตรง 3 ส่งได้ 2 — ไม่นับลูกค้าร้าน B)' },
     { as: OA, body: { filter: { branches: ['B002'] } }, check: (r) => r.ok && r.matched === 0, note: 'สาขาที่มีเฉพาะร้าน B → ไม่เจอใคร' },
     { as: OA, body: { filter: { tiers: ['T3'] } }, reject: true, note: 'ระดับที่มีเฉพาะร้าน B' }],
+    // ส่งข้อความ: ร้าน A ใช้ OA ของร้าน A เท่านั้น / ส่งถึงลูกค้าร้าน A เท่านั้น / แตะการส่งของร้าน B ไม่ได้
+    adminBroadcastInfo: [{ as: OA, body: {}, check: (r) => r.ok && r.connected && r.oa.name === 'OA ร้านเอ' && r.history.length === 0,
+      note: 'เห็น OA และประวัติของร้าน A เท่านั้น (ร้าน B เคยส่ง 1 ครั้ง)' }],
+    adminBroadcastTest: [{ as: OA, body: { draft: { text: 'ทดสอบร้านเอ' } }, check: (r) => r.ok && oas[A].state.pushes.length === 1 && oas[B].state.pushes.length === 0,
+      note: 'ส่งทดสอบผ่าน OA ร้าน A' }],
+    adminBroadcastSend: [{ as: OA, body: { filter: {}, draft: { text: 'ข่าวร้านเอ' }, expect: 2 },
+      check: (r) => r.ok && r.broadcast.sent === 2 && oas[B].state.multicasts.length === 1 &&
+        JSON.stringify(oas[A].state.multicasts.flatMap((m) => m.to).sort()) === JSON.stringify(['U_A1', 'U_A2']),
+      note: 'ส่งถึงลูกค้าร้าน A 2 คน ผ่าน OA ร้าน A (ลูกค้าร้าน B ไม่ได้รับ)' }],
+    adminBroadcastResume: [{ as: OA, body: { id: bcB }, reject: true, note: 'กดส่งต่อการส่งของร้าน B' }],
     adminMember: [{ as: OA, body: { memberId: onlyB }, reject: true },
       { as: OA, body: { memberId: clash }, check: (r) => r.ok && JSON.stringify(r).includes('ชนรหัส'), note: 'เปิดรหัสที่ชนกัน → ข้อมูลคนของร้าน A' }],
     adminTransactions: [{ as: OA, body: {} }, { as: OA, body: { q: cpB1 } }, { as: OA, body: { branch: 'B002' } }],

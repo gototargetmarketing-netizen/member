@@ -42,7 +42,7 @@ const RANGE_KEY = 'crm_admin_range';
 const BRANCH_KEY = 'crm_admin_branch';
 // ข้อความในป๊อปอัป "กำลังโหลด" ตามคำสั่ง (คำสั่งอ่านข้อมูลอื่นๆ = "กำลังโหลด...")
 const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave', 'adminMemberUpdate', 'adminRuleSave', 'adminTiersSave', 'adminMemberTier'];
-const LOADING_TEXT = { adminAudience: 'กำลังคัดกลุ่มลูกค้า...', adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...', adminRewardDelete: 'กำลังลบ...', adminPromoDelete: 'กำลังลบ...', adminRuleDelete: 'กำลังลบ...' };
+const LOADING_TEXT = { adminAudience: 'กำลังคัดกลุ่มลูกค้า...', adminBroadcastInfo: null, adminBroadcastTest: 'กำลังส่งทดสอบ...', adminBroadcastSend: 'กำลังส่งข้อความ...', adminBroadcastResume: 'กำลังส่งต่อ...', adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...', adminRewardDelete: 'กำลังลบ...', adminPromoDelete: 'กำลังลบ...', adminRuleDelete: 'กำลังลบ...' };
 
 const app = document.getElementById('app');
 const S = {
@@ -56,7 +56,9 @@ const S = {
   tx: { type: '', staff: '', q: '', page: 1 },
   coupons: { status: '', page: 1 },
   // ส่งข้อความตามกลุ่ม: เงื่อนไขที่เลือกไว้ (จำไว้ระหว่างสลับหน้า ไม่เก็บในเครื่อง)
-  aud: { filter: {} },
+  aud: { filter: {}, dirty: false },
+  // ข้อความที่กำลังเขียน + สถานะ LINE OA (มาจาก adminBroadcastInfo) + จำนวนคนของกลุ่มล่าสุดที่กดดู
+  bc: { draft: { text: '', image: '' }, info: null, count: null, pending: null },
   member: null, staffItems: [], pendingAdjust: null,
   rewards: [], couponDays: 30, promos: [], settingsItems: [], pendingSettings: null,
   seq: 0 // เลขคำขอล่าสุด: ผลของคำขอเก่าที่ตอบช้ากว่าจะไม่ทับหน้าที่เปิดใหม่
@@ -113,7 +115,9 @@ async function main() {
       // ลิงก์ (#หน้า) ติดไปกับการเข้าสู่ระบบใหม่อยู่แล้ว จึงไม่ต้องเก็บอะไรเพิ่ม
       onRelogin: () => { closeModal(); renderBoot('กำลังเชื่อมต่อ LINE ใหม่...'); },
       // ก่อนเข้าหลังบ้านได้ มีหน้าโหลดเต็มจออยู่แล้ว → ไม่ต้องขึ้นป๊อปอัปซ้อน
-      loadingText: (action) => (!S.me ? null : LOADING_TEXT[action] || (SAVE_ACTIONS.includes(action) ? 'กำลังบันทึก...' : 'กำลังโหลด...'))
+      // ใส่ไว้ในตารางเป็น null = ทำเบื้องหลัง ไม่บังจอ (เช่น เช็กการเชื่อม LINE OA ตอนเปิดหน้าส่งข้อความ)
+      loadingText: (action) => (!S.me ? null : Object.prototype.hasOwnProperty.call(LOADING_TEXT, action) ? LOADING_TEXT[action]
+        : SAVE_ACTIONS.includes(action) ? 'กำลังบันทึก...' : 'กำลังโหลด...')
     });
     if (IS_LOCAL) mountDevBar(S.shop, S.api, { openNow: !S.api.overridden });
     // เปิดหน้าแรกเลย: ข้อมูลผู้ใช้มาพร้อมข้อมูลหน้านั้นในคำขอเดียว (ดู fetchView)
@@ -154,6 +158,11 @@ function onClick(e) {
     case 'tiers-off-confirm': doSaveTiers(el, true); break;
     case 'member-tier': openMemberTier(); break;
     case 'aud-clear': S.aud.filter = {}; route(); break;
+    case 'bc-test': bcTest(el); break;
+    case 'bc-send': confirmBroadcast(); break;
+    case 'bc-send-confirm': doBroadcast(el); break;
+    case 'bc-resume': bcResume(id, el); break;
+    case 'bc-reload': loadBroadcastInfo(); break;
     case 'tier-filter': Object.assign(S.members, { tier: id || '', page: 1 }); break; // ลิงก์ #members พาไปหน้ารายชื่อที่กรองแล้ว
     case 'item-delete-confirm': doDelete(el.dataset.kind, id, el); break;
     case 'member-status': openMemberStatus(); break;
@@ -220,6 +229,8 @@ document.addEventListener('input', e => {
   }
   if (e.target.closest('form[data-form="brand"]')) onBrandInput(e.target);
   if (e.target.closest('form[data-form="tiers"]')) onTierInput(e.target);
+  if (e.target.closest('form[data-form="broadcast"]')) onDraftInput(e.target.closest('form'));
+  if (e.target.closest('form[data-form="audience"]')) markAudDirty();
 });
 
 // เปลี่ยนตัวเลือกในแถบกรอง → ค้นใหม่ทันที (ช่องพิมพ์ยังต้องกด Enter/ค้นหา)
@@ -229,6 +240,7 @@ function onChange(e) {
   if (e.target.matches('[data-branch-filter]')) return setBranchFilter(e.target.value);
   if (e.target.matches('[data-branch-all]')) return toggleBranchAll(e.target);
   if (e.target.matches('input[name="type"]')) return onRewardType(e.target);
+  if (e.target.closest('form[data-form="audience"]')) markAudDirty(); // ติ๊กระดับ/สาขา หรือเปลี่ยนตัวเลือก
   const form = e.target.closest('form[data-form="members"], form[data-form="tx"]');
   if (form && e.target.tagName === 'SELECT') form.requestSubmit();
 }
@@ -815,12 +827,14 @@ function renderBroadcast(r) {
       </section>
       <div class="aud-side">
         <section class="card adm-card aud-result" id="aud-result">${audResultHtml(r)}</section>
-        <section class="card adm-card">
-          <div class="card-head"><h2>2. เขียนข้อความและส่ง</h2></div>
-          <div class="notice">${icon('lock', 18)}<span>ใช้ได้เมื่อเชื่อม LINE OA ของร้านกับระบบแล้ว — ติดต่อผู้ดูแลระบบ</span></div>
-        </section>
+        <section class="card adm-card" id="bc-send">${sendCardHtml()}</section>
       </div>
-    </div>`;
+    </div>
+    <section class="card adm-card" id="bc-history">${historyHtml()}</section>`;
+  S.aud.dirty = false;
+  S.bc.count = r.sendable;
+  updateSendState();
+  loadBroadcastInfo();
 }
 
 function audResultHtml(r) {
@@ -883,6 +897,9 @@ async function submitAudience(form) {
   try {
     const r = await S.api.call('adminAudience', { filter });
     S.aud.filter = filter;
+    S.aud.dirty = false;
+    S.bc.count = r.sendable;
+    updateSendState();
     const box = document.getElementById('aud-result');
     if (box) {
       box.innerHTML = audResultHtml(r);
@@ -894,6 +911,212 @@ async function submitAudience(form) {
   } finally {
     setBusy(btn, false);
   }
+}
+
+/* ---------- 2. เขียนข้อความและส่ง (ผ่าน LINE OA ของร้าน) + ประวัติการส่ง ---------- */
+const BC_MAX = 2000;
+const BC_STATUS = { DONE: ['ส่งครบ', 'active'], PARTIAL: ['ส่งไม่ครบ', 'pending'], FAILED: ['ไม่สำเร็จ', 'blocked'], SENDING: ['กำลังส่ง', 'pending'], STALLED: ['หยุดกลางทาง', 'pending'] };
+const BC_ERROR = { OA_LIMIT: 'เกินโควตา LINE OA หรือส่งถี่เกินไป', OA_TOKEN: 'การเชื่อม LINE OA มีปัญหา', OA_DOWN: 'ติดต่อ LINE ไม่ได้ชั่วคราว', OA_REJECTED: 'LINE ไม่รับข้อความนี้', TIME: 'ใช้เวลานานเกิน' };
+
+// สถานะ OA + ประวัติ: ทำเบื้องหลัง (ไม่บังจอ) — เลือกกลุ่มได้เลยระหว่างรอ
+async function loadBroadcastInfo() {
+  try {
+    const r = await S.api.call('adminBroadcastInfo', {});
+    S.bc.info = r;
+  } catch (e) {
+    S.bc.info = { connected: false, error: e.message, history: (S.bc.info && S.bc.info.history) || [] };
+  }
+  const card = document.getElementById('bc-send');
+  if (!card) return; // ผู้ใช้เปลี่ยนหน้าไปแล้ว
+  card.innerHTML = sendCardHtml();
+  document.getElementById('bc-history').innerHTML = historyHtml();
+  updateSendState();
+}
+
+function sendCardHtml() {
+  const info = S.bc.info;
+  const head = '<div class="card-head"><h2>2. เขียนข้อความและส่ง</h2></div>';
+  if (!info) return head + '<p class="muted small"><span class="spin spin-dark"></span> กำลังเช็กการเชื่อม LINE OA...</p>';
+  if (!info.connected) {
+    const why = info.error || info.problemText;
+    return head + `<div class="notice">${icon('lock', 18)}<span>${why ? esc(why) : 'ใช้ได้เมื่อเชื่อม LINE OA ของร้านกับระบบแล้ว — ติดต่อผู้ดูแลระบบ'}</span></div>
+      ${why ? `<button type="button" class="link" data-act="bc-reload">${icon('refresh', 14)} ลองใหม่</button>` : ''}`;
+  }
+  const oa = info.oa || {};
+  const q = info.quota || {};
+  const d = S.bc.draft;
+  return head + `
+    <div class="bc-oa">
+      <span class="bc-av">${oa.picture ? `<img src="${esc(oa.picture)}" alt="" referrerpolicy="no-referrer">` : icon('store', 18)}</span>
+      <div class="grow"><b>${esc(oa.name || 'LINE OA ของร้าน')}</b> <span class="muted small">${esc(oa.basicId || '')}</span></div>
+      <span class="chip">${q.limited ? `โควตาเดือนนี้เหลือ ${fmtNum(q.remaining)} / ${fmtNum(q.limit)}` : 'โควตาไม่จำกัด'}</span>
+    </div>
+    ${info.ownerIsFriend ? '' : `<div class="notice">${icon('alert', 18)}<span>บัญชี LINE ของคุณยังไม่ได้เพิ่ม <b>${esc(oa.name || 'OA ของร้าน')}</b> เป็นเพื่อน จึงส่งทดสอบหาตัวเองไม่ได้ (เพิ่มแล้วยังขึ้นข้อความนี้ แจ้งผู้ดูแลระบบ)</span></div>`}
+    <form class="form" data-form="broadcast" autocomplete="off">
+      <label class="field"><span>ข้อความ</span>
+        <textarea name="text" rows="5" maxlength="${BC_MAX}" placeholder="เช่น สวัสดีค่ะ สมาชิกระดับ Gold รับส่วนลด 20% ทุกเมนู ถึงสิ้นเดือนนี้">${esc(d.text)}</textarea>
+        <small class="bc-counter" id="bc-counter">${fmtNum([...d.text].length)} / ${fmtNum(BC_MAX)}</small></label>
+      <div class="field"><span>รูป <small>(ไม่บังคับ · ลูกค้าเห็นเต็มรูปในแชต)</small></span>
+        <div class="img-upload">
+          <label class="btn btn-sm upload-btn">${icon('upload', 16)} อัปโหลดรูป<input type="file" accept="image/jpeg,image/png,image/*" data-upload="image" hidden></label>
+          <button type="button" class="link" data-act="image-clear" data-id="image">ลบรูป</button>
+        </div>
+        <input type="hidden" name="image" value="${esc(d.image)}"></div>
+      <div class="field"><span>ตัวอย่างในแชต LINE</span><div class="bc-preview" id="bc-preview">${bcPreviewHtml()}</div></div>
+      <p class="muted small">ลูกค้าที่ยังไม่ได้เพิ่ม OA เป็นเพื่อน หรือบล็อก OA ไว้ จะไม่ได้รับข้อความ</p>
+      <div class="aud-actions">
+        <button type="button" class="btn" data-act="bc-test" ${info.ownerIsFriend ? '' : 'disabled'}>${icon('user', 16)} ส่งทดสอบหาตัวเอง</button>
+        <button type="button" class="btn btn-primary" data-act="bc-send" id="bc-send-btn">${icon('send', 16)} ส่ง</button>
+      </div>
+    </form>`;
+}
+
+function bcPreviewHtml(draft = S.bc.draft) {
+  const oa = (S.bc.info && S.bc.info.oa) || {};
+  if (!draft.text && !draft.image) return '<p class="muted small">พิมพ์ข้อความหรือใส่รูป แล้วตัวอย่างจะขึ้นที่นี่</p>';
+  return `
+    <div class="lp">
+      <span class="bc-av bc-av-sm">${oa.picture ? `<img src="${esc(oa.picture)}" alt="" referrerpolicy="no-referrer">` : icon('store', 14)}</span>
+      <div class="lp-body">
+        <div class="lp-name">${esc(oa.name || cfg().name)}</div>
+        ${draft.image ? `<img class="lp-img" src="${esc(draft.image)}" alt="">` : ''}
+        ${draft.text ? `<div class="lp-bubble">${esc(draft.text)}</div>` : ''}
+      </div>
+    </div>`;
+}
+
+function onDraftInput(form) {
+  S.bc.draft = { text: form.elements.text.value, image: form.elements.image.value };
+  const counter = document.getElementById('bc-counter');
+  if (counter) counter.textContent = `${fmtNum([...S.bc.draft.text].length)} / ${fmtNum(BC_MAX)}`;
+  const box = document.getElementById('bc-preview');
+  if (box) box.innerHTML = bcPreviewHtml();
+  updateSendState();
+}
+
+// แก้เงื่อนไขแล้วยังไม่กด "ดูจำนวนคน" → ห้ามส่ง (กันส่งผิดกลุ่ม: จำนวนที่เห็นต้องเป็นกลุ่มที่จะส่งจริง)
+function markAudDirty() {
+  if (S.aud.dirty) return;
+  S.aud.dirty = true;
+  updateSendState();
+}
+
+function updateSendState() {
+  const btn = document.getElementById('bc-send-btn');
+  if (!btn || btn.querySelector('.spin')) return;
+  const d = S.bc.draft;
+  const n = S.bc.count || 0;
+  const label = S.aud.dirty ? 'กด "ดูจำนวนคน" ก่อนส่ง' : !n ? 'ไม่มีลูกค้าในกลุ่มนี้' : `ส่งให้ ${fmtNum(n)} คน`;
+  btn.innerHTML = `${icon('send', 16)} ${esc(label)}`;
+  btn.disabled = S.aud.dirty || !n || (!d.text.trim() && !d.image);
+}
+
+function readDraft() {
+  const d = { text: S.bc.draft.text.trim(), image: S.bc.draft.image };
+  if (!d.text && !d.image) { toast('พิมพ์ข้อความหรือใส่รูปก่อน', 'err'); return null; }
+  if ([...d.text].length > BC_MAX) { toast(`ข้อความยาวได้ไม่เกิน ${fmtNum(BC_MAX)} ตัวอักษร`, 'err'); return null; }
+  return d;
+}
+
+async function bcTest(btn) {
+  const draft = readDraft();
+  if (!draft) return;
+  setBusy(btn, true, 'กำลังส่ง...');
+  try {
+    await withRequestId('bctest|' + JSON.stringify(draft), rid => S.api.call('adminBroadcastTest', { draft, requestId: rid }));
+    toast('ส่งทดสอบแล้ว เปิดแชต LINE ของคุณดูได้เลย', 'ok');
+    loadBroadcastInfo(); // โควตาลดไป 1
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    setBusy(btn, false);
+  }
+}
+
+function confirmBroadcast() {
+  const draft = readDraft();
+  if (!draft) return;
+  if (S.aud.dirty) return toast('กด "ดูจำนวนคน" ก่อน เพื่อยืนยันกลุ่มที่จะส่ง', 'err');
+  const n = S.bc.count || 0;
+  if (!n) return toast('ไม่มีลูกค้าที่ส่งได้ในกลุ่มนี้', 'err');
+  const q = (S.bc.info && S.bc.info.quota) || {};
+  const short = q.limited && q.remaining < n;
+  S.bc.pending = { draft, filter: S.aud.filter, expect: n };
+  openModal(`
+    <div class="modal-head"><h2>ยืนยันส่งข้อความ</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="form">
+      <div class="aud-count"><span>ส่งให้</span><b>${fmtNum(n)}</b><span>คน</span></div>
+      ${q.limited ? `<p class="small ${short ? 'text-danger' : 'muted'}">โควตาข้อความเดือนนี้ของ LINE OA เหลือ ${fmtNum(q.remaining)} ข้อความ${short ? ` ไม่พอส่ง ${fmtNum(n)} คน — ลดกลุ่มลง หรือเพิ่มแพ็กเกจ LINE OA` : ` (ครั้งนี้ใช้ไม่เกิน ${fmtNum(n)})`}</p>` : ''}
+      <div class="bc-preview">${bcPreviewHtml(draft)}</div>
+      <div class="notice">${icon('alert', 18)}<span>ส่งแล้ว<b>ยกเลิกหรือแก้ไขไม่ได้</b> ตรวจข้อความและกลุ่มลูกค้าให้เรียบร้อยก่อน</span></div>
+      <div class="modal-actions">
+        <button class="btn" type="button" data-act="close">ยกเลิก</button>
+        <button class="btn btn-primary" type="button" data-act="bc-send-confirm" ${short ? 'disabled' : ''}>${icon('send', 16)} ส่งเลย ${fmtNum(n)} คน</button>
+      </div>
+    </div>`);
+}
+
+async function doBroadcast(btn) {
+  const p = S.bc.pending;
+  if (!p) return;
+  setBusy(btn, true, 'กำลังส่ง...');
+  try {
+    // รหัสคำขอเดิมถ้าเน็ตหลุดแล้วกดใหม่ → ตัวกลางคืนการส่งเดิม ลูกค้าไม่ได้ซ้ำ
+    const r = await withRequestId('bcsend|' + JSON.stringify(p), rid => S.api.call('adminBroadcastSend', { ...p, requestId: rid }));
+    closeModal();
+    S.bc.pending = null;
+    const b = r.broadcast;
+    if (b.status === 'DONE') {
+      toast(`ส่งแล้ว ${fmtNum(b.sent)} คน`, 'ok');
+      S.bc.draft = { text: '', image: '' }; // ล้างข้อความ กันเผลอกดส่งซ้ำ
+    } else {
+      toast(`ส่งได้ ${fmtNum(b.sent)} จาก ${fmtNum(b.total)} คน — กด "ส่งต่อ" ในประวัติการส่ง`, 'err');
+    }
+    S.bc.info = null;
+    document.getElementById('bc-send').innerHTML = sendCardHtml();
+    loadBroadcastInfo();
+  } catch (e) {
+    toast(e.message, 'err');
+    if (e.code === 'AUDIENCE_CHANGED') { closeModal(); markAudDirty(); }
+  } finally {
+    setBusy(btn, false);
+  }
+}
+
+async function bcResume(id, btn) {
+  setBusy(btn, true, 'กำลังส่ง...');
+  try {
+    const r = await S.api.call('adminBroadcastResume', { id });
+    const b = r.broadcast;
+    toast(b.status === 'DONE' ? `ส่งครบแล้ว ${fmtNum(b.sent)} คน` : `ส่งได้ ${fmtNum(b.sent)} จาก ${fmtNum(b.total)} คน`, b.status === 'DONE' ? 'ok' : 'err');
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    setBusy(btn, false);
+    loadBroadcastInfo();
+  }
+}
+
+function historyHtml() {
+  const items = (S.bc.info && S.bc.info.history) || [];
+  return `
+    <div class="card-head"><h2>ประวัติการส่ง</h2></div>
+    ${!S.bc.info ? '<p class="muted small">กำลังโหลด...</p>' : !items.length ? '<p class="muted small">ยังไม่เคยส่งข้อความ</p>' : `
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>วันเวลา</th><th>ข้อความ</th><th class="num">ส่งแล้ว</th><th>สถานะ</th><th></th></tr></thead>
+      <tbody>${items.map(x => {
+        const [label, cls] = BC_STATUS[x.status] || [x.status, 'inactive'];
+        return `
+        <tr>
+          <td class="nowrap">${fmtDateTime(x.createdAt)}<div class="muted small">${esc(x.by)}</div></td>
+          <td class="bc-text">${x.image ? `${icon('upload', 14)} รูป · ` : ''}${esc(x.text || '')}</td>
+          <td class="num nowrap">${fmtNum(x.sent)} / ${fmtNum(x.total)}</td>
+          <td>${statusChip(cls, label)}${x.error && BC_ERROR[x.error] ? `<div class="muted small">${esc(BC_ERROR[x.error])}</div>` : ''}</td>
+          <td>${x.canResume ? `<button type="button" class="btn btn-sm" data-act="bc-resume" data-id="${esc(x.id)}">${icon('refresh', 14)} ส่งต่อ</button>` : ''}</td>
+        </tr>`;
+      }).join('')}
+      </tbody></table></div>
+    <p class="muted small">"ส่งต่อ" = ส่งเฉพาะคนที่ยังไม่ได้รับ ไม่ส่งซ้ำคนที่ได้ไปแล้ว</p>`}`;
 }
 
 /* =====================================================
@@ -1302,14 +1525,15 @@ async function uploadImage(input) {
   if (!file || !form) return;
   showLoading('กำลังเตรียมรูป...');
   try {
-    const { blob, mime } = await shrinkImage(file);
+    // รูปในข้อความ LINE: รูปตัวอย่างในแชตต้องไม่เกิน 1MB (LINE กำหนด)
+    const { blob, mime } = await shrinkImage(file, form.dataset.form === 'broadcast' ? 1024 * 1024 : MAX_UPLOAD);
     const data = await blobToBase64(blob);
-    const kind = { promo: 'promo', brand: 'logo', tiers: 'tier' }[form.dataset.form] || 'reward';
+    const kind = { promo: 'promo', brand: 'logo', tiers: 'tier', broadcast: 'broadcast' }[form.dataset.form] || 'reward';
     const r = await S.api.call('adminUploadImage', { data, mime, kind });
     const target = form.elements[input.dataset.upload || 'image'];
     target.value = r.url;
     target.dispatchEvent(new Event('input', { bubbles: true }));
-    toast('อัปโหลดรูปแล้ว กดบันทึกเพื่อใช้รูปนี้', 'ok');
+    toast(form.dataset.form === 'broadcast' ? 'ใส่รูปแล้ว' : 'อัปโหลดรูปแล้ว กดบันทึกเพื่อใช้รูปนี้', 'ok');
   } catch (e) {
     toast(e.message, 'err');
   } finally {
@@ -1317,7 +1541,7 @@ async function uploadImage(input) {
   }
 }
 
-async function shrinkImage(file) {
+async function shrinkImage(file, limit = MAX_UPLOAD) {
   if (file.size > 30 * 1024 * 1024) throw new Error('ไฟล์ใหญ่เกินไป (เกิน 30MB)');
   let img;
   try {
@@ -1341,13 +1565,13 @@ async function shrinkImage(file) {
   let mime = file.type === 'image/png' ? 'image/png' : 'image/jpeg';
   draw(mime === 'image/jpeg');
   let blob = await canvasBlob(canvas, mime, 0.85);
-  if (blob.size > MAX_UPLOAD) {
+  if (blob.size > limit) {
     mime = 'image/jpeg';
     draw(true);
     blob = await canvasBlob(canvas, mime, 0.7);
   }
   if (img.close) img.close();
-  if (blob.size > MAX_UPLOAD) throw new Error('รูปใหญ่เกิน 2MB แม้ย่อแล้ว ลองใช้รูปอื่น');
+  if (blob.size > limit) throw new Error('รูปใหญ่เกิน ' + Math.round(limit / 1024 / 1024) + 'MB แม้ย่อแล้ว ลองใช้รูปอื่น');
   return { blob, mime };
 }
 
