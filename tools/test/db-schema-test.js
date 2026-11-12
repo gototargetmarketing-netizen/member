@@ -130,6 +130,22 @@ async function rejects(db, sql, params, msg) {
   await rejects(db, bc('BC-AAAA0005', 'req-aaaa-0005', 'sent=-1'), [], 'จำนวนที่ส่งติดลบ → ปฏิเสธ');
   await rejects(db, `insert into broadcasts (shop_id, id, request_id, created_by, recipients, total) values ('nosuch', 'BC-AAAA0006', 'req-aaaa-0006', 'U', '{}', 0)`, [], 'ร้านที่ไม่มี → ปฏิเสธ');
 
+  console.log('\n[10] ไฟล์ปรับตาราง 006 ริชเมสเสจ (เก็บข้อความที่ส่งจริงทั้งก้อน) + รันซ้ำได้');
+  const m006 = fs.readFileSync(require('path').join(dir, '006_broadcast_rich.sql'), 'utf8');
+  await db.exec(m006);
+  await db.exec(m006);
+  const col6 = (await db.query(`select data_type from information_schema.columns where table_name = 'broadcasts' and column_name = 'messages'`)).rows[0];
+  ok(col6 && col6.data_type === 'jsonb', 'วาง 006 (สองรอบ ไม่ error) → มีช่อง messages');
+  const old6 = (await db.query(`select messages from broadcasts where id = 'BC-AAAA0001'`)).rows[0];
+  ok(old6 && old6.messages === null, 'ประวัติที่มีอยู่ก่อน → ช่องใหม่ว่าง (ตัวกลางสร้างข้อความแบบเดิมให้)');
+  const bc6 = (id, msgs) => `insert into broadcasts (shop_id, id, request_id, created_by, recipients, total, messages)
+    values ('khamwan', '${id}', 'req-${id.toLowerCase()}', 'U_OWNER', array['KW-M00007'], 1, '${msgs}'::jsonb)`;
+  await db.query(bc6('BC-RICH0001', JSON.stringify([{ type: 'imagemap' }, { type: 'text', text: 'x' }])));
+  ok(true, 'จดข้อความ 2 ก้อน (ริชเมสเสจ + ข้อความ) ได้');
+  await rejects(db, bc6('BC-RICH0002', '[]'), [], 'รายการว่าง → ปฏิเสธ');
+  await rejects(db, bc6('BC-RICH0003', '{"type":"text"}'), [], 'ไม่ใช่รายการ → ปฏิเสธ');
+  await rejects(db, bc6('BC-RICH0004', JSON.stringify(Array(6).fill({ type: 'text', text: 'x' }))), [], 'เกิน 5 ข้อความ (LINE ส่งได้ครั้งละไม่เกิน 5) → ปฏิเสธ');
+
   console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(1); });

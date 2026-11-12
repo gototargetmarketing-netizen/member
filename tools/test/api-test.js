@@ -511,14 +511,18 @@ function fakeLine() {
     const { OaError } = require(path.join(ROOT, 'api', '_lib', 'lineoa.js'));
     const fake = createFakeOa({ limit: 1000 });
     let oaOn = false;
+    const uploaded = [];
     const da = createApp({
       db: () => db, verifier: createVerifier({ fetch: fakeLine().fetch }), allowTestTokens: true, region: 'test',
-      storage: () => ({ upload: async (p) => 'https://storage.test/storage/v1/object/public/images/' + p }),
+      storage: () => ({ upload: async (p, bytes, mime) => { uploaded.push({ p, n: bytes.length, mime }); return 'https://storage.test/storage/v1/object/public/images/' + p; } }),
       oa: (shop) => (oaOn && shop === 'demo' ? fake.oa : null)
     });
     const OW = 'TEST:U_DEMO_OWNER:เจ้าของ';
     const call = (action, body, tok) => da.handle(Object.assign({ action, shop: 'demo', idToken: tok || OW, requestId: crypto.randomUUID() }, body));
     const draft = { text: 'โปรวันนี้ ลด 20%\nเฉพาะสมาชิก' };
+    // ลิงก์ฐานริชเมสเสจ (รูปแบบเดียวกับที่ adminUploadRichImage คืนให้) — ตรวจรูปแบบเท่านั้น ไม่ต้องมีไฟล์จริง
+    const RICH = 'https://storage.test/storage/v1/object/public/images/demo/rich-2026-11-12-ABCDEF';
+    const demoShop = (await db.query(`select name, liff_id from shops where id = 'demo'`)).rows[0];
     const sendableIds = async () => (await db.query(`select line_user_id from members where shop_id = 'demo' and status = 'ACTIVE' and marketing_consent and line_user_id is not null`)).rows.map((x) => x.line_user_id).sort();
     const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
     const log = console.log; console.log = (...a) => { if (/^  [✓✗]/.test(String(a[0]))) log(...a); };
@@ -531,6 +535,8 @@ function fakeLine() {
       ok(!r.ok && r.code === 'OA_NOT_CONNECTED', 'ยังไม่เชื่อม → ส่งไม่ได้ แม้เรียกคำสั่งตรง', r);
       r = await call('adminBroadcastTest', { draft });
       ok(!r.ok && r.code === 'OA_NOT_CONNECTED', 'ยังไม่เชื่อม → ส่งทดสอบไม่ได้');
+      r = await call('adminUploadRichImage', { images: {} });
+      ok(!r.ok && r.code === 'OA_NOT_CONNECTED', 'ยังไม่เชื่อม → อัปรูปริชเมสเสจไม่ได้ (ร้านที่ไม่มีแพ็กเกจ)');
       oaOn = true;
 
       r = await call('adminBroadcastInfo', {});
@@ -542,9 +548,15 @@ function fakeLine() {
         ['ไม่มีทั้งข้อความและรูป', {}, 'BAD_MESSAGE'],
         ['มีแต่ช่องว่าง', { text: '   \n  ' }, 'BAD_MESSAGE'],
         ['ข้อความยาวเกิน 2,000 ตัว', { text: 'ก'.repeat(2001) }, 'BAD_MESSAGE'],
-        ['รูปลิงก์ http', { image: 'http://storage.test/a.jpg' }, 'BAD_IMAGE'],
-        ['รูป WebP (LINE ไม่รับ)', { image: 'https://storage.test/a.webp' }, 'BAD_IMAGE'],
-        ['ลิงก์ที่ไม่ใช่รูป', { text: 'x', image: 'https://storage.test/a.html' }, 'BAD_IMAGE']
+        ['รูปลิงก์ http', { image: RICH.replace('https:', 'http:'), imageHeight: 1040 }, 'BAD_IMAGE'],
+        ['รูปธรรมดา .jpg (ไม่ใช่ริชเมสเสจ 5 ขนาด)', { image: 'https://storage.test/storage/v1/object/public/images/demo/broadcast-x.jpg', imageHeight: 1040 }, 'BAD_IMAGE'],
+        ['รูปของร้านอื่น', { image: RICH.replace('/demo/', '/other/'), imageHeight: 1040 }, 'BAD_IMAGE'],
+        ['ลิงก์รูปมี ?', { image: RICH + '?w=1', imageHeight: 1040 }, 'BAD_IMAGE'],
+        ['ไม่บอกความสูงรูป', { text: 'x', image: RICH }, 'BAD_IMAGE'],
+        ['รูปสูงเกิน 2:3', { image: RICH, imageHeight: 1561 }, 'BAD_IMAGE'],
+        ['รูปกว้างเกิน 2:1', { image: RICH, imageHeight: 519 }, 'BAD_IMAGE'],
+        ['ลิงก์แตะรูปเป็น http', { image: RICH, imageHeight: 1040, link: 'http://example.com' }, 'BAD_LINK'],
+        ['ลิงก์แตะรูปเป็น javascript:', { image: RICH, imageHeight: 1040, link: 'javascript:alert(1)' }, 'BAD_LINK']
       ];
       for (const [label, d, code] of badDrafts) {
         r = await call('adminBroadcastTest', { draft: d });
@@ -553,11 +565,25 @@ function fakeLine() {
       ok(fake.state.pushes.length === 0, 'ข้อความที่ผิด → ไม่มีอะไรถูกส่ง');
 
       // ---- ส่งทดสอบหาตัวเอง ----
-      r = await call('adminBroadcastTest', { draft: { text: 'ทดสอบ', image: 'https://storage.test/storage/v1/object/public/images/demo/broadcast-x.jpg' } });
+      r = await call('adminBroadcastTest', { draft: { text: '\nทดสอบ\nบรรทัดสอง', image: RICH, imageHeight: 780 } });
       const p0 = fake.state.pushes[0];
-      ok(r.ok && fake.state.pushes.length === 1 && p0.to === 'U_DEMO_OWNER' && p0.messages.length === 2 && p0.messages[0].type === 'image' &&
-        p0.messages[0].previewImageUrl === p0.messages[0].originalContentUrl && p0.messages[1].type === 'text' && p0.messages[1].text === 'ทดสอบ' && UUID.test(p0.key),
-        'ส่งทดสอบ → ถึงเจ้าของร้านคนเดียว (รูปก่อน แล้วข้อความ)', fake.state.pushes);
+      const im = (p0 && p0.messages[0]) || {};
+      ok(r.ok && fake.state.pushes.length === 1 && p0.to === 'U_DEMO_OWNER' && p0.messages.length === 2 && im.type === 'imagemap' &&
+        p0.messages[1].type === 'text' && p0.messages[1].text === 'ทดสอบ\nบรรทัดสอง' && UUID.test(p0.key),
+        'ส่งทดสอบ → ถึงเจ้าของร้านคนเดียว (ริชเมสเสจก่อน แล้วข้อความ)', fake.state.pushes);
+      ok(im.baseUrl === RICH && im.baseSize && im.baseSize.width === 1040 && im.baseSize.height === 780 && im.altText === 'ทดสอบ',
+        'ริชเมสเสจ: ลิงก์ฐาน (ไม่มีนามสกุล) + กว้าง 1040 สูงตามรูป + แจ้งเตือนด้วยบรรทัดแรกของข้อความ', im);
+      const act = (im.actions || [])[0] || {};
+      ok(im.actions.length === 1 && act.type === 'uri' && act.linkUri === 'https://liff.line.me/' + demoShop.liff_id &&
+        act.area.x === 0 && act.area.y === 0 && act.area.width === 1040 && act.area.height === 780,
+        'แตะได้ทั้งรูป ไม่ใส่ลิงก์ → เปิดบัตรสมาชิกของร้าน', im.actions);
+      await call('adminBroadcastTest', { draft: { image: RICH, imageHeight: 1040, link: ' https://example.com/โปร?ส่วนลด=20 ' } });
+      const im2 = fake.state.pushes[1].messages;
+      ok(im2.length === 1 && im2[0].altText === 'ข้อความจาก ' + demoShop.name && im2[0].actions[0].linkUri === 'https://example.com/%E0%B9%82%E0%B8%9B%E0%B8%A3?%E0%B8%AA%E0%B9%88%E0%B8%A7%E0%B8%99%E0%B8%A5%E0%B8%94=20',
+        'รูปอย่างเดียว → แจ้งเตือน "ข้อความจาก <ร้าน>" / ลิงก์ที่ร้านใส่ (อักษรไทยแปลงเป็นรูปที่ LINE รับ)', im2);
+      await call('adminBroadcastTest', { draft: { text: 'ก'.repeat(150), image: RICH, imageHeight: 1040 } });
+      ok([...fake.state.pushes[2].messages[0].altText].length === 101 && /…$/.test(fake.state.pushes[2].messages[0].altText), 'บรรทัดแรกยาว → แจ้งเตือนตัดที่ 100 ตัว');
+      fake.state.pushes.length = 1;
       const rid0 = crypto.randomUUID();
       await call('adminBroadcastTest', { draft, requestId: rid0 });
       r = await call('adminBroadcastTest', { draft, requestId: rid0 });
@@ -667,20 +693,69 @@ function fakeLine() {
         'ประวัติการส่ง ล่าสุดก่อน', r.history.map((x) => x.id + ':' + x.status));
       ok(!/U_DEMO_\d|recipients/.test(JSON.stringify(r)), 'ประวัติไม่มีรายชื่อผู้รับ / LINE ID');
 
-      // ---- รูปสำหรับข้อความ LINE ----
-      const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
-      r = await call('adminUploadImage', { kind: 'broadcast', mime: 'image/png', data: png });
-      ok(r.ok && /\/demo\/broadcast-\d{4}-\d{2}-\d{2}-[A-Z0-9]{6}\.png$/.test(r.url), 'อัปโหลดรูปสำหรับข้อความ (PNG)', r);
-      const webp = Buffer.from('RIFF\x00\x00\x00\x00WEBPVP8 ', 'binary').toString('base64');
-      r = await call('adminUploadImage', { kind: 'broadcast', mime: 'image/webp', data: webp });
-      ok(!r.ok && r.code === 'BAD_IMAGE', 'รูป WebP สำหรับข้อความ LINE → ไม่รับ', r);
-      const big = Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF]), Buffer.alloc(1024 * 1024)]).toString('base64');
-      r = await call('adminUploadImage', { kind: 'broadcast', mime: 'image/jpeg', data: big });
-      ok(!r.ok && r.code === 'BAD_IMAGE' && /1MB/.test(r.error), 'รูปเกิน 1MB สำหรับข้อความ LINE → ไม่รับ', r);
+      // ---- รูปริชเมสเสจ: หน้าเว็บย่อเป็น 5 ขนาดมาให้ ตัวกลางตรวจขนาดจากหัวไฟล์จริง ----
+      const { RICH_WIDTHS, imageSize } = require(path.join(ROOT, 'api', '_lib', 'broadcast.js'));
+      // หัวไฟล์ JPG / PNG ที่บอกขนาด (ตัวกลางอ่านแค่ส่วนหัว ไม่ต้องเป็นรูปเต็ม)
+      const jpg = (w, h) => Buffer.from([0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0xFF, 0xDB, 0x00, 0x04, 0x00, 0x00, 0xFF, 0xC0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xFF, 0xD9]);
+      const png = (w, h) => { const b = Buffer.alloc(33); Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]).copy(b); b.writeUInt32BE(13, 8); b.write('IHDR', 12, 'latin1'); b.writeUInt32BE(w, 16); b.writeUInt32BE(h, 20); return b; };
+      const sizes = (H, mk = jpg) => Object.fromEntries(RICH_WIDTHS.map((w) => [w, mk(w, Math.round(w * H / 1040)).toString('base64')]));
+      ok(JSON.stringify(imageSize(jpg(700, 525))) === JSON.stringify({ mime: 'image/jpeg', h: 525, w: 700 }) && imageSize(png(240, 180)).w === 240 &&
+        imageSize(Buffer.from('hello world, not an image')) === null, 'อ่านขนาดรูปจากหัวไฟล์ JPG / PNG ได้ / ไฟล์อื่น = ไม่ใช่รูป');
+      uploaded.length = 0;
+      r = await call('adminUploadRichImage', { images: sizes(1040) });
+      ok(r.ok && /^https:\/\/storage\.test\/.+\/images\/demo\/rich-\d{4}-\d{2}-\d{2}-[A-Z0-9]{6}$/.test(r.image) && r.height === 1040, 'อัปรูปริชเมสเสจ → ได้ลิงก์ฐาน (ไม่มีนามสกุล) + ความสูง', r);
+      ok(uploaded.length === 5 && uploaded.every((u, i) => u.p === r.image.split('/images/')[1] + '/' + RICH_WIDTHS[i] && u.mime === 'image/jpeg'),
+        'เก็บครบ 5 ขนาด ที่ <ลิงก์ฐาน>/1040 … /240 (รูปแบบที่ LINE เรียก)', uploaded.map((u) => u.p));
+      const richImg = r.image;
+      r = await call('adminUploadRichImage', { images: sizes(780, png) });
+      ok(r.ok && r.height === 780 && uploaded.slice(5).every((u) => u.mime === 'image/png'), 'รูป PNG แนวนอน 4:3 ได้ (เก็บเป็น PNG)', r);
+      const badUploads = [
+        ['ขาดไป 1 ขนาด', (() => { const x = sizes(1040); delete x[300]; return x; })(), ''],
+        ['ขนาดสลับช่อง (ช่อง 700 เป็นรูปกว้าง 1040)', Object.assign(sizes(1040), { 700: jpg(1040, 1040).toString('base64') }), ''],
+        ['กว้างเกิน 2:1', sizes(500), '2:1'],
+        ['สูงเกิน 2:3', sizes(1600), '2:3'],
+        ['แต่ละขนาดสัดส่วนไม่ตรงกัน', Object.assign(sizes(780), { 460: jpg(460, 460).toString('base64') }), ''],
+        ['ไม่ใช่รูป', Object.assign(sizes(1040), { 240: Buffer.from('hello world').toString('base64') }), ''],
+        ['WebP (LINE ไม่รับ)', Object.assign(sizes(1040), { 1040: Buffer.from('RIFF\x00\x00\x00\x00WEBPVP8 ', 'binary').toString('base64') }), ''],
+        ['ไฟล์ใหญ่เกิน 1MB', Object.assign(sizes(1040), { 1040: Buffer.concat([jpg(1040, 1040), Buffer.alloc(1024 * 1024)]).toString('base64') }), 'ใหญ่']
+      ];
+      const nUp = uploaded.length;
+      for (const [label, images, word] of badUploads) {
+        r = await call('adminUploadRichImage', { images });
+        ok(!r.ok && r.code === 'BAD_IMAGE' && (!word || r.error.includes(word)), `อัปรูป: ${label} → ไม่รับ`, r);
+      }
+      ok(uploaded.length === nUp, 'รูปที่ไม่ผ่าน → ไม่มีไฟล์ถูกเก็บ');
+
+      // ส่งจริงพร้อมรูป: จดข้อความทั้งก้อนไว้ → "ส่งต่อ" ได้ก้อนเดิมทุกตัวอักษร แม้ร้านเปลี่ยนชื่อระหว่างนั้น
+      const nB4 = (await call('adminAudience', { filter: { branches: ['B04'] } })).sendable;
+      const b4 = fake.state.multicasts.length;
+      fake.oa.multicast = async () => { throw new OaError(400, 'Bad request'); };
+      r = await call('adminBroadcastSend', { filter: { branches: ['B04'] }, draft: { image: richImg, imageHeight: 1040 }, expect: nB4 });
+      fake.oa.multicast = orig;
+      ok(r.ok && r.broadcast.status === 'FAILED' && r.broadcast.error === 'OA_REJECTED' && r.broadcast.image === richImg, 'LINE ไม่รับ → "ไม่สำเร็จ" ประวัติรู้ว่ามีรูป', r.broadcast);
+      const richRow = (await db.query(`select messages from broadcasts where id = $1`, [r.broadcast.id])).rows[0];
+      ok(richRow && Array.isArray(richRow.messages) && richRow.messages.length === 1 && richRow.messages[0].type === 'imagemap' &&
+        richRow.messages[0].altText === 'ข้อความจาก ' + demoShop.name, 'จดข้อความที่ส่งจริงทั้งก้อน (ริชเมสเสจ)', richRow);
+      await db.query(`update shops set name = 'ชื่อใหม่' where id = 'demo'`);
+      r = await call('adminBroadcastResume', { id: r.broadcast.id });
+      await db.query(`update shops set name = $1 where id = 'demo'`, [demoShop.name]);
+      const sentRich = fake.state.multicasts.slice(b4);
+      ok(r.ok && r.broadcast.status === 'DONE' && r.broadcast.sent === nB4 && sentRich.length === 1 &&
+        JSON.stringify(sentRich[0].messages) === JSON.stringify(richRow.messages), 'กด "ส่งต่อ" → ส่งก้อนเดิมทุกตัวอักษร (ไม่สร้างใหม่จากชื่อร้านล่าสุด)', sentRich.map((m) => m.messages));
+
+      // ประวัติก่อนมีริชเมสเสจ (ไม่มีช่อง messages) → ส่งต่อด้วยรูปธรรมดา + ข้อความแบบเดิม
+      await db.query(`insert into broadcasts (shop_id, id, request_id, created_by, message_text, message_image, recipients, total, status)
+        values ('demo', 'BC-LEGACY01', 'legacy-request-1', 'U_DEMO_OWNER', 'เก่า', 'https://storage.test/old.jpg', array['DM-000004'], 1, 'FAILED')`);
+      const bL = fake.state.multicasts.length;
+      r = await call('adminBroadcastResume', { id: 'BC-LEGACY01' });
+      const legacy = fake.state.multicasts.slice(bL).map((m) => m.messages);
+      ok(r.ok && r.broadcast.status === 'DONE' && legacy.every((ms) => ms.length === 2 && ms[0].type === 'image' && ms[0].originalContentUrl === 'https://storage.test/old.jpg' &&
+        ms[1].text === 'เก่า'), 'ประวัติเก่า (รูปธรรมดา) ส่งต่อได้แบบเดิม', legacy);
 
       // ---- ใครใช้ได้ ----
-      for (const a of ['adminBroadcastInfo', 'adminBroadcastTest', 'adminBroadcastSend', 'adminBroadcastResume']) {
-        r = await call(a, { draft, filter: {}, expect: 1, id: 'BC-STUCK001' }, 'TEST:U_DEMO_ADMIN:ผู้จัดการ');
+      for (const a of ['adminBroadcastInfo', 'adminBroadcastTest', 'adminBroadcastSend', 'adminBroadcastResume', 'adminUploadRichImage']) {
+        r = await call(a, { draft, filter: {}, expect: 1, id: 'BC-STUCK001', images: {} }, 'TEST:U_DEMO_ADMIN:ผู้จัดการ');
         ok(!r.ok && r.code === 'NO_ROLE', `${a}: ผู้จัดการใช้ไม่ได้`, r);
       }
     } finally {

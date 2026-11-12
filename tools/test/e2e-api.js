@@ -354,6 +354,40 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     let st = await oaState();
     ok(st.pushes.length === 1 && st.pushes[0].to === 'U_DEMO_OWNER' && st.pushes[0].messages[0].text === msg, 'ส่งทดสอบ → ถึงเจ้าของร้านคนเดียว', st.pushes);
 
+    // รูปริชเมสเสจ: เลือกรูป 1 รูป → หน้าเว็บย่อเป็น 5 ขนาด อัปทีเดียว → ตัวอย่างเต็มความกว้าง + ช่อง "แตะรูปแล้วเปิด"
+    ok(await b.eval(`document.getElementById('bc-link-field').hidden`), 'ยังไม่มีรูป → ไม่มีช่อง "แตะรูปแล้วเปิด"');
+    const uploadsNow = async () => (await fetch('http://localhost:8105/__uploads')).json();
+    const up0 = (await uploadsNow()).length;
+    const pickImage = (w, h) => b.eval(`(async () => {
+      const c = document.createElement('canvas'); c.width = ${w}; c.height = ${h};
+      const g = c.getContext('2d'); g.fillStyle = '#c33'; g.fillRect(0, 0, ${w}, ${h}); g.fillStyle = '#fff'; g.fillRect(${w / 4}, ${h / 4}, ${w / 2}, ${h / 2});
+      const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+      const dt = new DataTransfer(); dt.items.add(new File([blob], 'promo.png', { type: 'image/png' }));
+      const input = document.querySelector('form[data-form=broadcast] input[type=file]');
+      input.files = dt.files; input.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`);
+    await pickImage(3000, 900);
+    await b.waitFor(`/กว้างเกินไป/.test((document.querySelector('.toast.show') || {}).innerText || '')`, 8000, 'เตือนรูปกว้างเกิน');
+    ok(!(await b.eval(`document.querySelector('form[data-form=broadcast] input[name=image]').value`)) && (await uploadsNow()).length === up0,
+      'รูปแนวนอนเกิน 2:1 → บอกให้เปลี่ยนรูป ไม่อัปโหลด ไม่ตัดรูปเอง');
+    await pickImage(1200, 900);
+    await b.waitFor(`document.querySelector('#bc-preview .lp-rich')`, 10000, 'ตัวอย่างริชเมสเสจ');
+    const ups = (await uploadsNow()).slice(up0);
+    ok(ups.length === 5 && ups.map((u) => u.path.split('/').pop()).join() === '1040,700,460,300,240' && ups.every((u) => u.mime === 'image/jpeg' && /^demo\/rich-/.test(u.path)),
+      'รูป 1200×900 → ย่อเป็น 5 ขนาด (JPG) อัปในคำขอเดียว', ups);
+    ok(await b.eval(`(() => { const box = document.querySelector('#bc-preview .lp-rich').getBoundingClientRect(); const bub = document.querySelector('#bc-preview .lp-bubble').getBoundingClientRect();
+      return Math.abs(box.width / box.height - 1040 / 780) < 0.02 && box.width > bub.width && !document.getElementById('bc-link-field').hidden; })()`),
+      'ตัวอย่าง: รูปเต็มความกว้างตามสัดส่วน 4:3 (กว้างกว่ากล่องข้อความ) + ช่อง "แตะรูปแล้วเปิด" ขึ้น');
+    await b.eval(`document.getElementById('bc-preview').scrollIntoView({ block: 'center' })`);
+    await sleep(200);
+    await b.shot(path.join(OUT, 'n14b-broadcast-rich.png'));
+    await b.click('[data-act=bc-test]');
+    for (let i = 0; i < 40 && (await oaState()).pushes.length < 2; i++) await sleep(200);
+    st = await oaState();
+    const rm = (st.pushes[1] || {}).messages || [];
+    ok(rm.length === 2 && rm[0].type === 'imagemap' && rm[0].baseSize.width === 1040 && rm[0].baseSize.height === 780 && /\/images\/demo\/rich-[^/.]+$/.test(rm[0].baseUrl) &&
+      /^https:\/\/liff\.line\.me\//.test(rm[0].actions[0].linkUri) && rm[1].text === msg, 'ส่งทดสอบ → ริชเมสเสจ (1040×780 แตะแล้วเปิดบัตรสมาชิก) + ข้อความ', rm);
+    await b.eval(`(() => { const t = document.querySelector('form[data-form=broadcast] input[name=link]'); t.value = 'https://example.com/promo'; t.dispatchEvent(new Event('input', { bubbles: true })); return true; })()`);
+
     // ทุกคนที่ส่งได้ (เกิน 300) → โควตาไม่พอ กดยืนยันไม่ได้
     await b.waitFor(`/ส่งให้ ${allSend.n.toLocaleString('en-US')} คน/.test(document.getElementById('bc-send-btn').innerText) && !document.getElementById('bc-send-btn').disabled`, 8000, 'ปุ่มส่งพร้อม');
     await b.click('#bc-send-btn');
@@ -381,8 +415,11 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     const [goldIds] = await sql(`select array_agg(m.line_user_id order by m.line_user_id) as ids from members m join tiers t on t.shop_id = m.shop_id and t.id = m.tier_id
       where m.shop_id = 'demo' and t.name = 'Gold' and m.${SENDABLE.replace(/ and /g, ' and m.')}`);
     ok(JSON.stringify([...toIds].sort()) === JSON.stringify(goldIds.ids), `ส่งถึงลูกค้า Gold ที่ส่งได้ครบ ${goldN.n} คน ไม่เกินกลุ่ม`);
+    ok(st.multicasts.every((m) => m.messages[0].type === 'imagemap' && m.messages[0].actions[0].linkUri === 'https://example.com/promo' && m.messages[1].text === msg),
+      'ส่งจริง → ริชเมสเสจ (แตะแล้วเปิดลิงก์ที่ร้านใส่) + ข้อความ', st.multicasts.map((m) => m.messages));
     ok(new RegExp(`${goldN.n} / ${goldN.n}`).test(await b.text('#bc-history')) && /สวัสดีค่ะ/.test(await b.text('#bc-history')), 'ประวัติ: ข้อความ + ส่งครบ x / x คน');
-    ok(await b.eval(`document.querySelector('form[data-form=broadcast] textarea').value === '' && document.getElementById('bc-send-btn').disabled`), 'ส่งแล้วล้างข้อความ (กันเผลอส่งซ้ำ)');
+    ok(await b.eval(`document.querySelector('form[data-form=broadcast] textarea').value === '' && document.querySelector('form[data-form=broadcast] input[name=image]').value === '' &&
+      document.getElementById('bc-link-field').hidden && document.getElementById('bc-send-btn').disabled`), 'ส่งแล้วล้างข้อความ + รูป + ลิงก์ (กันเผลอส่งซ้ำ)');
     ok(/เหลือ \d+ \/ 300/.test(await b.text('#bc-send')) && !/เหลือ 300 \/ 300/.test(await b.text('#bc-send')), 'โควตาที่เหลืออัปเดตหลังส่ง');
     await b.shot(path.join(OUT, 'n16-broadcast-sent.png'), { full: true });
 

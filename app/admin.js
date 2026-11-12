@@ -42,7 +42,9 @@ const RANGE_KEY = 'crm_admin_range';
 const BRANCH_KEY = 'crm_admin_branch';
 // ข้อความในป๊อปอัป "กำลังโหลด" ตามคำสั่ง (คำสั่งอ่านข้อมูลอื่นๆ = "กำลังโหลด...")
 const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave', 'adminMemberUpdate', 'adminRuleSave', 'adminTiersSave', 'adminMemberTier'];
-const LOADING_TEXT = { adminAudience: 'กำลังคัดกลุ่มลูกค้า...', adminBroadcastInfo: null, adminBroadcastTest: 'กำลังส่งทดสอบ...', adminBroadcastSend: 'กำลังส่งข้อความ...', adminBroadcastResume: 'กำลังส่งต่อ...', adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...', adminRewardDelete: 'กำลังลบ...', adminPromoDelete: 'กำลังลบ...', adminRuleDelete: 'กำลังลบ...' };
+const LOADING_TEXT = { adminAudience: 'กำลังคัดกลุ่มลูกค้า...', adminBroadcastInfo: null, adminBroadcastTest: 'กำลังส่งทดสอบ...', adminBroadcastSend: 'กำลังส่งข้อความ...', adminBroadcastResume: 'กำลังส่งต่อ...', adminUploadRichImage: 'กำลังอัปโหลดรูป...', adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...', adminRewardDelete: 'กำลังลบ...', adminPromoDelete: 'กำลังลบ...', adminRuleDelete: 'กำลังลบ...' };
+// ร่างข้อความตามกลุ่ม: image = ลิงก์ฐานของริชเมสเสจ (ไม่มีนามสกุล) / imageHeight = ความสูงเมื่อกว้าง 1040 / link = แตะรูปแล้วเปิด (ว่าง = บัตรสมาชิก)
+const BC_EMPTY = () => ({ text: '', image: '', imageHeight: '', link: '' });
 
 const app = document.getElementById('app');
 const S = {
@@ -58,7 +60,7 @@ const S = {
   // ส่งข้อความตามกลุ่ม: เงื่อนไขที่เลือกไว้ (จำไว้ระหว่างสลับหน้า ไม่เก็บในเครื่อง)
   aud: { filter: {}, dirty: false },
   // ข้อความที่กำลังเขียน + สถานะ LINE OA (มาจาก adminBroadcastInfo) + จำนวนคนของกลุ่มล่าสุดที่กดดู
-  bc: { draft: { text: '', image: '' }, info: null, count: null, pending: null },
+  bc: { draft: BC_EMPTY(), info: null, count: null, pending: null },
   member: null, staffItems: [], pendingAdjust: null,
   rewards: [], couponDays: 30, promos: [], settingsItems: [], pendingSettings: null,
   seq: 0 // เลขคำขอล่าสุด: ผลของคำขอเก่าที่ตอบช้ากว่าจะไม่ทับหน้าที่เปิดใหม่
@@ -956,12 +958,16 @@ function sendCardHtml() {
       <label class="field"><span>ข้อความ</span>
         <textarea name="text" rows="5" maxlength="${BC_MAX}" placeholder="เช่น สวัสดีค่ะ สมาชิกระดับ Gold รับส่วนลด 20% ทุกเมนู ถึงสิ้นเดือนนี้">${esc(d.text)}</textarea>
         <small class="bc-counter" id="bc-counter">${fmtNum([...d.text].length)} / ${fmtNum(BC_MAX)}</small></label>
-      <div class="field"><span>รูป <small>(ไม่บังคับ · ลูกค้าเห็นเต็มรูปในแชต)</small></span>
+      <div class="field"><span>รูป <small>(ไม่บังคับ · ขึ้นเต็มความกว้างแชตแบบริชเมสเสจ)</small></span>
         <div class="img-upload">
           <label class="btn btn-sm upload-btn">${icon('upload', 16)} อัปโหลดรูป<input type="file" accept="image/jpeg,image/png,image/*" data-upload="image" hidden></label>
           <button type="button" class="link" data-act="image-clear" data-id="image">ลบรูป</button>
         </div>
-        <input type="hidden" name="image" value="${esc(d.image)}"></div>
+        <small class="hint img-size">ขนาดแนะนำ <b>1040 × 1040 px</b> (สี่เหลี่ยมจัตุรัส) · ใช้ได้ตั้งแต่แนวนอน 2:1 ถึงแนวตั้ง 2:3 · ระบบไม่ตัดรูปให้</small>
+        <input type="hidden" name="image" value="${esc(d.image)}"><input type="hidden" name="imageHeight" value="${esc(d.imageHeight)}"></div>
+      <!-- ริชเมสเสจต้องมีจุดแตะ (LINE บังคับ) และลูกค้าแตะเพื่อขยายรูปไม่ได้ → ให้ร้านเลือกว่าแตะแล้วไปไหน -->
+      <label class="field" id="bc-link-field" ${d.image ? '' : 'hidden'}><span>แตะรูปแล้วเปิด <small>(เว้นว่าง = บัตรสมาชิกของร้าน)</small></span>
+        <input name="link" type="url" inputmode="url" maxlength="1000" placeholder="https://..." value="${esc(d.link)}"></label>
       <div class="field"><span>ตัวอย่างในแชต LINE</span><div class="bc-preview" id="bc-preview">${bcPreviewHtml()}</div></div>
       <p class="muted small">ลูกค้าที่ยังไม่ได้เพิ่ม OA เป็นเพื่อน หรือบล็อก OA ไว้ จะไม่ได้รับข้อความ</p>
       <div class="aud-actions">
@@ -974,19 +980,24 @@ function sendCardHtml() {
 function bcPreviewHtml(draft = S.bc.draft) {
   const oa = (S.bc.info && S.bc.info.oa) || {};
   if (!draft.text && !draft.image) return '<p class="muted small">พิมพ์ข้อความหรือใส่รูป แล้วตัวอย่างจะขึ้นที่นี่</p>';
+  // ริชเมสเสจกว้างกว่ากล่องข้อความในแชตจริง → กล่องตัวอย่างกว้างขึ้นเมื่อมีรูป / จองที่ตามสัดส่วนไว้ก่อนรูปโหลดเสร็จ (ตัวอย่างไม่กระตุก)
+  const h = Math.round(Number(draft.imageHeight)) || 1040;
   return `
     <div class="lp">
       <span class="bc-av bc-av-sm">${oa.picture ? `<img src="${esc(oa.picture)}" alt="" referrerpolicy="no-referrer">` : icon('store', 14)}</span>
-      <div class="lp-body">
+      <div class="lp-body${draft.image ? ' lp-wide' : ''}">
         <div class="lp-name">${esc(oa.name || cfg().name)}</div>
-        ${draft.image ? `<img class="lp-img" src="${esc(draft.image)}" alt="">` : ''}
+        ${draft.image ? `<div class="lp-rich" style="aspect-ratio: 1040 / ${h}"><img src="${esc(draft.image)}/700" alt=""></div>` : ''}
         ${draft.text ? `<div class="lp-bubble">${esc(draft.text)}</div>` : ''}
       </div>
     </div>`;
 }
 
 function onDraftInput(form) {
-  S.bc.draft = { text: form.elements.text.value, image: form.elements.image.value };
+  const el = form.elements;
+  S.bc.draft = { text: el.text.value, image: el.image.value, imageHeight: el.image.value ? el.imageHeight.value : '', link: el.link.value };
+  const linkField = document.getElementById('bc-link-field');
+  if (linkField) linkField.hidden = !S.bc.draft.image; // ไม่มีรูป = ไม่มีอะไรให้แตะ
   const counter = document.getElementById('bc-counter');
   if (counter) counter.textContent = `${fmtNum([...S.bc.draft.text].length)} / ${fmtNum(BC_MAX)}`;
   const box = document.getElementById('bc-preview');
@@ -1012,9 +1023,16 @@ function updateSendState() {
 }
 
 function readDraft() {
-  const d = { text: S.bc.draft.text.trim(), image: S.bc.draft.image };
+  const src = S.bc.draft;
+  const d = { text: src.text.trim(), image: src.image };
   if (!d.text && !d.image) { toast('พิมพ์ข้อความหรือใส่รูปก่อน', 'err'); return null; }
   if ([...d.text].length > BC_MAX) { toast(`ข้อความยาวได้ไม่เกิน ${fmtNum(BC_MAX)} ตัวอักษร`, 'err'); return null; }
+  if (d.image) {
+    d.imageHeight = Number(src.imageHeight);
+    d.link = src.link.trim();
+    // ตัวกลางตรวจซ้ำอยู่แล้ว — ที่นี่บอกก่อนกดส่ง ไม่ต้องรอคำตอบ
+    if (d.link && !/^https:\/\/\S+$/i.test(d.link)) { toast('ลิงก์เมื่อแตะรูปต้องขึ้นต้นด้วย https:// (เว้นว่าง = เปิดบัตรสมาชิกของร้าน)', 'err'); return null; }
+  }
   return d;
 }
 
@@ -1068,7 +1086,7 @@ async function doBroadcast(btn) {
     const b = r.broadcast;
     if (b.status === 'DONE') {
       toast(`ส่งแล้ว ${fmtNum(b.sent)} คน`, 'ok');
-      S.bc.draft = { text: '', image: '' }; // ล้างข้อความ กันเผลอกดส่งซ้ำ
+      S.bc.draft = BC_EMPTY(); // ล้างข้อความ กันเผลอกดส่งซ้ำ
     } else {
       toast(`ส่งได้ ${fmtNum(b.sent)} จาก ${fmtNum(b.total)} คน — กด "ส่งต่อ" ในประวัติการส่ง`, 'err');
     }
@@ -1523,21 +1541,84 @@ async function uploadImage(input) {
   const form = input.closest('form');
   input.value = ''; // เลือกไฟล์เดิมซ้ำได้
   if (!file || !form) return;
+  if (form.dataset.form === 'broadcast') return uploadRichImage(file, form);
   showLoading('กำลังเตรียมรูป...');
   try {
-    // รูปในข้อความ LINE: รูปตัวอย่างในแชตต้องไม่เกิน 1MB (LINE กำหนด)
-    const { blob, mime } = await shrinkImage(file, form.dataset.form === 'broadcast' ? 1024 * 1024 : MAX_UPLOAD);
+    const { blob, mime } = await shrinkImage(file);
     const data = await blobToBase64(blob);
-    const kind = { promo: 'promo', brand: 'logo', tiers: 'tier', broadcast: 'broadcast' }[form.dataset.form] || 'reward';
+    const kind = { promo: 'promo', brand: 'logo', tiers: 'tier' }[form.dataset.form] || 'reward';
     const r = await S.api.call('adminUploadImage', { data, mime, kind });
     const target = form.elements[input.dataset.upload || 'image'];
     target.value = r.url;
     target.dispatchEvent(new Event('input', { bubbles: true }));
-    toast(form.dataset.form === 'broadcast' ? 'ใส่รูปแล้ว' : 'อัปโหลดรูปแล้ว กดบันทึกเพื่อใช้รูปนี้', 'ok');
+    toast('อัปโหลดรูปแล้ว กดบันทึกเพื่อใช้รูปนี้', 'ok');
   } catch (e) {
     toast(e.message, 'err');
   } finally {
     hideLoading();
+  }
+}
+
+/* ---------- รูปริชเมสเสจ (ข้อความตามกลุ่ม): LINE ต้องการรูป 5 ความกว้าง เลือกขนาดตามเครื่องลูกค้าเอง ----------
+ * ย่อในเครื่องให้ครบ 5 ขนาด (เป็น JPG พื้นขาว) แล้วส่งไปพร้อมกันคำขอเดียว — ไม่ตัดรูป: สัดส่วนเกินช่วงให้เปลี่ยนรูปเอง
+ * ต้องตรงกับ RICH_WIDTHS / RICH_MIN_H / RICH_MAX_H ใน api/_lib/broadcast.js */
+const RICH_WIDTHS = [1040, 700, 460, 300, 240];
+const RICH_FILE = 1024 * 1024;
+
+async function uploadRichImage(file, form) {
+  showLoading('กำลังเตรียมรูป...');
+  try {
+    const { images } = await richSizes(file);
+    const r = await S.api.call('adminUploadRichImage', { images });
+    form.elements.imageHeight.value = r.height;
+    form.elements.image.value = r.image;
+    form.elements.image.dispatchEvent(new Event('input', { bubbles: true }));
+    toast('ใส่รูปแล้ว', 'ok');
+  } catch (e) {
+    toast(e.message, 'err');
+  } finally {
+    hideLoading();
+  }
+}
+
+async function richSizes(file) {
+  if (file.size > 30 * 1024 * 1024) throw new Error('ไฟล์ใหญ่เกินไป (เกิน 30MB)');
+  let img;
+  try {
+    img = await decodeImage(file);
+  } catch (e) {
+    throw new Error('เปิดไฟล์รูปนี้ไม่ได้ (เช่นไฟล์ HEIC จาก iPhone ที่โอนมาไว้ในคอม) กรุณาใช้รูป JPG หรือ PNG');
+  }
+  const H = Math.round(1040 * img.height / img.width);
+  try {
+    if (H < 520 || H > 1560) {
+      throw new Error(`รูปนี้ (${fmtNum(img.width)} × ${fmtNum(img.height)} px) ${H < 520 ? 'กว้างเกินไป' : 'สูงเกินไป'} — ใช้รูปตั้งแต่แนวนอน 2:1 ถึงแนวตั้ง 2:3 (แนะนำ 1040 × 1040 px)`);
+    }
+    const images = {};
+    let src = img;
+    // ย่อทีละขั้นจากขนาดก่อนหน้า (1040 → 700 → …) รูปเล็กคมกว่าย่อจากรูปต้นฉบับใหญ่ทีเดียว
+    for (const w of RICH_WIDTHS) {
+      const h = Math.round(w * H / 1040);
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#ffffff'; // JPG ไม่มีพื้นใส → รูป PNG พื้นใสได้พื้นขาวแทนดำ
+      ctx.fillRect(0, 0, w, h);
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(src, 0, 0, w, h);
+      let blob = null;
+      for (const q of [0.88, 0.75, 0.6]) {
+        blob = await canvasBlob(canvas, 'image/jpeg', q);
+        if (blob.size <= RICH_FILE) break;
+      }
+      if (blob.size > RICH_FILE) throw new Error('รูปใหญ่เกิน 1MB แม้ย่อแล้ว ลองใช้รูปอื่น');
+      images[w] = await blobToBase64(blob);
+      src = canvas;
+    }
+    return { images, height: H };
+  } finally {
+    if (img.close) img.close();
   }
 }
 

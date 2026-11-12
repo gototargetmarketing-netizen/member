@@ -1,6 +1,7 @@
 // ส่งข้อความตามกลุ่ม (ผู้ใช้เลือกแบบ ข 12 พ.ย. 2569 — ร้านส่งข้อความหาลูกค้าผ่าน LINE OA ของร้านได้จากหลังบ้าน)
 // รอบ 1: คัดกลุ่มลูกค้า → นับจำนวน + ตัวอย่างรายชื่อ (adminAudience)
 // รอบ 2: ดูสถานะ OA + ประวัติ / ส่งทดสอบหาตัวเอง / ส่งจริง / ส่งต่อส่วนที่ค้าง (ต้องมีรหัส OA ของร้านใน Vercel — ดู lineoa.js)
+//   รูปส่งเป็นริชเมสเสจ (imagemap) เต็มความกว้างแชต — อัปโหลดด้วย adminUploadRichImage (12 พ.ย. 2569 / API 0.9.0)
 // รอบ 3 (ยังไม่ทำ): จดว่าใครเป็นเพื่อน OA + ชวนเพิ่มเพื่อนตอนสมัคร
 //
 // หลัก:
@@ -159,22 +160,124 @@ function oaFail(ctx, e, what) {
   return userError(pr.msg, pr.code);
 }
 
-// ข้อความ + รูป → ข้อความในรูปแบบของ LINE (รูปก่อน แล้วตามด้วยข้อความ — นับเป็น 1 ข้อความต่อคนในโควตา)
-function cleanDraft(raw) {
+// ---------- รูปแบบริชเมสเสจ (ผู้ใช้ขอ 12 พ.ย. 2569: รูปเต็มความกว้างแชต แทนรูปย่อของข้อความรูปธรรมดา) ----------
+// LINE เรียกว่า imagemap: ต้องมีรูป 5 ขนาดที่ <ลิงก์ฐาน>/<ความกว้าง> (ห้ามมีนามสกุลไฟล์) LINE เลือกขนาดตามเครื่องลูกค้าเอง
+// + ต้องมี "แตะแล้วไปไหน" อย่างน้อย 1 จุด → ทั้งรูปเป็นจุดเดียว เปิดลิงก์ที่ร้านใส่ (ว่าง = บัตรสมาชิกของร้าน)
+const RICH_WIDTHS = [1040, 700, 460, 300, 240];
+const RICH_MIN_H = 520;                 // แนวนอนสุด 2:1
+const RICH_MAX_H = 1560;                // แนวตั้งสุด 2:3 (ยาวกว่านี้ลูกค้าต้องเลื่อนจอดูรูปเดียว)
+const RICH_FILE_BYTES = 1024 * 1024;    // ต่อไฟล์ (LINE รับ 10MB แต่ไฟล์เล็ก = ลูกค้าเปิดเร็ว เปลืองเน็ตน้อย)
+const RICH_PATH = /\/rich-\d{4}-\d{2}-\d{2}-[A-Z0-9]{6}$/;
+const ALT_MAX = 100;                    // ข้อความแจ้งเตือนบนจอล็อก (LINE รับ 1,500 แต่จอแสดงได้ไม่กี่บรรทัด)
+
+// ขนาดรูปจากหัวไฟล์ (JPG / PNG) — ไม่ต้องลงโปรแกรมย่อรูปบน Vercel: หน้าเว็บย่อให้ ที่นี่แค่ตรวจว่าขนาดตรงจริง
+function imageSize(b) {
+  if (b.length >= 24 && b.readUInt32BE(0) === 0x89504E47 && b.readUInt32BE(4) === 0x0D0A1A0A && b.toString('latin1', 12, 16) === 'IHDR') {
+    return { mime: 'image/png', w: b.readUInt32BE(16), h: b.readUInt32BE(20) };
+  }
+  if (b.length >= 4 && b[0] === 0xFF && b[1] === 0xD8) {
+    // ไล่ส่วนหัวของ JPG หาส่วน SOF (บอกขนาดรูป) — ข้ามส่วนอื่นตามความยาวที่ระบุ
+    let i = 2;
+    while (i + 9 <= b.length) {
+      if (b[i] !== 0xFF) return null;
+      const m = b[i + 1];
+      if (m === 0xFF) { i++; continue; }
+      if (m === 0x01 || (m >= 0xD0 && m <= 0xD7)) { i += 2; continue; }
+      if (m >= 0xC0 && m <= 0xCF && m !== 0xC4 && m !== 0xC8 && m !== 0xCC) {
+        return { mime: 'image/jpeg', h: b.readUInt16BE(i + 5), w: b.readUInt16BE(i + 7) };
+      }
+      i += 2 + b.readUInt16BE(i + 2);
+    }
+  }
+  return null;
+}
+
+// ข้อความ + ริชเมสเสจ → ข้อความในรูปแบบของ LINE (รูปก่อน แล้วตามด้วยข้อความ — ส่งครั้งเดียว นับ 1 ข้อความต่อคนในโควตา)
+// shop = แถวร้าน (ลิงก์บัตรสมาชิก + ชื่อร้านสำหรับข้อความแจ้งเตือน) / รูปต้องเป็นของร้านนี้ที่อัปโหลดจากหน้านี้ (มีครบ 5 ขนาด)
+function cleanDraft(raw, shop) {
   const d = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const text = String(d.text == null ? '' : d.text).replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '')
     .replace(/\n{4,}/g, '\n\n\n').trim();
   if ([...text].length > MAX_TEXT) throw userError('ข้อความยาวได้ไม่เกิน ' + U.fmtNum(MAX_TEXT) + ' ตัวอักษร', 'BAD_MESSAGE');
   const image = String(d.image == null ? '' : d.image).trim();
-  let imgOk = false;
-  try { imgOk = !!U.safeUrl(image) && /\.(jpe?g|png)$/i.test(new URL(image).pathname); } catch (e) { imgOk = false; }
-  // LINE รับรูปเฉพาะ JPG / PNG ลิงก์ https
-  if (image && !imgOk) throw userError('รูปต้องเป็นไฟล์ JPG หรือ PNG (อัปโหลดจากหน้านี้)', 'BAD_IMAGE');
+  let height = 0;
+  let link = '';
+  if (image) {
+    let ok = false;
+    try {
+      const u = new URL(image);
+      ok = !!U.safeUrl(image) && !u.search && !u.hash && RICH_PATH.test(u.pathname) && u.pathname.includes('/' + shop.id + '/rich-');
+    } catch (e) { ok = false; }
+    if (!ok) throw userError('รูปไม่ถูกต้อง กรุณาอัปโหลดรูปจากหน้านี้ใหม่', 'BAD_IMAGE');
+    height = Number(d.imageHeight);
+    if (!Number.isInteger(height) || height < RICH_MIN_H || height > RICH_MAX_H) throw userError('ขนาดรูปไม่ถูกต้อง กรุณาอัปโหลดรูปจากหน้านี้ใหม่', 'BAD_IMAGE');
+    link = String(d.link == null ? '' : d.link).trim();
+    if (link) {
+      // แปลงอักษรไทยในลิงก์เป็นรูปที่ LINE รับ (LINE ปฏิเสธลิงก์ที่ไม่ได้เข้ารหัส)
+      try { const u = new URL(link); link = u.protocol === 'https:' ? u.href : ''; } catch (e) { link = ''; }
+      if (!link || !U.safeUrl(link)) throw userError('ลิงก์เมื่อแตะรูปต้องขึ้นต้นด้วย https:// (เว้นว่าง = เปิดบัตรสมาชิกของร้าน)', 'BAD_LINK');
+    } else {
+      if (!shop.liff_id) throw userError('กรุณาใส่ลิงก์ที่จะเปิดเมื่อลูกค้าแตะรูป', 'BAD_LINK');
+      link = 'https://liff.line.me/' + shop.liff_id;
+    }
+  }
   if (!text && !image) throw userError('กรุณาพิมพ์ข้อความหรือใส่รูปอย่างน้อย 1 อย่าง', 'BAD_MESSAGE');
   const messages = [];
-  if (image) messages.push({ type: 'image', originalContentUrl: image, previewImageUrl: image });
+  if (image) {
+    // ข้อความแจ้งเตือน = บรรทัดแรกของข้อความที่พิมพ์ / ไม่พิมพ์ = "ข้อความจาก <ร้าน>"
+    const first = [...(text.split('\n').find((l) => l.trim()) || '').trim()];
+    const alt = first.length ? first.slice(0, ALT_MAX).join('') + (first.length > ALT_MAX ? '…' : '') : 'ข้อความจาก ' + (shop.name || 'ร้าน');
+    messages.push({
+      type: 'imagemap', baseUrl: image, altText: alt, baseSize: { width: 1040, height },
+      actions: [{ type: 'uri', label: 'เปิดลิงก์', linkUri: link, area: { x: 0, y: 0, width: 1040, height } }]
+    });
+  }
   if (text) messages.push({ type: 'text', text });
-  return { text, image, messages };
+  return { text, image, height, link, messages };
+}
+
+// ประวัติก่อนมีริชเมสเสจ (ไม่มีช่อง messages) → สร้างข้อความแบบเดิม: รูปธรรมดา + ข้อความ
+function legacyMessages(b) {
+  const out = [];
+  if (b.message_image) out.push({ type: 'image', originalContentUrl: b.message_image, previewImageUrl: b.message_image });
+  if (b.message_text) out.push({ type: 'text', text: b.message_text });
+  return out;
+}
+
+// ---------- คำสั่ง: อัปโหลดรูปริชเมสเสจ (หน้าเว็บย่อเป็น 5 ขนาดมาแล้ว — ส่งมาพร้อมกันในคำขอเดียว) ----------
+// เก็บที่ <ร้าน>/rich-<วันที่>-<สุ่ม>/<ความกว้าง> → ลิงก์ฐาน = โฟลเดอร์นั้น (LINE ต่อท้าย /1040 ฯลฯ เอง)
+async function adminUploadRichImage(p, ctx) {
+  needOa(ctx); // ร้านที่ไม่มีแพ็กเกจส่งข้อความ (ไม่มีรหัส OA) ไม่ต้องอัปรูปชนิดนี้
+  const imgs = p.images && typeof p.images === 'object' && !Array.isArray(p.images) ? p.images : {};
+  const bad = (msg) => userError(msg || 'ไฟล์รูปไม่ถูกต้อง กรุณาเลือกรูปใหม่', 'BAD_IMAGE');
+  const files = RICH_WIDTHS.map((w) => {
+    const data = String(imgs[w] || '');
+    if (!data || data.length > Math.ceil(RICH_FILE_BYTES / 3) * 4 + 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data)) {
+      throw bad(data ? 'รูปใหญ่เกินไป ลองใช้รูปอื่น' : '');
+    }
+    const bytes = Buffer.from(data, 'base64');
+    const size = imageSize(bytes);
+    if (!size || size.w !== w || bytes.length > RICH_FILE_BYTES) throw bad(); // LINE รับเฉพาะ JPG / PNG ความกว้างตามนี้พอดี
+    return { w, h: size.h, mime: size.mime, bytes };
+  });
+  const height = files[0].h;
+  if (height < RICH_MIN_H || height > RICH_MAX_H) {
+    throw bad('สัดส่วนรูปต้องอยู่ระหว่างแนวนอน 2:1 ถึงแนวตั้ง 2:3 (แนะนำ 1040 × 1040 px)');
+  }
+  // ทุกขนาดต้องสัดส่วนเดียวกับรูปใหญ่ (ปัดเศษได้ 2 px) ไม่งั้นจุดแตะเพี้ยนจากรูปบางเครื่อง
+  if (files.some((f) => Math.abs(f.h - Math.round(f.w * height / 1040)) > 2)) throw bad();
+  const dir = ctx.shop.id + '/rich-' + U.thaiDay(ctx.now) + '-' + U.randomCode(6);
+  let urls;
+  try {
+    urls = await Promise.all(files.map((f) => ctx.deps.storage().upload(dir + '/' + f.w, f.bytes, f.mime)));
+  } catch (e) {
+    console.error('อัปโหลดรูปริชเมสเสจไม่สำเร็จ: ' + (e && e.message ? e.message : e));
+    throw userError('บันทึกรูปไม่สำเร็จ กรุณาลองใหม่ ถ้ายังไม่ได้ให้ติดต่อผู้ดูแลระบบ', 'STORAGE_ERROR');
+  }
+  const base = String(urls[0]).replace(/\/1040$/, '');
+  if (!urls.every((u, i) => u === base + '/' + RICH_WIDTHS[i])) throw new Error('ลิงก์รูปริชเมสเสจไม่ตรงรูปแบบ: ' + urls.join(' '));
+  console.log('อัปโหลดรูปริชเมสเสจ ' + dir + ' (1040×' + height + ', ' + files.reduce((s, f) => s + f.bytes.length, 0) + ' bytes) โดย ' + ctx.staff.name);
+  return { image: base, height };
 }
 
 // โควตาข้อความเดือนนี้ของ OA (แพ็กเกจของ LINE OA ร้าน ไม่ใช่ของเรา)
@@ -212,7 +315,8 @@ async function runBatches(ctx, oa, b) {
   const ids = b.recipients || [];
   const n = Math.ceil(ids.length / BATCH);
   const done = new Set((b.batches_done || []).map(Number));
-  const { messages } = cleanDraft({ text: b.message_text, image: b.message_image });
+  // ส่งก้อนที่จดไว้ตอนกดส่ง (ทุกชุดได้ข้อความเหมือนกัน แม้ร้านแก้ชื่อ/ลิงก์ระหว่างนั้น) — ประวัติเก่าไม่มีก้อนนี้ สร้างแบบเดิม
+  const messages = Array.isArray(b.messages) && b.messages.length ? b.messages : legacyMessages(b);
   let sent = U.toInt(b.sent);
   let error = '';
   for (let i = 0; i < n && !error; i++) {
@@ -281,7 +385,7 @@ async function adminBroadcastInfo(p, ctx) {
 // ---------- คำสั่ง: ส่งทดสอบหาเจ้าของร้านเอง (ใช้โควตา 1 ข้อความ) ----------
 async function adminBroadcastTest(p, ctx) {
   const oa = needOa(ctx);
-  const d = cleanDraft(p.draft);
+  const d = cleanDraft(p.draft, ctx.shop);
   const reqId = U.cleanRequestId(p.requestId);
   try {
     await oa.profile(ctx.user.userId);
@@ -309,7 +413,7 @@ async function adminBroadcastSend(p, ctx) {
   const prev = (await ctx.db.query('select * from broadcasts where shop_id = $1 and request_id = $2', [shopId, reqId])).rows[0];
   if (prev) return { broadcast: view(await resumeRow(ctx, oa, prev), ctx.now) };
 
-  const d = cleanDraft(p.draft);
+  const d = cleanDraft(p.draft, ctx.shop);
   const { c, args } = await prepare(ctx, p.filter);
   const ids = (await ctx.db.query(`select id from members where ${WHERE} and ${SENDABLE_SQL} order by id`, args)).rows.map((r) => String(r.id));
   if (!ids.length) throw userError('ไม่มีลูกค้าที่ส่งได้ตามเงื่อนไขนี้', 'NO_RECIPIENTS');
@@ -327,10 +431,10 @@ async function adminBroadcastSend(p, ctx) {
     spendMin: c.spendMin, spendMax: c.spendMax, visitsMin: c.visitsMin, visitsMax: c.visitsMax,
     lastVisit: p.filter && p.filter.lastVisit ? String(p.filter.lastVisit) : '', lastVisitDays: c.visitedSince || c.quietSince ? U.toInt(p.filter.lastVisitDays) : null,
     joinedDays: c.joinedSince ? U.toInt(p.filter.joinedDays) : null };
-  const row = (await ctx.db.query(`insert into broadcasts (shop_id, id, request_id, created_by, created_by_name, filter, message_text, message_image, recipients, total)
-      values ($1, $2, $3, $4, $5, $6::text::jsonb, $7, $8, $9::text[], $10)
+  const row = (await ctx.db.query(`insert into broadcasts (shop_id, id, request_id, created_by, created_by_name, filter, message_text, message_image, messages, recipients, total)
+      values ($1, $2, $3, $4, $5, $6::text::jsonb, $7, $8, $9::text::jsonb, $10::text[], $11)
       on conflict (shop_id, request_id) do nothing returning *`,
-    [shopId, 'BC-' + U.randomCode(8), reqId, ctx.user.userId, ctx.staff.name || '', JSON.stringify(filter), d.text, d.image, ids, ids.length])).rows[0];
+    [shopId, 'BC-' + U.randomCode(8), reqId, ctx.user.userId, ctx.staff.name || '', JSON.stringify(filter), d.text, d.image, JSON.stringify(d.messages), ids, ids.length])).rows[0];
   if (!row) { // คำขอเดียวกันมาถึงพร้อมกันอีกอัน → ใช้แถวของอันนั้น
     const other = (await ctx.db.query('select * from broadcasts where shop_id = $1 and request_id = $2', [shopId, reqId])).rows[0];
     return { broadcast: view(other, ctx.now) };
@@ -359,6 +463,6 @@ async function adminBroadcastResume(p, ctx) {
 }
 
 module.exports = {
-  adminAudience, adminBroadcastInfo, adminBroadcastTest, adminBroadcastSend, adminBroadcastResume,
-  cleanFilter, cleanDraft, SENDABLE_SQL, PREVIEW, BATCH
+  adminAudience, adminBroadcastInfo, adminBroadcastTest, adminBroadcastSend, adminBroadcastResume, adminUploadRichImage,
+  cleanFilter, cleanDraft, imageSize, SENDABLE_SQL, PREVIEW, BATCH, RICH_WIDTHS
 };

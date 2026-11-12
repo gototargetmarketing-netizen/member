@@ -122,10 +122,12 @@ node tools/new-shop.js edit demo  # แก้แพ็กเกจร้าน d
 ## ส่งข้อความตามกลุ่ม (ระบบใหม่ — หลังบ้านเมนู "ส่งข้อความ")
 เจ้าของร้านเลือกกลุ่มลูกค้า → เห็นจำนวนคน → เขียนข้อความ + รูป → ส่งทดสอบหาตัวเอง → ส่งจริงผ่าน LINE OA ของร้าน
 - ส่งเฉพาะลูกค้าที่ยินยอมรับข่าวสาร + สมัครผ่าน LINE + ไม่ถูกระงับ (ระบบกรองเอง) / ใช้โควตาข้อความของแพ็กเกจ LINE OA ร้าน
-- เปิดใช้: สวิตช์แพ็กเกจ `broadcast` + ตาราง `db/005_broadcasts.sql` (วางใน Supabase ครั้งเดียว) + รหัส OA ของร้านใน Vercel
+- **รูปส่งเป็นริชเมสเสจ** (เต็มความกว้างแชต): เลือกรูปเดียว หน้าเว็บย่อเป็น 5 ขนาดให้เอง / แนะนำ 1040 × 1040 px ใช้ได้ตั้งแต่แนวนอน 2:1 ถึงแนวตั้ง 2:3 (ไม่ตัดรูปให้) / แตะรูปแล้วเปิดลิงก์ที่ร้านใส่ (ว่าง = บัตรสมาชิกของร้าน) / ลูกค้าแตะเพื่อขยายรูปไม่ได้
+- เปิดใช้: สวิตช์แพ็กเกจ `broadcast` + ตาราง `db/005_broadcasts.sql` และ `db/006_broadcast_rich.sql` (วางใน Supabase ครั้งเดียว ตามลำดับ) + รหัส OA ของร้านใน Vercel
 - **เชื่อม LINE OA ของร้าน:** OA ต้องอยู่ **Provider เดียวกับช่อง LIFF ของร้าน** (ไม่งั้น LINE ID ที่เก็บไว้ใช้ส่งไม่ได้ และย้ายทีหลังไม่ได้)
   → LINE OA Manager เปิด Messaging API → LINE Developers ออก Channel access token (long-lived)
-  → Vercel → Settings → Environment Variables: `LINE_OA_TOKEN_<รหัสร้านตัวใหญ่>` เช่น `LINE_OA_TOKEN_DEMO` (Preview = ลิงก์ทดสอบ / Production = เว็บจริง) → Redeploy
+  → Vercel → เมนู Environment Variables (หรือ Settings → Environments → กดชื่อ Preview / Production): `LINE_OA_TOKEN_<รหัสร้านตัวใหญ่>` เช่น `LINE_OA_TOKEN_DEMO` (Preview = ลิงก์ทดสอบ / Production = เว็บจริง)
+  → **Redeploy ให้ถูกตัว:** แท็บ Deployments → อันล่าสุดของ branch นั้น (`dev` = ลิงก์ทดสอบ) → ⋯ → Redeploy (กดอันบนสุดที่เป็น Production = ลิงก์ทดสอบไม่ได้ค่าใหม่)
   → เช็ก: หน้าส่งข้อความขึ้นชื่อ OA + โควตา / เจ้าของร้านที่เพิ่ม OA เป็นเพื่อนแล้วกด "ส่งทดสอบหาตัวเอง" ได้
 - ลองในเครื่อง: `node tools/api-server.js` มี LINE OA จำลองให้ร้าน demo (ไม่ส่งจริง) ดูสิ่งที่ "ส่ง" ไปที่ http://localhost:8105/__oa
 

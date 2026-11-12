@@ -34,7 +34,14 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
   // LINE OA จำลองแยกร้าน — ชื่อ OA ร้าน B มีคำลับ: ร้าน A เห็นชื่อนี้ = ใช้ OA ผิดร้าน
   const { createFakeOa } = require('./fake-oa');
   const oas = { [A]: createFakeOa({ name: 'OA ร้านเอ', limit: null }), [B]: createFakeOa({ name: 'OA ร้านบี ' + SECRET, limit: null }) };
-  const app = createApp({ db: () => db, verifier: {}, allowTestTokens: true, region: 'test', oa: (shop) => (oas[shop] ? oas[shop].oa : null) });
+  // ที่เก็บรูปจำลอง: จดทุกไฟล์ → ตรวจว่ารูปของร้าน A ไปอยู่โฟลเดอร์ร้าน A
+  const uploads = [];
+  const storage = { upload: async (p) => { uploads.push(p); return 'https://storage.test/storage/v1/object/public/images/' + p; } };
+  const app = createApp({ db: () => db, verifier: {}, allowTestTokens: true, region: 'test', storage: () => storage, oa: (shop) => (oas[shop] ? oas[shop].oa : null) });
+  // รูปริชเมสเสจ 5 ขนาด (หัวไฟล์ JPG ที่บอกขนาด — ตัวกลางอ่านแค่ส่วนหัว)
+  const jpg = (w, h) => Buffer.from([0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xFF, 0xD9]).toString('base64');
+  const richImages = Object.fromEntries([1040, 700, 460, 300, 240].map((w) => [w, jpg(w, w)]));
+  const richOf = (shop) => 'https://storage.test/storage/v1/object/public/images/' + shop + '/rich-2026-11-12-ABCDEF';
   const call = (shop, user, action, body) => app.handle(Object.assign({ shop, idToken: `TEST:${user}:${user}`, action, requestId: crypto.randomUUID() }, body || {}));
   const must = async (label, p) => { const r = await p; if (!r.ok) throw new Error(label + ': ' + JSON.stringify(r)); return r; };
 
@@ -139,7 +146,15 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
     adminBroadcastInfo: [{ as: OA, body: {}, check: (r) => r.ok && r.connected && r.oa.name === 'OA ร้านเอ' && r.history.length === 0,
       note: 'เห็น OA และประวัติของร้าน A เท่านั้น (ร้าน B เคยส่ง 1 ครั้ง)' }],
     adminBroadcastTest: [{ as: OA, body: { draft: { text: 'ทดสอบร้านเอ' } }, check: (r) => r.ok && oas[A].state.pushes.length === 1 && oas[B].state.pushes.length === 0,
-      note: 'ส่งทดสอบผ่าน OA ร้าน A' }],
+      note: 'ส่งทดสอบผ่าน OA ร้าน A' },
+    { as: OA, body: { draft: { image: richOf(A), imageHeight: 1040 } },
+      check: (r) => r.ok && oas[A].state.pushes.length === 2 && oas[A].state.pushes[1].messages[0].actions[0].linkUri === 'https://liff.line.me/1000000001-Aaaa',
+      note: 'ริชเมสเสจไม่ใส่ลิงก์ → แตะแล้วเปิดบัตรสมาชิกของร้าน A (ไม่ใช่ร้าน B)' },
+    { as: OA, body: { draft: { image: richOf(B), imageHeight: 1040 } }, reject: true, note: 'ส่งรูปริชเมสเสจของร้าน B' }],
+    adminUploadRichImage: [{ as: OA, body: { images: richImages },
+      check: (r) => r.ok && r.image === 'https://storage.test/storage/v1/object/public/images/' + uploads[uploads.length - 1].replace(/\/240$/, '') &&
+        uploads.length === 5 && uploads.every((u) => u.startsWith(A + '/rich-')),
+      note: 'อัปรูปริชเมสเสจ → เก็บ 5 ขนาดในโฟลเดอร์ร้าน A' }],
     adminBroadcastSend: [{ as: OA, body: { filter: {}, draft: { text: 'ข่าวร้านเอ' }, expect: 2 },
       check: (r) => r.ok && r.broadcast.sent === 2 && oas[B].state.multicasts.length === 1 &&
         JSON.stringify(oas[A].state.multicasts.flatMap((m) => m.to).sort()) === JSON.stringify(['U_A1', 'U_A2']),

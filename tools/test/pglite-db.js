@@ -15,7 +15,7 @@ function wrap(pg) {
 }
 
 // ไฟล์ปรับตารางตามลำดับ (เหมือนที่วางใน Supabase) — 002 เป็นข้อมูลทดลอง ไม่ใช่การปรับตาราง
-const MIGRATIONS = ['001_schema.sql', '003_delete_and_tiers.sql', '004_tier_points_benefits.sql', '005_broadcasts.sql'];
+const MIGRATIONS = ['001_schema.sql', '003_delete_and_tiers.sql', '004_tier_points_benefits.sql', '005_broadcasts.sql', '006_broadcast_rich.sql'];
 
 // สร้างฐานข้อมูลใหม่ในหน่วยความจำ + ตาราง (001, 003 …) + ร้านทดลอง demo (002 ถ้า withDemo)
 async function createTestDb({ withDemo = true } = {}) {
