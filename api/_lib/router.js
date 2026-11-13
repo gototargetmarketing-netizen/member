@@ -91,7 +91,8 @@ const ACTIONS = {
 const ms = (t0) => Math.round((performance.now() - t0) * 10) / 10;
 
 function actPing(body, ctx) {
-  return { service: 'LINE CRM', version: API_VERSION, region: ctx.region, cold: ctx.cold, ms: ms(ctx.t0) };
+  // shopFiles = จำนวนไฟล์ร้านที่ตัวกลางเห็น (0 = Vercel ไม่ได้แนบ shops/ → ทุกร้านถูกปิดทุกแพ็กเกจ)
+  return { service: 'LINE CRM', version: API_VERSION, region: ctx.region, cold: ctx.cold, shopFiles: features.shopFileCount(), ms: ms(ctx.t0) };
 }
 
 function actWhoami(body, ctx) {

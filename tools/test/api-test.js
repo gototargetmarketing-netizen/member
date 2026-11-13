@@ -920,6 +920,20 @@ function fakeLine() {
       ok(!n1.tiers && !n1.branches && n1.export && !n1.broadcast && n1.maxBranches === null, 'ต้องเป็น true เท่านั้นถึงเปิด (เหมือนหน้าเว็บ) / ปิดสาขาแล้วไม่สนเพดาน', n1);
       ok(Fx.normalize({ branches: true, maxBranches: 2 }).maxBranches === 2 && Fx.normalize({ branches: true, maxBranches: 2.5 }).maxBranches === null &&
         Fx.normalize({ branches: true, maxBranches: 0 }).maxBranches === null && Fx.normalize(null).tiers === false, 'เพดานสาขา: จำนวนเต็ม > 0 เท่านั้น (นอกนั้น = ไม่จำกัด)');
+      // ตัวกลางอ่านไฟล์เป็นข้อความ (ไม่รันโค้ด) → ต้องได้ค่าเท่ากับที่หน้าเว็บได้จากการเปิดไฟล์จริง ทุกร้าน
+      const parity = [];
+      for (const id of shopIds) {
+        const text = fs.readFileSync(path.join(ROOT, 'shops', id, 'config.js'), 'utf8');
+        const real = (await import('data:text/javascript;charset=utf-8,' + encodeURIComponent(text))).default.features;
+        parity.push([id, JSON.stringify(Fx.normalize(real)) === JSON.stringify(Fx.normalize(Fx.parseFeatures(text)))]);
+      }
+      ok(parity.every((x) => x[1]), 'อ่านแบบข้อความได้แพ็กเกจตรงกับหน้าเว็บทุกร้าน', parity);
+      const sample = "export default {\n  name: 'ร้าน // ไม่ใช่คอมเมนต์',\n  privacyUrl: 'https://x.test/a',\n  // features: { tiers: true },\n" +
+        "  features: {\n    tiers: false,      // คอมเมนต์ท้ายบรรทัด\n    /* broadcast: true, */\n    branches: true, maxBranches: 4,\n    export: true,\n    broadcast: someVar\n  },\n  legal: { x: 1 }\n};\n";
+      const ps = Fx.normalize(Fx.parseFeatures(sample));
+      ok(!ps.tiers && ps.branches && ps.maxBranches === 4 && ps.export && !ps.broadcast, 'ตัวแยกข้อความ: ข้ามคอมเมนต์ / ลิงก์ https:// ไม่โดนตัด / ค่าที่ไม่ใช่ตัวตรง (ตัวแปร) = ปิด', ps);
+      ok(KEYS_OFF(Fx.normalize(Fx.parseFeatures("export default { name: 'x' };"))), 'ไม่มีส่วน features = ปิดหมด (เหมือนหน้าเว็บ)');
+      ok(Fx.shopFileCount() === shopIds.length, 'ping นับไฟล์ร้านที่ตัวกลางเห็นได้ (' + Fx.shopFileCount() + ')');
       const vj = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8'));
       ok(vj.functions && vj.functions['api/index.js'] && vj.functions['api/index.js'].includeFiles === 'shops/**', 'vercel.json แนบโฟลเดอร์ shops/ ไปกับตัวกลาง (ไม่แนบ = ทุกร้านถูกปิดทุกแพ็กเกจบน Vercel)');
 

@@ -30,21 +30,41 @@ function normalize(f) {
 
 const ALL_OFF = Object.freeze(normalize({}));
 
-// อ่านไฟล์ร้านแบบ ES module ผ่าน data: URL (ไม่ต้องเขียนไฟล์ชั่วคราว — เครื่อง Vercel เขียนไฟล์ได้แค่ /tmp)
-// ไฟล์ร้านเป็นโค้ดใน repo ของเราเอง (ระดับความเชื่อถือเท่ากับโค้ดตัวกลาง) จึงรันได้ → ได้ค่าตรงกับที่หน้าเว็บได้ทุกกรณี
+// อ่านไฟล์ร้านเป็น "ข้อความ" แล้วแยกเฉพาะส่วน features: { ... } — ไม่รันโค้ดในไฟล์
+// (เคยใช้ import() แบบ data: URL ใช้ได้ในเครื่อง แต่บน Vercel อ่านไม่ได้ ทุกร้านถูกปิดทุกแพ็กเกจ — 13 พ.ย. 2569)
+// รับเฉพาะค่าตรงตัว true / false / ตัวเลข แบบที่ tools/new-shop.js เขียน — ค่าอื่น (ตัวแปร สูตร) = ปิด
+// api-test เทียบผลกับการเปิดไฟล์จริงแบบหน้าเว็บทุกร้าน (ต้องได้ค่าเท่ากัน)
+function parseFeatures(text) {
+  // ตัดคอมเมนต์ // ท้ายบรรทัด (ต้องมีช่องว่างหรือต้นบรรทัดนำหน้า → ไม่ตัด https:// ในข้อความ) และ /* */
+  const clean = String(text || '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|\s)\/\/.*$/gm, '$1');
+  const m = clean.match(/(?:^|[\s,{])features\s*:\s*\{([^{}]*)\}/);
+  if (!m) return {};
+  const out = {};
+  m[1].split(/[,\n]/).forEach((part) => {
+    const kv = part.match(/^\s*['"]?([A-Za-z]+)['"]?\s*:\s*(true|false|\d+)\s*$/);
+    if (kv) out[kv[1]] = kv[2] === 'true' ? true : kv[2] === 'false' ? false : Number(kv[2]);
+  });
+  return out;
+}
+
 async function readFeatures(shopId) {
   if (!SHOP_ID.test(String(shopId || ''))) return ALL_OFF;
   const file = path.join(SHOPS_DIR, shopId, 'config.js');
   try {
-    const text = fs.readFileSync(file, 'utf8');
-    const mod = await import('data:text/javascript;charset=utf-8,' + encodeURIComponent(text));
-    const cfg = mod && mod.default;
-    if (!cfg || typeof cfg !== 'object') throw new Error('ไม่มี export default');
-    return Object.freeze(normalize(cfg.features));
+    return Object.freeze(normalize(parseFeatures(fs.readFileSync(file, 'utf8'))));
   } catch (e) {
     console.error('อ่านแพ็กเกจของร้าน ' + shopId + ' ไม่ได้ (' + (e && e.code === 'ENOENT' ? 'ไม่พบ ' + file +
       ' — ตรวจ includeFiles ใน vercel.json' : (e && e.message) || e) + ') → ปิดทุกแพ็กเกจของร้านนี้ไว้ก่อน');
     return ALL_OFF;
+  }
+}
+
+// จำนวนไฟล์ร้านที่ตัวกลางมองเห็น — ping ตอบค่านี้ ไว้เช็กจากภายนอกว่า Vercel แนบโฟลเดอร์ shops/ มาจริง (ไม่บอกแพ็กเกจของร้านไหน)
+function shopFileCount() {
+  try {
+    return fs.readdirSync(SHOPS_DIR).filter((d) => SHOP_ID.test(d) && fs.existsSync(path.join(SHOPS_DIR, d, 'config.js'))).length;
+  } catch (e) {
+    return 0;
   }
 }
 
@@ -55,4 +75,4 @@ function loadFeatures(shopId) {
 
 const has = (ctx, key) => !!(ctx && ctx.features && ctx.features[key] === true);
 
-module.exports = { loadFeatures, normalize, has, KEYS, ALL_OFF, _cache: cache };
+module.exports = { loadFeatures, normalize, parseFeatures, shopFileCount, has, KEYS, ALL_OFF, _cache: cache };
