@@ -9,11 +9,12 @@
 // ใช้ "Transaction pooler" ของ Supabase (พอร์ต 6543) ซึ่งทำมาสำหรับระบบแบบ Vercel ที่เปิด-ปิดเครื่องบ่อย
 // ทุกฟังก์ชันคืน { query(sql, params), tx(fn) } หน้าตาเดียวกับตัวจำลองในชุดทดสอบ
 const { userError } = require('./errors');
+const SUPABASE_CA = require('./supabase-ca');
 
 let pool = null;
 
 function connectionConfig(url) {
-  // sslmode ในลิงก์จะทับค่า ssl ด้านล่าง (pg รุ่นใหม่ถือว่า require = ตรวจใบรับรองเต็ม ซึ่งใบรับรองของ Supabase ไม่ผ่าน)
+  // sslmode ในลิงก์จะทับค่า ssl ด้านล่าง (ตัดออก ให้ใช้ใบรับรองของ Supabase ที่กำหนดไว้ข้างล่างเสมอ)
   try {
     const u = new URL(url);
     u.searchParams.delete('sslmode');
@@ -21,8 +22,9 @@ function connectionConfig(url) {
   } catch (e) { /* ลิงก์อ่านไม่ออก → ให้ pg แจ้ง error เอง */ }
   return {
     connectionString: url,
-    // เข้ารหัสการเชื่อมต่อเสมอ / ยังไม่ตรวจใบรับรองของ Supabase (ต้องใช้ไฟล์ใบรับรองของ Supabase — ทำก่อนใช้กับข้อมูลจริง ขั้น 7)
-    ssl: { rejectUnauthorized: false },
+    // เข้ารหัส + ตรวจใบรับรองเต็ม (ออกโดย Supabase Root CA และชื่อเครื่องตรง) — ปลายทางไม่ใช่ Supabase ตัวจริง = ไม่ส่งรหัสผ่าน/ข้อมูลไป
+    // (เดิม rejectUnauthorized: false = เข้ารหัสแต่ไม่ตรวจว่าคุยกับใคร — แก้ 13 พ.ย. 2569 ตามรายการขั้น 7)
+    ssl: { ca: SUPABASE_CA, rejectUnauthorized: true },
     max: 3,                        // เครื่องเดียวรับหลายคำขอพร้อมกันได้ แต่ไม่ต้องเปิดสายเยอะ (pooler ของ Supabase จำกัดจำนวน)
     idleTimeoutMillis: 10000,
     connectionTimeoutMillis: 5000,

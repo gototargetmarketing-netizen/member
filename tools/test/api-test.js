@@ -124,6 +124,15 @@ function fakeLine() {
 
   const cfg = connectionConfig('postgresql://postgres.abc:pw@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?sslmode=require');
   ok(!/sslmode/.test(cfg.connectionString) && cfg.ssl && cfg.max <= 5, 'ลิงก์ฐานข้อมูล: เอา sslmode ออก (ไม่ให้ทับค่าเข้ารหัส) + เปิดสายไม่เกิน 5', cfg.connectionString);
+  {
+    // ตรวจใบรับรองของ Supabase เต็มรูปแบบ (ปลอมตัวเป็น Supabase ไม่ได้) + ใบรับรองที่ฝังไว้คือ Supabase Root 2021 CA ตัวจริง และยังไม่หมดอายุ
+    const x = new crypto.X509Certificate(cfg.ssl.ca);
+    ok(cfg.ssl.rejectUnauthorized === true && /CN=Supabase Root 2021 CA/.test(x.subject) &&
+      x.fingerprint256 === '80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA' && new Date(x.validTo) > new Date(),
+      'เชื่อมฐานข้อมูล: ตรวจใบรับรองด้วย Supabase Root 2021 CA (หมดอายุ ' + x.validTo + ')');
+    const days = Math.floor((new Date(x.validTo) - new Date()) / 86400000);
+    if (days < 180) console.log('  ⚠️ ใบรับรอง Supabase จะหมดอายุในอีก ' + days + ' วัน — โหลดใบใหม่มาแทน api/_lib/supabase-ca.js');
+  }
 
   // หาร้านเกิดก่อนตรวจ LINE → รหัสร้านเสีย/ไม่มีอยู่ตอบ NO_SHOP โดยไม่ต้องมีรหัส LINE
   // (เดิมตรวจผ่านคำสั่งวัดความเร็ว speedCard ซึ่งลบแล้ว 7 พ.ย. 2569 — ส่วนวัดความเร็วไม่ต้องใช้แล้ว ผ่านเกณฑ์ไปตั้งแต่ขั้น 2)
