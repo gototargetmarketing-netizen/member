@@ -144,7 +144,7 @@ const STALE_SEC = 90;           // สถานะ "กำลังส่ง" �
 const HISTORY = 30;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const getOa = (ctx) => (ctx.deps && typeof ctx.deps.oa === 'function' ? ctx.deps.oa(ctx.shop.id) : null);
+const { getOa } = require('./oafriend'); // ตัวเดียวกับหน้าเพิ่มเพื่อน (ดูทั้งแพ็กเกจ + รหัส OA)
 function needOa(ctx) {
   const oa = getOa(ctx);
   if (!oa) throw userError('ร้านยังไม่ได้เชื่อม LINE OA กับระบบ กรุณาติดต่อผู้ดูแลระบบ', 'OA_NOT_CONNECTED');

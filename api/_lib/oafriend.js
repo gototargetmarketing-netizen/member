@@ -8,7 +8,10 @@ const FRESH_MS = 24 * 60 * 60 * 1000; // เป็นเพื่อนแล้
 const INFO_TTL_MS = 60 * 60 * 1000;   // @ไอดีของ OA เปลี่ยนยาก จำไว้ 1 ชม. (ไม่ต้องถาม LINE ทุกครั้งที่เปิดหน้าสมัคร)
 const infoCache = new Map();          // ร้าน → { basicId, at }
 
-const getOa = (ctx) => (ctx.deps && typeof ctx.deps.oa === 'function' ? ctx.deps.oa(ctx.shop.id) : null);
+// LINE OA ของร้าน — ต้องเปิดแพ็กเกจส่งข้อความ (features.broadcast) และมีรหัส OA ใน Vercel ทั้งคู่
+// (ปิดแพ็กเกจแต่ลืมลบรหัสใน Vercel → หน้าเพิ่มเพื่อนก่อนสมัคร / การ์ดเพิ่มเพื่อน / เมนูส่งข้อความ ไม่ทำงาน เหมือนไม่ได้เชื่อม)
+const getOa = (ctx) => (ctx.features && ctx.features.broadcast === true && ctx.deps && typeof ctx.deps.oa === 'function'
+  ? ctx.deps.oa(ctx.shop.id) : null);
 
 // true = เป็นเพื่อน / false = ยังไม่เป็นเพื่อนหรือบล็อก / null = ไม่รู้ (LINE ตอบไม่ได้ — ห้ามใช้ปิดกั้นลูกค้า)
 async function isFriend(oa, userId) {

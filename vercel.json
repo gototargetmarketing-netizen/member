@@ -1,5 +1,8 @@
 {
   "regions": ["sin1"],
+  "functions": {
+    "api/index.js": { "includeFiles": "shops/**" }
+  },
   "trailingSlash": false,
   "rewrites": [
     { "source": "/staff", "destination": "/staff.html" },

@@ -7,6 +7,7 @@ const crypto = require('crypto');
 const { createTestDb } = require('./pglite-db');
 const ROOT = path.join(__dirname, '..', '..');
 const { createApp } = require(path.join(ROOT, 'api', '_lib', 'router.js'));
+const { normalize } = require(path.join(ROOT, 'api', '_lib', 'features.js'));
 const U = require(path.join(ROOT, 'api', '_lib', 'util.js'));
 const T = require(path.join(ROOT, 'api', '_lib', 'tiers.js'));
 
@@ -22,7 +23,9 @@ const MONTH = 30.5 * U.DAY_MS;
     ($1, 'O', 'เจ้าของ', 'OWNER', 'ACTIVE'), ($1, 'A', 'ผู้จัดการ', 'ADMIN', 'ACTIVE'), ($1, 'C', 'แคชเชียร์', 'CASHIER', 'ACTIVE')`, [SHOP]);
   let clock = Date.parse('2026-03-10T05:00:00Z'); // 10 มี.ค. 2569 เวลาไทยบ่าย
   // นาฬิกาเดินทีละ 1 วินาทีทุกคำสั่ง (เหมือนของจริงที่รายการเกิดคนละเวลา) + เลื่อนข้ามเดือนได้
-  const app = createApp({ db: () => db, verifier: {}, allowTestTokens: true, region: 'test', now: () => (clock += 1000) });
+  const app = createApp({ db: () => db, verifier: {}, allowTestTokens: true, region: 'test', now: () => (clock += 1000),
+    // ร้านทดสอบไม่มีไฟล์ใน shops/ → ใส่แพ็กเกจระดับสมาชิกให้เอง (ชุดนี้ตรวจกติกาของระดับ ไม่ได้ตรวจแพ็กเกจ — ส่วนนั้นอยู่ใน api-test)
+    features: async () => normalize({ tiers: true }) });
   const log = console.log;
   console.log = (...a) => { if (/^ {2}[✓✗]|^\n?\[/.test(String(a[0]))) log(...a); }; // ซ่อนบันทึกของระบบ
   const call = (user, action, body) => app.handle(Object.assign({ shop: SHOP, idToken: `TEST:${user}:${user}`, action, requestId: crypto.randomUUID() }, body || {}));

@@ -17,6 +17,7 @@ const U = require(path.join(ROOT, 'api', '_lib', 'util.js'));
 let pass = 0, fail = 0;
 const ok = (c, m, x) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ ' + m + (x !== undefined ? '  → ' + JSON.stringify(x).slice(0, 300) : '')); } };
 const count = async (db, sql) => (await db.query(sql)).rows[0].n;
+const KEYS_OFF = (f) => !!f && !f.tiers && !f.branches && !f.export && !f.broadcast; // แพ็กเกจปิดหมด
 
 // ---------- รหัส LINE ปลอมที่ลงลายเซ็นจริง (แบบเดียวกับ LIFF: ES256) ----------
 const CHANNEL = '1234567890';
@@ -891,6 +892,125 @@ function fakeLine() {
     } finally {
       console.log = log;
       console.error = err;
+    }
+  }
+
+  console.log('\n[5.10] ตัวกลางตรวจแพ็กเกจของร้าน (features ใน shops/<ร้าน>/config.js — ไม่เชื่อแค่การซ่อนปุ่มในหน้าเว็บ)');
+  {
+    const Fx = require(path.join(ROOT, 'api', '_lib', 'features.js'));
+    const { ACTIONS } = require(path.join(ROOT, 'api', '_lib', 'router.js'));
+    const { createFakeOa } = require('./fake-oa');
+    const err = console.error, warn = console.warn;
+    let errs = [];
+    console.error = (...a) => errs.push(a.join(' '));
+    console.warn = () => {};
+    try {
+      // อ่านไฟล์ร้านจริง (ไฟล์เดียวกับที่หน้าเว็บใช้)
+      const demoF = await Fx.loadFeatures('demo');
+      ok(demoF.tiers && demoF.branches && demoF.export && demoF.broadcast && demoF.maxBranches === null, 'อ่านไฟล์ร้าน demo จริง: เปิดครบ 4 แพ็กเกจ ไม่จำกัดสาขา', demoF);
+      const shopIds = [...fs.readFileSync(path.join(ROOT, 'shops', 'shops.js'), 'utf8').matchAll(/id:\s*'([a-z0-9-]+)'/g)].map((m) => m[1]);
+      errs = [];
+      for (const id of shopIds) await Fx.loadFeatures(id);
+      ok(shopIds.length >= 2 && errs.length === 0, 'ทุกร้านใน shops.js (' + shopIds.join(', ') + ') อ่านแพ็กเกจได้ ไม่มี error', errs);
+      errs = [];
+      const missing = await Fx.loadFeatures('nosuch-shop');
+      ok(KEYS_OFF(missing) && errs.length === 1 && /ไม่พบ/.test(errs[0]), 'ไม่มีไฟล์ร้าน → ปิดทุกแพ็กเกจ + เขียนสาเหตุลง log', errs);
+      ok(KEYS_OFF(await Fx.loadFeatures('../demo')) && KEYS_OFF(await Fx.loadFeatures('')), 'รหัสร้านแปลก (../demo, ว่าง) → ปิดทุกแพ็กเกจ ไม่อ่านไฟล์นอกโฟลเดอร์ร้าน');
+      const n1 = Fx.normalize({ tiers: 'true', branches: 1, export: true, broadcast: null, maxBranches: 3 });
+      ok(!n1.tiers && !n1.branches && n1.export && !n1.broadcast && n1.maxBranches === null, 'ต้องเป็น true เท่านั้นถึงเปิด (เหมือนหน้าเว็บ) / ปิดสาขาแล้วไม่สนเพดาน', n1);
+      ok(Fx.normalize({ branches: true, maxBranches: 2 }).maxBranches === 2 && Fx.normalize({ branches: true, maxBranches: 2.5 }).maxBranches === null &&
+        Fx.normalize({ branches: true, maxBranches: 0 }).maxBranches === null && Fx.normalize(null).tiers === false, 'เพดานสาขา: จำนวนเต็ม > 0 เท่านั้น (นอกนั้น = ไม่จำกัด)');
+      const vj = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8'));
+      ok(vj.functions && vj.functions['api/index.js'] && vj.functions['api/index.js'].includeFiles === 'shops/**', 'vercel.json แนบโฟลเดอร์ shops/ ไปกับตัวกลาง (ไม่แนบ = ทุกร้านถูกปิดทุกแพ็กเกจบน Vercel)');
+
+      // ตัวกลางที่เปลี่ยนแพ็กเกจได้ระหว่างทดสอบ
+      let pkg = Fx.normalize({});
+      const fake = createFakeOa({ limit: null });
+      const pa = createApp({ db: () => db, verifier: createVerifier({ fetch: fakeLine().fetch }), allowTestTokens: true, region: 'test',
+        oa: (shop) => (shop === 'demo' ? fake.oa : null), features: async () => pkg });
+      const OW = 'TEST:U_DEMO_OWNER:เจ้าของ';
+      const call = (action, body, tok) => pa.handle(Object.assign({ action, shop: 'demo', idToken: tok || OW, requestId: crypto.randomUUID() }, body));
+      const DASH = { from: U.thaiDay(new Date(Date.now() - 29 * U.DAY_MS)), to: U.thaiDay(new Date()) }; // ภาพรวม 30 วันล่าสุด
+      const gated = Object.keys(ACTIONS).filter((a) => ACTIONS[a].feature);
+      const byFeature = {};
+      gated.forEach((a) => { (byFeature[ACTIONS[a].feature] = byFeature[ACTIONS[a].feature] || []).push(a); });
+      ok(gated.length === 11 && Object.keys(byFeature).sort().join() === 'branches,broadcast,export,tiers', 'ตารางคำสั่ง: 11 คำสั่งผูกกับ 4 แพ็กเกจ', byFeature);
+      ok(gated.every((a) => ACTIONS[a].roles && ACTIONS[a].roles.indexOf('CASHIER') < 0), 'คำสั่งของแพ็กเกจเป็นของเจ้าของร้าน/ผู้จัดการเท่านั้น');
+
+      // ปิดทุกแพ็กเกจ → ทุกคำสั่งของแพ็กเกจไม่ยอม (เจ้าของร้านก็ไม่ได้)
+      const offRes = [];
+      for (const a of gated) offRes.push([a, (await call(a, {})).code]);
+      ok(offRes.every((x) => x[1] === 'NOT_IN_PACKAGE'), 'ปิดทุกแพ็กเกจ → เจ้าของร้านเรียกทั้ง 11 คำสั่งตรงๆ ได้ NOT_IN_PACKAGE', offRes.filter((x) => x[1] !== 'NOT_IN_PACKAGE'));
+      r = await call('adminExport', {});
+      ok(!r.ok && /ยังไม่ได้เปิดใช้ฟีเจอร์นี้/.test(r.error), 'ข้อความที่เห็น: "ร้านนี้ยังไม่ได้เปิดใช้ฟีเจอร์นี้ กรุณาติดต่อผู้ดูแลระบบ"', r);
+      r = await call('adminExport', {}, 'TEST:U_NOT_STAFF:คนนอก');
+      ok(!r.ok && r.code !== 'NOT_IN_PACKAGE', 'คนที่ไม่ใช่พนักงาน → ถูกปฏิเสธที่บทบาทก่อน (ไม่รู้ว่าร้านซื้อแพ็กเกจอะไร)', r);
+      r = await call('adminMembers', {});
+      const r2 = await call('adminBranches', {});
+      ok(r.ok && r2.ok, 'คำสั่งที่ไม่ใช่ของแพ็กเกจ (รายชื่อสมาชิก / อ่านรายชื่อสาขา) ใช้ได้ตามปกติ');
+      r = await call('adminDashboard', DASH);
+      ok(r.ok && Array.isArray(r.byBranch) && r.byBranch.length === 0, 'ปิดแพ็กเกจหลายสาขา → ภาพรวมไม่มีตารางเทียบสาขา', r.byBranch);
+
+      // เปิดทีละแพ็กเกจ → เปิดเฉพาะคำสั่งของแพ็กเกจนั้น
+      for (const key of Object.keys(byFeature)) {
+        pkg = Fx.normalize({ [key]: true });
+        const res = [];
+        for (const a of gated) res.push([a, ACTIONS[a].feature === key, (await call(a, {})).code]);
+        ok(res.every(([, mine, code]) => (code === 'NOT_IN_PACKAGE') === !mine), 'เปิดเฉพาะ ' + key + ' → คำสั่งของ ' + key + ' ผ่านด่านแพ็กเกจ ที่เหลือยังไม่ยอม',
+          res.filter(([, mine, code]) => (code === 'NOT_IN_PACKAGE') === mine));
+      }
+      pkg = Fx.normalize({ export: true });
+      r = await call('adminExport', { kind: 'members' });
+      ok(r.ok, 'เปิดส่งออก Excel → ส่งออกได้จริง', r.code);
+      pkg = Fx.normalize({ tiers: true });
+      r = await call('adminTiers', {});
+      ok(r.ok, 'เปิดระดับสมาชิก → อ่านหน้าระดับได้จริง', r.code);
+      pkg = Fx.normalize({ branches: true });
+      r = await call('adminDashboard', DASH);
+      ok(r.ok && r.byBranch.length > 0, 'เปิดหลายสาขา → ภาพรวมมีตารางเทียบสาขา', r.byBranch && r.byBranch.length);
+
+      // หน้าเพิ่มเพื่อน OA (คำสั่งลูกค้า) ไปกับแพ็กเกจส่งข้อความ — มีรหัส OA อยู่ก็ตาม
+      pkg = Fx.normalize({ broadcast: false });
+      r = await call('bootstrap', {}, 'TEST:U_PKG_NEW:ลูกค้าใหม่');
+      ok(r.ok && r.oa === undefined, 'ปิดแพ็กเกจส่งข้อความ (รหัส OA ยังอยู่) → หน้าลูกค้าไม่มีหน้าเพิ่มเพื่อน OA / การ์ดเพิ่มเพื่อน', r.oa);
+      r = await call('adminBroadcastInfo', {});
+      ok(!r.ok && r.code === 'NOT_IN_PACKAGE', 'ปิดแพ็กเกจส่งข้อความ → หน้าส่งข้อความไม่ยอม (แม้มีรหัส OA)', r);
+      pkg = Fx.normalize({ broadcast: true });
+      r = await call('bootstrap', {}, 'TEST:U_PKG_NEW:ลูกค้าใหม่');
+      ok(r.ok && r.oa && typeof r.oa.friend === 'boolean', 'เปิดแพ็กเกจส่งข้อความ → หน้าลูกค้าเช็กเพื่อน OA ตามเดิม', r.oa);
+      r = await call('adminBroadcastInfo', {});
+      ok(r.ok, 'เปิดแพ็กเกจส่งข้อความ → หน้าส่งข้อความใช้ได้', r.code);
+
+      // เพดานสาขาตามแพ็กเกจ (นับเฉพาะสาขาที่เปิดอยู่ — เหมือนหน้าเว็บ)
+      const branches = async () => (await db.query(`select id, name, status from branches where shop_id = 'demo' order by id`)).rows;
+      const before = await branches();
+      const open = before.filter((b) => b.status === 'ACTIVE');
+      pkg = Fx.normalize({ branches: true, maxBranches: open.length });
+      const save = (branch) => call('adminBranchSave', { branch });
+      r = await save({ name: 'สาขาเกินแพ็กเกจ', status: 'ACTIVE' });
+      ok(!r.ok && r.code === 'TOO_MANY' && r.error.indexOf('แพ็กเกจของร้านเปิดได้ ' + open.length + ' สาขา') === 0, 'สาขาครบเพดาน → เพิ่มสาขาที่เปิดอยู่ไม่ได้ (ข้อความเดียวกับหน้าเว็บ)', r);
+      ok((await branches()).length === before.length, 'ไม่ยอม = ไม่มีสาขาใหม่ในฐานข้อมูล');
+      r = await save({ name: 'สาขาเตรียมเปิด', status: 'INACTIVE' });
+      const spare = r.branch && r.branch.id;
+      ok(r.ok && spare, 'เพิ่มสาขาแบบปิดไว้ก่อนได้ (ไม่นับเพดาน)', r);
+      r = await save({ id: spare, name: 'สาขาเตรียมเปิด', status: 'ACTIVE' });
+      ok(!r.ok && r.code === 'TOO_MANY', 'เปิดสาขาที่ปิดไว้กลับมา = นับเป็นสาขาที่เปิดเพิ่ม → ไม่ยอม', r);
+      r = await save({ id: open[0].id, name: open[0].name + ' (แก้ชื่อ)', status: 'ACTIVE' });
+      ok(r.ok, 'แก้ชื่อสาขาที่เปิดอยู่แล้ว → ได้ (ไม่ได้เปิดเพิ่ม)', r);
+      r = await save({ id: open[0].id, name: open[0].name, status: 'INACTIVE' });
+      const r3 = await save({ id: spare, name: 'สาขาเตรียมเปิด', status: 'ACTIVE' });
+      ok(r.ok && r3.ok, 'ปิดสาขาเก่า แล้วเปิดสาขาใหม่แทนได้', [r.code, r3.code]);
+      const after = await branches();
+      ok(after.filter((b) => b.status === 'ACTIVE').length === open.length, 'สาขาที่เปิดอยู่ไม่เกินเพดานตลอด (' + open.length + ')');
+      pkg = Fx.normalize({ branches: true });
+      r = await save({ name: 'สาขาไม่จำกัด', status: 'ACTIVE' });
+      ok(r.ok, 'ไม่มีเพดาน (maxBranches ไม่ใส่) → เพิ่มสาขาได้', r.code);
+      // คืนสาขาให้เหมือนเดิม (ชุดอื่นต่อจากนี้ไม่พึ่งสาขา แต่เก็บข้อมูลให้สะอาด)
+      await db.query(`update branches set status = 'ACTIVE', name = $2 where shop_id = 'demo' and id = $1`, [open[0].id, open[0].name]);
+      await db.query(`delete from branches where shop_id = 'demo' and not (id = any($1::text[]))`, [before.map((b) => b.id)]);
+    } finally {
+      console.error = err;
+      console.warn = warn;
     }
   }
 

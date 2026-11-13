@@ -11,6 +11,7 @@ const V = require('./views');
 const M = require('./members');
 const S = require('./staff');
 const T = require('./tiers');
+const F = require('./features');
 
 const PAGE_SIZE = 50;
 const MAX_RANGE_DAYS = 366;
@@ -355,7 +356,8 @@ async function adminDashboard(p, ctx) {
     period: { from: p.from, to: p.to, days: per.days, bucket },
     totals: { members: totals.members, activeMembers: totals.active, pointsOutstanding: totals.outstanding, branchMembers: totals.branch_members },
     branch,
-    byBranch: branch ? [] : await compareBranches(db, shopId, per),
+    // ตารางเทียบสาขาเป็นส่วนของแพ็กเกจหลายสาขา (ปิดแพ็กเกจ = ไม่คำนวณ หน้าเว็บก็ไม่แสดงอยู่แล้ว)
+    byBranch: branch || !F.has(ctx, 'branches') ? [] : await compareBranches(db, shopId, per),
     current: sums.cur,
     previous: sums.prev,
     series,
@@ -972,12 +974,19 @@ async function adminBranchSave(p, ctx) {
 
   try {
     return await once(ctx, 'branchSave', p.requestId, async (q) => {
-      const rows = (await q.query('select id, name from branches where shop_id = $1', [shopId])).rows;
+      // for update: จองทุกแถวสาขาของร้าน → กดเพิ่มสาขาพร้อมกัน 2 เครื่องนับเพดานแพ็กเกจไม่พลาด (ร้านหนึ่งมีไม่กี่สาขา)
+      const rows = (await q.query('select id, name, status from branches where shop_id = $1 for update', [shopId])).rows;
       if (rows.some((r) => U.upper(r.id) !== id && String(r.name || '').trim().toLowerCase() === name.toLowerCase())) throw dup();
       let savedId = id;
+      const cur = id ? rows.find((r) => U.upper(r.id) === id) : null;
+      if (id && !cur) throw userError('ไม่พบสาขานี้', 'NOT_FOUND');
+      // เพดานแพ็กเกจ (features.maxBranches) นับเฉพาะสาขาที่เปิดอยู่ — เหมือนหน้าเว็บ: ปิดสาขาเก่าแล้วเปิดสาขาใหม่แทนได้
+      // เปิดสาขาที่ปิดไว้กลับมา = นับเป็นสาขาที่เปิดเพิ่ม / แก้ชื่อสาขาที่เปิดอยู่แล้ว ไม่นับ
+      const limit = ctx.features && ctx.features.maxBranches;
+      if (limit && status === 'ACTIVE' && (!cur || cur.status !== 'ACTIVE') && rows.filter((r) => r.status === 'ACTIVE').length >= limit) {
+        throw userError('แพ็กเกจของร้านเปิดได้ ' + limit + ' สาขา ปิดสาขาอื่นก่อน หรือติดต่อผู้ดูแลระบบเพื่ออัปเกรด', 'TOO_MANY');
+      }
       if (id) {
-        const cur = (await q.query('select 1 from branches where shop_id = $1 and id = $2 for update', [shopId, id])).rows[0];
-        if (!cur) throw userError('ไม่พบสาขานี้', 'NOT_FOUND');
         await q.query('update branches set name = $3, sort = $4, status = $5 where shop_id = $1 and id = $2', [shopId, id, name, sort == null ? 0 : sort, status]);
       } else {
         if (rows.length >= MAX_BRANCHES) throw userError('เพิ่มสาขาได้ไม่เกิน ' + MAX_BRANCHES + ' สาขา', 'TOO_MANY');

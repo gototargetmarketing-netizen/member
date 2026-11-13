@@ -17,6 +17,7 @@ const { createTestDb } = require('./pglite-db');
 
 const ROOT = path.join(__dirname, '..', '..');
 const { createApp, ACTIONS } = require(path.join(ROOT, 'api', '_lib', 'router.js'));
+const { normalize } = require(path.join(ROOT, 'api', '_lib', 'features.js'));
 const U = require(path.join(ROOT, 'api', '_lib', 'util.js'));
 
 let pass = 0, fail = 0;
@@ -37,7 +38,9 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
   // ที่เก็บรูปจำลอง: จดทุกไฟล์ → ตรวจว่ารูปของร้าน A ไปอยู่โฟลเดอร์ร้าน A
   const uploads = [];
   const storage = { upload: async (p) => { uploads.push(p); return 'https://storage.test/storage/v1/object/public/images/' + p; } };
-  const app = createApp({ db: () => db, verifier: {}, allowTestTokens: true, region: 'test', storage: () => storage, oa: (shop) => (oas[shop] ? oas[shop].oa : null) });
+  const app = createApp({ db: () => db, verifier: {}, allowTestTokens: true, region: 'test', storage: () => storage, oa: (shop) => (oas[shop] ? oas[shop].oa : null),
+    // ร้านทดสอบไม่มีไฟล์ใน shops/ → เปิดทุกแพ็กเกจให้ทั้ง 2 ร้าน (ชุดนี้ตรวจว่าข้อมูลไม่ข้ามร้าน ทุกคำสั่งต้องเรียกได้จริง)
+    features: async () => normalize({ tiers: true, branches: true, export: true, broadcast: true }) });
   // รูปริชเมสเสจ 5 ขนาด (หัวไฟล์ JPG ที่บอกขนาด — ตัวกลางอ่านแค่ส่วนหัว)
   const jpg = (w, h) => Buffer.from([0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xFF, 0xD9]).toString('base64');
   const richImages = Object.fromEntries([1040, 700, 460, 300, 240].map((w) => [w, jpg(w, w)]));

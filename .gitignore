@@ -13,3 +13,5 @@ tools/test/shots/
 node_modules/
 # สิทธิ์ของ Claude Code เฉพาะเครื่องนี้ (เช่น อนุญาต push ขึ้น repo ของน้อง) — ไม่ขึ้น repo
 .claude/settings.local.json
+# คู่มือที่ผู้ใช้โหลดเก็บไว้ในเครื่อง (ตัวจริงอยู่ใน Claude Docs) — ไม่ขึ้น repo ของน้อง
+คู่มือใช้งาน/

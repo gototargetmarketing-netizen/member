@@ -11,14 +11,16 @@ const customer = require('./customer');
 const staff = require('./staff');
 const admin = require('./admin');
 const broadcast = require('./broadcast');
+const features = require('./features');
 
-const API_VERSION = '0.10.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก / 0.6.1 = ลบคำสั่งวัดความเร็วชั่วคราว (speedCard) / 0.7 = ส่งข้อความตามกลุ่ม รอบ 1 (คัดกลุ่ม) / 0.8 = รอบ 2 (ส่งผ่าน LINE OA ของร้าน) / 0.9 = รูปเป็นริชเมสเสจเต็มจอ / 0.10 = รอบ 3 (เพิ่มเพื่อน OA ก่อนสมัคร + แต้มรับข่าวสาร)
+const API_VERSION = '0.11.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก / 0.6.1 = ลบคำสั่งวัดความเร็วชั่วคราว (speedCard) / 0.7 = ส่งข้อความตามกลุ่ม รอบ 1 (คัดกลุ่ม) / 0.8 = รอบ 2 (ส่งผ่าน LINE OA ของร้าน) / 0.9 = รูปเป็นริชเมสเสจเต็มจอ / 0.10 = รอบ 3 (เพิ่มเพื่อน OA ก่อนสมัคร + แต้มรับข่าวสาร) / 0.11 = ตัวกลางตรวจแพ็กเกจของร้าน
 const { ALL_STAFF, MANAGERS } = staff;
 const OWNER = ['OWNER'];
 const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/; // ตรงกับเงื่อนไขในตาราง shops
 
 // shop: ต้องบอกร้าน / auth: ต้องมีรหัส LINE ที่ตรวจผ่าน / roles: บทบาทพนักงานที่ใช้ได้ (ไม่มี = ลูกค้าทั่วไป)
-// ตรวจบทบาทที่นี่ทุกคำสั่ง อย่าเชื่อการซ่อนปุ่มในหน้าเว็บ
+// feature: แพ็กเกจที่ร้านต้องเปิด (features ใน shops/<ร้าน>/config.js — ดู features.js) ไม่เปิด = NOT_IN_PACKAGE
+// ตรวจบทบาทและแพ็กเกจที่นี่ทุกคำสั่ง อย่าเชื่อการซ่อนปุ่มในหน้าเว็บ
 const ACTIONS = {
   // ตัวกลางยังทำงานไหม (ไม่แตะฐานข้อมูล ไม่ต้องเข้าสู่ระบบ) — ใช้วัดเวลาเดินทางเปล่าๆ
   ping: { shop: false, auth: false, run: actPing },
@@ -50,7 +52,7 @@ const ACTIONS = {
   adminStaff: { shop: true, auth: true, roles: MANAGERS, run: admin.adminStaff },
   adminStaffUpdate: { shop: true, auth: true, roles: MANAGERS, run: admin.adminStaffUpdate },
   // ไฟล์ที่ส่งออกไปแล้วร้านควบคุมไม่ได้ (PDPA) → เจ้าของร้านเท่านั้น
-  adminExport: { shop: true, auth: true, roles: OWNER, run: admin.adminExport },
+  adminExport: { shop: true, auth: true, roles: OWNER, feature: 'export', run: admin.adminExport },
   adminRewards: { shop: true, auth: true, roles: MANAGERS, run: admin.adminRewards },
   adminRewardSave: { shop: true, auth: true, roles: MANAGERS, run: admin.adminRewardSave },
   adminPromos: { shop: true, auth: true, roles: MANAGERS, run: admin.adminPromos },
@@ -66,7 +68,7 @@ const ACTIONS = {
   adminBrand: { shop: true, auth: true, roles: MANAGERS, run: admin.adminBrand },
   adminBrandSave: { shop: true, auth: true, roles: OWNER, run: admin.adminBrandSave },
   adminBranches: { shop: true, auth: true, roles: MANAGERS, run: admin.adminBranches },
-  adminBranchSave: { shop: true, auth: true, roles: OWNER, run: admin.adminBranchSave },
+  adminBranchSave: { shop: true, auth: true, roles: OWNER, feature: 'branches', run: admin.adminBranchSave },
   adminRules: { shop: true, auth: true, roles: MANAGERS, run: admin.adminRules },
   adminRuleSave: { shop: true, auth: true, roles: OWNER, run: admin.adminRuleSave },
   // ลบ (7 พ.ย. 2569): ใครแก้ได้ = ลบได้ (ของรางวัล/โปรโมชัน: เจ้าของร้าน+ผู้จัดการ / แต้มพิเศษ: เจ้าของร้าน)
@@ -74,16 +76,16 @@ const ACTIONS = {
   adminPromoDelete: { shop: true, auth: true, roles: MANAGERS, run: admin.adminPromoDelete },
   adminRuleDelete: { shop: true, auth: true, roles: OWNER, run: admin.adminRuleDelete },
   // ระดับสมาชิก (ขั้น 4): ผู้จัดการดูได้ / ตั้งระดับและเปลี่ยนระดับให้สมาชิก เฉพาะเจ้าของร้าน (มีผลกับต้นทุนเหมือนอัตราแต้ม)
-  adminTiers: { shop: true, auth: true, roles: MANAGERS, run: admin.adminTiers },
-  adminTiersSave: { shop: true, auth: true, roles: OWNER, run: admin.adminTiersSave },
-  adminMemberTier: { shop: true, auth: true, roles: OWNER, run: admin.adminMemberTier },
+  adminTiers: { shop: true, auth: true, roles: MANAGERS, feature: 'tiers', run: admin.adminTiers },
+  adminTiersSave: { shop: true, auth: true, roles: OWNER, feature: 'tiers', run: admin.adminTiersSave },
+  adminMemberTier: { shop: true, auth: true, roles: OWNER, feature: 'tiers', run: admin.adminMemberTier },
   // ส่งข้อความตามกลุ่ม (12 พ.ย. 2569): เจ้าของร้านเท่านั้น — ส่งผิดเรียกคืนไม่ได้ + ใช้โควตาข้อความของ OA ร้าน
-  adminAudience: { shop: true, auth: true, roles: OWNER, run: broadcast.adminAudience },
-  adminBroadcastInfo: { shop: true, auth: true, roles: OWNER, run: broadcast.adminBroadcastInfo },
-  adminBroadcastTest: { shop: true, auth: true, roles: OWNER, run: broadcast.adminBroadcastTest },
-  adminBroadcastSend: { shop: true, auth: true, roles: OWNER, run: broadcast.adminBroadcastSend },
-  adminBroadcastResume: { shop: true, auth: true, roles: OWNER, run: broadcast.adminBroadcastResume },
-  adminUploadRichImage: { shop: true, auth: true, roles: OWNER, run: broadcast.adminUploadRichImage }
+  adminAudience: { shop: true, auth: true, roles: OWNER, feature: 'broadcast', run: broadcast.adminAudience },
+  adminBroadcastInfo: { shop: true, auth: true, roles: OWNER, feature: 'broadcast', run: broadcast.adminBroadcastInfo },
+  adminBroadcastTest: { shop: true, auth: true, roles: OWNER, feature: 'broadcast', run: broadcast.adminBroadcastTest },
+  adminBroadcastSend: { shop: true, auth: true, roles: OWNER, feature: 'broadcast', run: broadcast.adminBroadcastSend },
+  adminBroadcastResume: { shop: true, auth: true, roles: OWNER, feature: 'broadcast', run: broadcast.adminBroadcastResume },
+  adminUploadRichImage: { shop: true, auth: true, roles: OWNER, feature: 'broadcast', run: broadcast.adminUploadRichImage }
 };
 
 const ms = (t0) => Math.round((performance.now() - t0) * 10) / 10;
@@ -162,6 +164,8 @@ function createApp(deps) {
       if (def.shop) {
         ctx.shop = await loadShop(body.shop);
         ctx.db = deps.db();
+        // แพ็กเกจของร้าน (ชุดทดสอบใส่แทนได้ด้วย deps.features) — คำสั่งลูกค้าก็ใช้ (หน้าเพิ่มเพื่อน OA มีเฉพาะแพ็กเกจส่งข้อความ)
+        ctx.features = await (deps.features ? deps.features(ctx.shop.id) : features.loadFeatures(ctx.shop.id));
       }
       if (def.auth) {
         const r = await requireUser(body.idToken, ctx.shop);
@@ -169,6 +173,11 @@ function createApp(deps) {
         ctx.via = r.via;
       }
       if (def.roles) ctx.staff = await staff.requireStaff(ctx, def.roles);
+      // ตรวจแพ็กเกจหลังตรวจบทบาท → คนที่ไม่ใช่พนักงานไม่รู้ว่าร้านซื้อแพ็กเกจอะไร
+      if (def.feature && !features.has(ctx, def.feature)) {
+        console.warn('ร้าน ' + ctx.shop.id + ' ไม่ได้เปิดแพ็กเกจ ' + def.feature + ' แต่มีคำขอ ' + action);
+        throw userError('ร้านนี้ยังไม่ได้เปิดใช้ฟีเจอร์นี้ กรุณาติดต่อผู้ดูแลระบบ', 'NOT_IN_PACKAGE');
+      }
 
       const result = (await def.run(body, ctx)) || {};
       const out = { ok: true };
