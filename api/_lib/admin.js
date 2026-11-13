@@ -15,7 +15,7 @@ const T = require('./tiers');
 const PAGE_SIZE = 50;
 const MAX_RANGE_DAYS = 366;
 const MAX_BRANCHES = 50;
-const TX_TYPES = ['EARN', 'WELCOME', 'REDEEM', 'ADJUST'];
+const TX_TYPES = ['EARN', 'WELCOME', 'REDEEM', 'ADJUST', 'CONSENT'];
 const STAFF_STATUSES = ['PENDING', 'ACTIVE', 'DISABLED'];
 const MULTIPLIERS = [1.5, 2, 3];
 
@@ -139,6 +139,10 @@ const SETTINGS_SPEC = [
   ['COUPON_DAYS', 'คูปองที่แลกแล้วใช้ได้กี่วัน (ใช้เมื่อรางวัลไม่ได้กำหนด Valid_Days)'],
   ['CONSENT_VERSION', 'เวอร์ชันนโยบายความเป็นส่วนตัว เปลี่ยนเลขเมื่อแก้นโยบาย'],
   ['HISTORY_LIMIT', 'จำนวนรายการประวัติล่าสุดที่ลูกค้าเห็น'],
+  // ส่งข้อความตามกลุ่ม รอบ 3 (ระบบใหม่เท่านั้น)
+  ['REQUIRE_OA_FRIEND', 'ต้องเพิ่มเพื่อน LINE ของร้านก่อนสมัครสมาชิก (ใช้ได้เมื่อเชื่อม LINE OA แล้ว)'],
+  ['CONSENT_PRETICKED', 'ติ๊กช่องยินยอมรับข่าวสารไว้ให้ในหน้าสมัคร'],
+  ['CONSENT_BONUS_POINTS', 'แต้มที่ได้เมื่อยินยอมรับข่าวสาร ครั้งเดียวต่อคน (0 = ไม่ให้)'],
   ['LOGO_URL', 'ลิงก์รูปโลโก้ (สี่เหลี่ยมจัตุรัส)'],
   ['THEME', 'สไตล์: luxury = หรู โทนเข้ม / minimal = เรียบ สว่าง'],
   ['COLOR_PRIMARY', 'สีหลัก (แถบหัวหน้าเว็บ) รูปแบบ #RRGGBB'],
@@ -159,8 +163,13 @@ const EDITABLE_SETTINGS = {
   MAX_PURCHASE: { type: 'num', min: 1, max: 10000000, label: 'ยอดซื้อสูงสุดต่อบิล', col: 'max_purchase' },
   CONFIRM_PURCHASE_OVER: { type: 'num', min: 1, max: 10000000, label: 'ยอดที่ต้องยืนยันซ้ำ', col: 'confirm_purchase_over' },
   COUPON_DAYS: { type: 'int', min: 1, max: 3650, label: 'อายุคูปอง', col: 'coupon_days' },
-  HISTORY_LIMIT: { type: 'int', min: 10, max: 200, label: 'จำนวนประวัติที่ลูกค้าเห็น', col: 'history_limit' }
+  HISTORY_LIMIT: { type: 'int', min: 10, max: 200, label: 'จำนวนประวัติที่ลูกค้าเห็น', col: 'history_limit' },
+  REQUIRE_OA_FRIEND: { type: 'bool', label: 'บังคับเพิ่มเพื่อนก่อนสมัคร', col: 'require_oa_friend' },
+  CONSENT_PRETICKED: { type: 'bool', label: 'ติ๊กยินยอมรับข่าวสารไว้ให้', col: 'consent_preticked' },
+  CONSENT_BONUS_POINTS: { type: 'int', min: 0, max: 100000, label: 'แต้มรับข่าวสาร', col: 'consent_bonus_points' }
 };
+// เปิด/ปิด เก็บเป็น ON / OFF (ทุกค่าในหน้าตั้งค่าเป็นข้อความ เหมือนชีต Settings เดิม)
+const onOff = (v) => (v === true ? 'ON' : 'OFF');
 
 // หน้าตาร้าน → ช่องใน shops.brand (jsonb) / SHOP_NAME = shops.name
 const BRAND_SETTINGS = {
@@ -187,7 +196,9 @@ function settingValues(shop) {
     SHOP_NAME: String(shop.name || ''), LIFF_ID: String(shop.liff_id || ''), MEMBER_PREFIX: String(shop.member_prefix || ''),
     POINT_RATE_BAHT: numStr(shop.point_rate_baht), MAX_PURCHASE: numStr(shop.max_purchase), CONFIRM_PURCHASE_OVER: numStr(shop.confirm_purchase_over),
     WELCOME_POINTS: numStr(shop.welcome_points), COUPON_DAYS: numStr(shop.coupon_days), CONSENT_VERSION: numStr(shop.consent_version),
-    HISTORY_LIMIT: numStr(shop.history_limit)
+    HISTORY_LIMIT: numStr(shop.history_limit),
+    REQUIRE_OA_FRIEND: onOff(shop.require_oa_friend), CONSENT_PRETICKED: onOff(shop.consent_preticked),
+    CONSENT_BONUS_POINTS: numStr(shop.consent_bonus_points)
   };
   Object.keys(BRAND_SETTINGS).forEach((k) => { if (BRAND_SETTINGS[k].path) s[k] = brandGet(shop.brand, BRAND_SETTINGS[k].path); });
   return s;
@@ -200,6 +211,12 @@ const settingItems = (shop) => {
 
 function cleanSetting(key, v) {
   const spec = EDITABLE_SETTINGS[key];
+  if (spec.type === 'bool') {
+    const b = String(v == null ? '' : v).trim().toUpperCase();
+    if (v === true || b === 'ON') return 'ON';
+    if (v === false || b === 'OFF') return 'OFF';
+    throw userError(spec.label + 'ต้องเป็น เปิด หรือ ปิด', 'BAD_INPUT');
+  }
   const raw = String(v == null ? '' : v).replace(/,/g, '').trim();
   const n = Number(raw);
   const ok = raw !== '' && isFinite(n) && n >= spec.min && n <= spec.max && (spec.type !== 'int' || Math.floor(n) === n);
@@ -846,7 +863,7 @@ async function adminSettingsSave(p, ctx) {
     const changed = keys.filter((k) => before[k] !== clean[k]);
     if (changed.length) {
       await q.query(`update shops set ${changed.map((k, i) => EDITABLE_SETTINGS[k].col + ' = $' + (i + 2)).join(', ')} where id = $1`,
-        [shopId].concat(changed.map((k) => Number(clean[k]))));
+        [shopId].concat(changed.map((k) => (EDITABLE_SETTINGS[k].type === 'bool' ? clean[k] === 'ON' : Number(clean[k])))));
       console.log('แก้ตั้งค่าร้าน ' + shopId + ' โดย ' + ctx.staff.name + ' — ' + changed.map((k) => k + ': ' + before[k] + ' → ' + clean[k]).join(' | '));
     }
     return { changed: changed.length, items: settingItems((await q.query(SHOP_SQL, [shopId])).rows[0]) };

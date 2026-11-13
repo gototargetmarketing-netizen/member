@@ -10,7 +10,7 @@ import { tierBanner } from './tier.js';
 import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, setBusy, showLoading, hideLoading, creditHtml, bootHtml, qrSvg, loadScript } from './ui.js';
 
 const ROLE_LABEL = { OWNER: 'เจ้าของร้าน', ADMIN: 'ผู้จัดการ', CASHIER: 'แคชเชียร์' };
-const TX_LABEL = { EARN: 'ยอดซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกรางวัล', ADJUST: 'ปรับแต้ม' };
+const TX_LABEL = { EARN: 'ยอดซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกรางวัล', ADJUST: 'ปรับแต้ม', CONSENT: 'รับข่าวสาร' };
 const COUPON_LABEL = { ACTIVE: 'ใช้ได้', USED: 'ใช้แล้ว', EXPIRED: 'หมดอายุ', CANCELLED: 'ยกเลิก' };
 const STAFF_STATUS_LABEL = { PENDING: 'รออนุมัติ', ACTIVE: 'ใช้งานได้', DISABLED: 'ปิดสิทธิ์' };
 const PAGES = [
@@ -834,7 +834,7 @@ function renderBroadcast(r) {
     </div>
     <section class="card adm-card" id="bc-history">${historyHtml()}</section>`;
   S.aud.dirty = false;
-  S.bc.count = r.sendable;
+  setAudCount(r);
   updateSendState();
   loadBroadcastInfo();
 }
@@ -849,6 +849,7 @@ function audResultHtml(r) {
     <div class="card-head"><h2>กลุ่มที่เลือก</h2></div>
     <div class="aud-count"><span>ส่งได้</span><b>${fmtNum(r.sendable)}</b><span>คน</span></div>
     <p class="muted small">ตรงเงื่อนไข ${fmtNum(r.matched)} คน${cut.length ? ` · ไม่นับ: ${cut.join(' · ')}` : ''}</p>
+    ${reachHtml(r)}
     ${r.items.length ? `
       <div class="tbl-wrap"><table class="tbl">
         <thead><tr><th>ชื่อ</th>${tiers.length ? '<th>ระดับ</th>' : ''}<th class="num">${esc(unit())}</th><th class="num">ยอดซื้อรวม</th><th class="num">ครั้ง</th><th>มาล่าสุด</th></tr></thead>
@@ -864,6 +865,24 @@ function audResultHtml(r) {
         </tbody></table></div>
       <p class="muted small">${r.sendable > r.items.length ? `ตัวอย่าง ${fmtNum(r.items.length)} คนที่สมัครล่าสุด จากทั้งหมด ${fmtNum(r.sendable)} คน` : `แสดงครบทั้ง ${fmtNum(r.items.length)} คน`}</p>`
     : `<div class="notice">${icon('alert', 18)}<span>ไม่มีลูกค้าที่ส่งได้ตามเงื่อนไขนี้ ลองลดเงื่อนไขลง</span></div>`}`;
+}
+
+// จำนวนของกลุ่มล่าสุด (ทุกที่ที่ได้ผลคัดกลุ่มต้องผ่านตรงนี้ — ไม่งั้นหน้ายืนยันใช้ตัวเลขของกลุ่มก่อนหน้า)
+// โควตาที่ใช้ = คนที่อาจได้รับ (ไม่นับคนที่รู้แน่ว่าไม่เป็นเพื่อน) — ตรงกับที่ตัวกลางตรวจตอนส่ง
+function setAudCount(r) {
+  S.bc.count = r.sendable;
+  S.bc.need = r.reach ? r.sendable - r.reach.notFriend : r.sendable;
+}
+
+// ในคนที่ส่งได้: กี่คนได้รับจริง (เป็นเพื่อน LINE OA) — สถานะจดตอนลูกค้าเปิดบัตร คนที่ยังไม่เคยเปิดหลังเริ่มจด = ยังไม่รู้
+// LINE ข้ามคนที่ไม่เป็นเพื่อน/บล็อกเอง (ไม่เสียโควตา) ระบบจึงยังส่งให้ทุกคนที่ส่งได้ เผื่อเพิ่งเพิ่มเพื่อน
+function reachHtml(r) {
+  const x = r.reach;
+  if (!x || !r.sendable) return '';
+  const parts = [`<b>ได้รับจริง ${fmtNum(x.friend)} คน</b> (เป็นเพื่อน LINE ของร้าน)`];
+  if (x.notFriend) parts.push(`ยังไม่เป็นเพื่อนหรือบล็อก ${fmtNum(x.notFriend)} คน — ไม่ได้รับ ไม่เสียโควตา`);
+  if (x.unknown) parts.push(`ยังไม่รู้สถานะ ${fmtNum(x.unknown)} คน (ยังไม่ได้เปิดบัตรสมาชิกตั้งแต่เริ่มนับ)`);
+  return `<p class="aud-reach small">${parts.join('<br>')}</p>`;
 }
 
 // อ่านฟอร์ม + ตรวจเบื้องต้น (ตัวกลางตรวจซ้ำเสมอ) → null = ผิด (แจ้งแล้ว)
@@ -900,7 +919,7 @@ async function submitAudience(form) {
     const r = await S.api.call('adminAudience', { filter });
     S.aud.filter = filter;
     S.aud.dirty = false;
-    S.bc.count = r.sendable;
+    setAudCount(r);
     updateSendState();
     const box = document.getElementById('aud-result');
     if (box) {
@@ -1058,13 +1077,14 @@ function confirmBroadcast() {
   const n = S.bc.count || 0;
   if (!n) return toast('ไม่มีลูกค้าที่ส่งได้ในกลุ่มนี้', 'err');
   const q = (S.bc.info && S.bc.info.quota) || {};
-  const short = q.limited && q.remaining < n;
+  const need = S.bc.need == null ? n : S.bc.need;
+  const short = q.limited && q.remaining < need;
   S.bc.pending = { draft, filter: S.aud.filter, expect: n };
   openModal(`
     <div class="modal-head"><h2>ยืนยันส่งข้อความ</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
     <div class="form">
       <div class="aud-count"><span>ส่งให้</span><b>${fmtNum(n)}</b><span>คน</span></div>
-      ${q.limited ? `<p class="small ${short ? 'text-danger' : 'muted'}">โควตาข้อความเดือนนี้ของ LINE OA เหลือ ${fmtNum(q.remaining)} ข้อความ${short ? ` ไม่พอส่ง ${fmtNum(n)} คน — ลดกลุ่มลง หรือเพิ่มแพ็กเกจ LINE OA` : ` (ครั้งนี้ใช้ไม่เกิน ${fmtNum(n)})`}</p>` : ''}
+      ${q.limited ? `<p class="small ${short ? 'text-danger' : 'muted'}">โควตาข้อความเดือนนี้ของ LINE OA เหลือ ${fmtNum(q.remaining)} ข้อความ${short ? ` ไม่พอส่ง ${fmtNum(need)} คน — ลดกลุ่มลง หรือเพิ่มแพ็กเกจ LINE OA` : ` (ครั้งนี้ใช้ไม่เกิน ${fmtNum(need)})`}</p>` : ''}
       <div class="bc-preview">${bcPreviewHtml(draft)}</div>
       <div class="notice">${icon('alert', 18)}<span>ส่งแล้ว<b>ยกเลิกหรือแก้ไขไม่ได้</b> ตรวจข้อความและกลุ่มลูกค้าให้เรียบร้อยก่อน</span></div>
       <div class="modal-actions">
@@ -1212,7 +1232,7 @@ function renderMember(r) {
             <td class="num tx-points ${ptsClass(t.points)}">${signed(t.points)}</td>
             <td class="num">${fmtNum(t.balance)}</td>
             <td>${esc(t.staff === 'SYSTEM' ? 'ระบบ' : t.staff || '-')}</td>
-            ${hasBranches() ? `<td class="nowrap">${esc(t.type === 'REDEEM' || t.type === 'WELCOME' ? '-' : branchName(t.branch))}</td>` : ''}
+            ${hasBranches() ? `<td class="nowrap">${esc(t.type === 'REDEEM' || t.type === 'WELCOME' || t.type === 'CONSENT' ? '-' : branchName(t.branch))}</td>` : ''}
           </tr>`).join('') : emptyRow(8, 'ยังไม่มีรายการ')}
         </tbody></table></div>
     </section>
@@ -2471,8 +2491,16 @@ const SETTING_UI = {
   COUPON_DAYS: { label: 'คูปองใช้ได้กี่วันหลังแลก', suffix: 'วัน', hint: 'ใช้กับของรางวัลที่ไม่ได้กำหนดจำนวนวันเอง' },
   MAX_PURCHASE: { label: 'ยอดซื้อสูงสุดต่อบิล', suffix: 'บาท', hint: 'กันพนักงานพิมพ์ตัวเลขเกิน' },
   CONFIRM_PURCHASE_OVER: { label: 'ยอดที่พนักงานต้องกดยืนยันซ้ำ', suffix: 'บาท', hint: 'ตั้งแต่ยอดนี้ขึ้นไป หน้าพนักงานจะถามอีกครั้ง' },
-  HISTORY_LIMIT: { label: 'จำนวนประวัติที่ลูกค้าเห็น', suffix: 'รายการ' }
+  HISTORY_LIMIT: { label: 'จำนวนประวัติที่ลูกค้าเห็น', suffix: 'รายการ' },
+  // ส่งข้อความรอบ 3 (ระบบใหม่เท่านั้น — ระบบเดิมไม่ส่งค่าเหล่านี้มา จึงไม่แสดง)
+  REQUIRE_OA_FRIEND: { label: 'ต้องเพิ่มเพื่อน LINE ของร้านก่อนสมัครสมาชิก', type: 'bool', hint: 'ส่งข้อความถึงสมาชิกได้แทบทุกคน · ใช้ได้เมื่อเชื่อม LINE OA แล้ว', broadcast: true },
+  CONSENT_PRETICKED: { label: 'ติ๊กช่อง "รับข่าวสาร" ไว้ให้ในหน้าสมัคร', type: 'bool', hint: 'ลูกค้าเอาติ๊กออกได้ และยกเลิกทีหลังได้ที่ "แก้ไขข้อมูล"' },
+  CONSENT_BONUS_POINTS: { label: 'แต้มเมื่อยินยอมรับข่าวสาร', suffix: 'แต้ม', hint: 'ได้ครั้งเดียวต่อคน · 0 = ไม่ให้' }
 };
+const ON_OFF = { ON: 'เปิด', OFF: 'ปิด' };
+// ค่าที่หน้านี้แสดง: เฉพาะที่ตัวกลางส่งมา (ระบบเดิมไม่มีค่าใหม่) + ค่าที่เกี่ยวกับ LINE OA เฉพาะร้านที่มีแพ็กเกจส่งข้อความ
+const settingKeys = () => Object.keys(SETTING_UI).filter(k => (S.settingsItems || []).some(x => x.key === k) && (!SETTING_UI[k].broadcast || broadcastFeature()));
+const settingText = (k, v) => (SETTING_UI[k].type === 'bool' ? ON_OFF[v] || v : v);
 const READONLY_UI = {
   LIFF_ID: 'LIFF ID',
   MEMBER_PREFIX: 'ตัวอักษรนำหน้ารหัสสมาชิก',
@@ -2492,10 +2520,12 @@ function renderSettings(r) {
     ${pageHead('ตั้งค่าร้าน', owner ? 'แก้แล้วมีผลกับรายการถัดไปทันที' : 'ผู้จัดการดูได้อย่างเดียว เจ้าของร้านเป็นคนแก้')}
     <section class="card adm-card">
       <form class="form settings-form" data-form="settings" autocomplete="off">
-        ${Object.keys(SETTING_UI).map(k => `
+        ${settingKeys().map(k => `
           <label class="setting-row">
             <span class="setting-label">${esc(SETTING_UI[k].label.replace('แต้ม', unit()))}${SETTING_UI[k].hint ? `<small>${esc(SETTING_UI[k].hint)}</small>` : ''}</span>
-            <span class="setting-input"><input name="${k}" value="${esc(get(k))}" inputmode="decimal" ${owner ? '' : 'disabled'}><span class="muted">${esc(unitOf(SETTING_UI[k].suffix))}</span></span>
+            <span class="setting-input">${SETTING_UI[k].type === 'bool'
+              ? `<select name="${k}" class="select" ${owner ? '' : 'disabled'}>${Object.keys(ON_OFF).map(v => `<option value="${v}" ${get(k) === v ? 'selected' : ''}>${ON_OFF[v]}</option>`).join('')}</select>`
+              : `<input name="${k}" value="${esc(get(k))}" inputmode="decimal" ${owner ? '' : 'disabled'}><span class="muted">${esc(unitOf(SETTING_UI[k].suffix))}</span>`}</span>
           </label>`).join('')}
         ${owner ? '<div><button class="btn btn-primary" type="submit">บันทึกการตั้งค่า</button></div>' : ''}
       </form>
@@ -2510,7 +2540,7 @@ function renderSettings(r) {
 function confirmSettings(form) {
   if (!isOwner()) return;
   const changes = [];
-  Object.keys(SETTING_UI).forEach(k => {
+  settingKeys().forEach(k => {
     const before = (S.settingsItems.find(x => x.key === k) || {}).value || '';
     const after = form.elements[k].value.replace(/,/g, '').trim();
     if (after !== before) changes.push({ key: k, before, after });
@@ -2519,7 +2549,7 @@ function confirmSettings(form) {
   S.pendingSettings = Object.fromEntries(changes.map(c => [c.key, c.after]));
   openModal(`
     <div class="modal-head"><h2>ยืนยันการตั้งค่า</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-    <dl class="kv">${changes.map(c => `<dt>${esc(SETTING_UI[c.key].label.replace('แต้ม', unit()))}</dt><dd>${esc(c.before || '-')} → <b>${esc(c.after || '-')}</b></dd>`).join('')}</dl>
+    <dl class="kv">${changes.map(c => `<dt>${esc(SETTING_UI[c.key].label.replace('แต้ม', unit()))}</dt><dd>${esc(settingText(c.key, c.before) || '-')} → <b>${esc(settingText(c.key, c.after) || '-')}</b></dd>`).join('')}</dl>
     <p class="notice">${icon('alert', 18)}<span>มีผลกับรายการถัดไปทันที ${esc(unit())}ที่ลูกค้าได้ไปแล้วไม่เปลี่ยน</span></p>
     <div class="modal-actions">
       <button class="btn" data-act="close">ยกเลิก</button>
@@ -2588,7 +2618,7 @@ function renderTx(r) {
             <td class="num tx-points ${ptsClass(x.points)}">${signed(x.points)}</td>
             <td class="num">${fmtNum(x.balance)}</td>
             <td>${esc(x.staff === 'SYSTEM' ? 'ระบบ' : x.staff || '-')}</td>
-            ${hasBranches() ? `<td class="nowrap">${esc(x.type === 'REDEEM' || x.type === 'WELCOME' ? '-' : branchName(x.branch))}</td>` : ''}
+            ${hasBranches() ? `<td class="nowrap">${esc(x.type === 'REDEEM' || x.type === 'WELCOME' || x.type === 'CONSENT' ? '-' : branchName(x.branch))}</td>` : ''}
           </tr>`).join('') : emptyRow(9, 'ไม่มีรายการในช่วงนี้')}
         </tbody></table></div>
     </section>

@@ -38,6 +38,7 @@ function norm(v, side) {
   return v;
 }
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const NEW_SETTINGS = ['REQUIRE_OA_FRIEND', 'CONSENT_PRETICKED', 'CONSENT_BONUS_POINTS'];
 function diff(a, b, p, out) {
   if (typeof a === 'string' && typeof b === 'string' && ISO.test(a) && ISO.test(b)) {
     if (Math.abs(Date.parse(a) - Date.parse(b)) > 5000) out.push(p + ': ' + a + ' ≠ ' + b);
@@ -100,6 +101,9 @@ function diff(a, b, p, out) {
       if (!o || !o.ok) return o;
       o = JSON.parse(JSON.stringify(o));
       delete o.canDelete;
+      // ส่งข้อความรอบ 3 (ระบบใหม่เท่านั้น — ระบบเดิมหยุดพัฒนาแล้ว): ช่องยินยอม/แต้มรับข่าวสาร + ค่าตั้งร้าน 3 ข้อใหม่
+      delete o.signup;
+      if (Array.isArray(o.items)) o.items = o.items.filter((x) => !(x && NEW_SETTINGS.includes(x.key)));
       return tweak ? tweak(o, side) : o;
     };
     const d = diff(norm(fix(a, 'A'), 'A'), norm(fix(b, 'B'), 'B'), '', []);

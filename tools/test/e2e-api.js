@@ -446,6 +446,82 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     await b.waitFor(`document.querySelector('.adm-nav') && document.querySelector('.kpis')`, 10000, 'หลังบ้าน (แพ็กเกจไม่มีส่งข้อความ)');
     ok(await b.eval(`!document.querySelector('.adm-nav a[data-page=broadcast]')`), 'แพ็กเกจไม่มีส่งข้อความ → เจ้าของร้านไม่เห็นเมนู');
 
+    console.log('\n[9] ส่งข้อความ รอบ 3: เพิ่มเพื่อน LINE OA ก่อนสมัคร + ช่องยินยอมติ๊กไว้ให้ + แต้มรับข่าวสาร');
+    await b.setFeatures('demo', { tiers: true, branches: true, export: true, broadcast: true });
+    const oaSet = (set) => fetch('http://localhost:8105/__oa', { method: 'POST', body: JSON.stringify(set) });
+    await oaSet({ friends: ['U_DEMO_OWNER'], limit: null }); // ลูกค้าใหม่ยังไม่ได้เพิ่มเพื่อน
+    await sql(`update shops set consent_bonus_points = 20 where id = 'demo'`);
+    await b.eval(asUser('U_E2E_R3', 'ลูกค้ารอบสาม'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo?branch=B02`); // สแกน QR ของสาขา 2
+    await b.waitFor(`document.querySelector('.gate-card')`, 10000, 'หน้าเพิ่มเพื่อนก่อนสมัคร');
+    ok(/เพิ่มเพื่อน LINE ของร้านก่อนสมัครสมาชิก/.test(await b.text()) && !(await b.eval(`!!document.querySelector('#reg')`)),
+      'ยังไม่เป็นเพื่อน OA → หน้า "เพิ่มเพื่อนก่อนสมัคร" (ยังไม่เห็นฟอร์ม)');
+    ok(await b.eval(`document.querySelector('[data-friend-add]').getAttribute('href')`) === 'https://line.me/R/ti/p/%40demo-oa', 'ปุ่มเพิ่มเพื่อนไปหน้าเพิ่มเพื่อน @ไอดีของ OA');
+    await b.shot(path.join(OUT, 'n17-friend-gate.png'));
+    await b.click('[data-act=friend-check]');
+    await b.waitFor(`!document.querySelector('#gate-error').hidden`, 8000, 'แจ้งว่ายังไม่ได้เพิ่ม');
+    ok(/ยังไม่พบว่าเพิ่มเพื่อนแล้ว/.test(await b.text('#gate-error')), 'กด "เพิ่มเพื่อนแล้ว" ทั้งที่ยังไม่ได้เพิ่ม → บอกให้เพิ่มก่อน');
+    await oaSet({ friends: ['U_DEMO_OWNER', 'U_E2E_R3'] });
+    await b.click('[data-act=friend-check]');
+    await b.waitFor(`document.querySelector('#reg')`, 8000, 'ฟอร์มสมัครหลังเพิ่มเพื่อน');
+    ok(true, 'เพิ่มเพื่อนแล้วกด "เพิ่มเพื่อนแล้ว" → ฟอร์มสมัครขึ้น');
+    ok(await b.eval(`document.querySelector('#reg input[name=consentMarketing]').checked`) && /รับฟรี 20 แต้มทันที/.test(await b.text('#reg')) &&
+      /ยกเลิกได้ทุกเมื่อที่ "แก้ไขข้อมูล"/.test(await b.text('#reg')), 'ช่องยินยอมติ๊กไว้ให้ + "รับฟรี 20 แต้มทันที" + บอกวิธียกเลิก (แบบที่ 1)');
+    await b.shot(path.join(OUT, 'n18-register-consent.png'), { full: true });
+    await b.type('#reg input[name=firstName]', 'รอบสาม');
+    await b.type('#reg input[name=lastName]', 'ทดสอบ');
+    await b.eval(`(() => { const f = document.querySelector('#reg'); f.bdDay.value = '9'; f.bdMonth.value = '9'; f.bdYear.value = '2530'; return true; })()`);
+    await b.type('#reg input[name=phone]', '0867770003');
+    await b.eval(`document.querySelector('#reg input[name=consentPrivacy]').click()`);
+    await b.click('#reg button[type=submit]');
+    await b.waitFor(`document.querySelector('.member-card') && document.querySelector('.modal')`, 10000, 'บัตร + ป๊อปอัปต้อนรับ');
+    ok(/10 แต้ม/.test(await b.text('.modal')) && /20 แต้ม/.test(await b.text('.modal')) && /รับข่าวสาร/.test(await b.text('.modal')), 'ป๊อปอัป: แต้มต้อนรับ 10 + แต้มรับข่าวสาร 20', await b.text('.modal'));
+    await b.click('.modal [data-act=close]');
+    const [r3] = await sql(`select points, marketing_consent, consent_preticked, oa_friend, joined_branch from members where shop_id = 'demo' and line_user_id = 'U_E2E_R3'`);
+    ok(r3 && r3.points === 30 && r3.marketing_consent === true && r3.consent_preticked === true && r3.oa_friend === true && r3.joined_branch === 'B02',
+      'ฐานข้อมูล: 30 แต้ม / ยินยอม (ติ๊กไว้ให้) / เป็นเพื่อน OA / สาขาจาก QR ยังอยู่หลังเพิ่มเพื่อน', r3);
+    ok(!(await b.eval(`!!document.querySelector('.oa-card')`)), 'เป็นเพื่อนแล้ว → หน้าแรกไม่มีการ์ดชวนเพิ่มเพื่อน');
+
+    // บล็อก OA ทีหลัง (เช็กครบรอบ) → การ์ดชวนเพิ่มเพื่อน
+    await oaSet({ friends: ['U_DEMO_OWNER'] });
+    await sql(`update members set oa_friend_at = now() - interval '2 days' where shop_id = 'demo' and line_user_id = 'U_E2E_R3'`);
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo#home`);
+    await b.waitFor(`document.querySelector('.oa-card')`, 10000, 'การ์ดชวนเพิ่มเพื่อน');
+    ok(/เพิ่มเพื่อน LINE ของร้าน/.test(await b.text('.oa-card')), 'บล็อก OA → หน้าแรกมีการ์ด "เพิ่มเพื่อน LINE ของร้าน"');
+    await b.shot(path.join(OUT, 'n19-friend-card.png'));
+    // แก้ไขข้อมูล: ปิดรับข่าวสาร → เตือนสั้นๆ (ไม่ห้าม)
+    await b.nav(`${WEB}/demo#profile`);
+    await b.waitFor(`document.querySelector('#profile')`, 8000, 'หน้าแก้ไขข้อมูล');
+    await b.eval(`document.querySelector('#profile input[name=consentMarketing]').click()`);
+    ok(/ถ้ายกเลิก จะไม่ได้รับโปรโมชันและสิทธิพิเศษทาง LINE/.test(await b.text('#consent-hint')), 'ปิดสวิตช์รับข่าวสาร → เตือนว่าจะไม่ได้รับโปรโมชัน');
+    await b.nav(`${WEB}/demo#history`);
+    await b.waitFor(`document.querySelector('.tx-list')`, 8000, 'ประวัติ');
+    ok(/รับข่าวสารจากร้าน/.test(await b.text('.tx-list')), 'ประวัติแต้ม: "รับข่าวสารจากร้าน"');
+
+    // หลังบ้าน: ตั้งค่าร้าน 3 ข้อใหม่ + จำนวนที่ได้รับจริง
+    await b.eval(asUser('U_DEMO_OWNER', 'เจ้าของร้าน'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo/admin#settings`);
+    await b.waitFor(`document.querySelector('form[data-form=settings] select[name=REQUIRE_OA_FRIEND]')`, 10000, 'ตั้งค่าร้าน');
+    ok(await b.eval(`document.querySelector('select[name=REQUIRE_OA_FRIEND]').value === 'ON' && document.querySelector('select[name=CONSENT_PRETICKED]').value === 'ON' &&
+      document.querySelector('input[name=CONSENT_BONUS_POINTS]').value === '20'`), 'ตั้งค่าร้าน: บังคับเพิ่มเพื่อน เปิด / ติ๊กไว้ให้ เปิด / แต้มรับข่าวสาร 20');
+    await b.eval(`(() => { const s = document.querySelector('select[name=CONSENT_PRETICKED]'); s.value = 'OFF'; return true; })()`);
+    await b.click('form[data-form=settings] button[type=submit]');
+    await b.waitFor(`document.querySelector('.modal [data-act=settings-confirm]')`, 3000, 'ยืนยันตั้งค่า');
+    ok(/เปิด\s*→\s*ปิด/.test(await b.text('.modal')), 'หน้ายืนยัน: เปิด → ปิด', await b.text('.modal'));
+    await b.click('.modal [data-act=settings-confirm]');
+    await b.waitFor(`/บันทึกการตั้งค่าแล้ว/.test((document.querySelector('.toast.show') || {}).innerText || '')`, 8000, 'บันทึกตั้งค่า');
+    const [s9] = await sql(`select consent_preticked from shops where id = 'demo'`);
+    ok(s9.consent_preticked === false, 'บันทึกแล้ว: ไม่ติ๊กไว้ให้');
+    await sql(`update shops set consent_preticked = true, consent_bonus_points = 0 where id = 'demo'`);
+    await b.nav(`${WEB}/demo/admin#broadcast`);
+    await b.waitFor(`document.querySelector('.aud-reach')`, 10000, 'จำนวนที่ได้รับจริง');
+    ok(/ได้รับจริง [\d,]+ คน/.test(await b.text('.aud-reach')) && /ยังไม่เป็นเพื่อนหรือบล็อก 1 คน/.test(await b.text('.aud-reach')),
+      'หน้าส่งข้อความ: "ได้รับจริง" + "ยังไม่เป็นเพื่อนหรือบล็อก 1 คน"', await b.text('.aud-reach'));
+    await oaSet({ friends: null });
+
     const errs = b.logs.filter((l) => /EXCEPTION|console\.error/.test(l));
     ok(errs.length === 0, 'ไม่มีข้อผิดพลาดในหน้าเว็บ', errs);
   } catch (e) {

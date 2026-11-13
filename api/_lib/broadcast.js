@@ -2,7 +2,7 @@
 // รอบ 1: คัดกลุ่มลูกค้า → นับจำนวน + ตัวอย่างรายชื่อ (adminAudience)
 // รอบ 2: ดูสถานะ OA + ประวัติ / ส่งทดสอบหาตัวเอง / ส่งจริง / ส่งต่อส่วนที่ค้าง (ต้องมีรหัส OA ของร้านใน Vercel — ดู lineoa.js)
 //   รูปส่งเป็นริชเมสเสจ (imagemap) เต็มความกว้างแชต — อัปโหลดด้วย adminUploadRichImage (12 พ.ย. 2569 / API 0.9.0)
-// รอบ 3 (ยังไม่ทำ): จดว่าใครเป็นเพื่อน OA + ชวนเพิ่มเพื่อนตอนสมัคร
+// รอบ 3: สถานะเพื่อน OA (จดตอนลูกค้าเปิดบัตร — oafriend.js) → แยกจำนวน "ได้รับจริง" / บังคับเพิ่มเพื่อนก่อนสมัคร (customer.js)
 //
 // หลัก:
 // - ส่งได้เฉพาะลูกค้าที่ "ยินยอมรับข่าวสาร" + ไม่ถูกระงับ + สมัครผ่าน LINE — กรองที่นี่เสมอ หน้าเว็บปิดไม่ได้ (PDPA)
@@ -109,7 +109,9 @@ async function adminAudience(p, ctx) {
       (count(*) filter (where ${SENDABLE_SQL}))::int as sendable,
       (count(*) filter (where not marketing_consent))::int as no_consent,
       (count(*) filter (where marketing_consent and status <> 'ACTIVE'))::int as blocked,
-      (count(*) filter (where marketing_consent and status = 'ACTIVE' and line_user_id is null))::int as no_line
+      (count(*) filter (where marketing_consent and status = 'ACTIVE' and line_user_id is null))::int as no_line,
+      (count(*) filter (where ${SENDABLE_SQL} and oa_friend))::int as friend_yes,
+      (count(*) filter (where ${SENDABLE_SQL} and oa_friend = false))::int as friend_no
     from members where ${WHERE}`, args)).rows[0];
 
   // ตัวอย่าง: คนที่ส่งได้ สมัครล่าสุดก่อน — ไม่มี LINE ID / เบอร์ / วันเกิด (ดูได้ในหน้าสมาชิกอยู่แล้ว)
@@ -120,6 +122,9 @@ async function adminAudience(p, ctx) {
     matched: n.matched,
     sendable: n.sendable,
     excluded: { noConsent: n.no_consent, blocked: n.blocked, noLine: n.no_line },
+    // ในคนที่ส่งได้: เป็นเพื่อน OA (ได้รับจริง) / ยังไม่เป็นเพื่อนหรือบล็อก (LINE ข้ามให้ ไม่เสียโควตา) / ยังไม่รู้ (ยังไม่ได้เปิดบัตรตั้งแต่เริ่มจด)
+    // ส่งให้ทุกคนที่ส่งได้เสมอ — สถานะที่จดอาจเก่า (เพิ่มเพื่อนแล้วแต่ยังไม่ได้เปิดบัตร) LINE ตัดสินเองตอนส่ง
+    reach: { friend: n.friend_yes, notFriend: n.friend_no, unknown: n.sendable - n.friend_yes - n.friend_no },
     items: rows.map((m) => ({
       memberId: String(m.id), name: String(m.name || ''), tierId: on ? String(m.tier_id || '') : '', tier: tierName(m.tier_id),
       points: U.toInt(m.points), totalSpend: U.toNum(m.total_spend), visitCount: U.toInt(m.visit_count),
@@ -422,8 +427,11 @@ async function adminBroadcastSend(p, ctx) {
   }
   let quota;
   try { quota = await quotaOf(oa); } catch (e) { throw oaFail(ctx, e, 'ดูโควตา'); }
-  if (quota.limited && quota.remaining < ids.length) {
-    throw userError('โควตาข้อความเดือนนี้ของ LINE OA เหลือ ' + U.fmtNum(quota.remaining) + ' ข้อความ ไม่พอส่ง ' + U.fmtNum(ids.length) +
+  // โควตาที่ใช้ = คนที่อาจได้รับ (ไม่นับคนที่รู้แน่ว่าไม่เป็นเพื่อน/บล็อก — LINE ไม่ส่งและไม่คิดโควตา)
+  const need = (await ctx.db.query(`select count(*)::int as n from members where shop_id = $1 and id = any($2::text[]) and oa_friend is distinct from false`,
+    [shopId, ids])).rows[0].n;
+  if (quota.limited && quota.remaining < need) {
+    throw userError('โควตาข้อความเดือนนี้ของ LINE OA เหลือ ' + U.fmtNum(quota.remaining) + ' ข้อความ ไม่พอส่ง ' + U.fmtNum(need) +
       ' คน ลดกลุ่มลง หรือเพิ่มแพ็กเกจ LINE OA', 'QUOTA_NOT_ENOUGH');
   }
   // เงื่อนไขที่ใช้ (จดไว้ดูย้อนหลัง) — เก็บเฉพาะค่าที่ตรวจแล้ว

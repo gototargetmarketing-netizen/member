@@ -764,6 +764,127 @@ function fakeLine() {
     }
   }
 
+  console.log('\n[5.9] ส่งข้อความ รอบ 3: เพิ่มเพื่อน LINE OA ก่อนสมัคร + ช่องยินยอมติ๊กไว้ให้ + แต้มรับข่าวสาร + จำนวนที่ได้รับจริง');
+  {
+    const { createFakeOa } = require('./fake-oa');
+    const F = require(path.join(ROOT, 'api', '_lib', 'oafriend.js'));
+    const fake = createFakeOa({ limit: null, friends: new Set() }); // ยังไม่มีใครเป็นเพื่อน
+    let oaOn = true;
+    const ra = createApp({ db: () => db, verifier: createVerifier({ fetch: fakeLine().fetch }), allowTestTokens: true, region: 'test',
+      oa: (shop) => (oaOn && shop === 'demo' ? fake.oa : null) });
+    const call = (action, body, user) => ra.handle(Object.assign({ action, shop: 'demo', idToken: `TEST:${user}:ลูกค้า ${user}`, requestId: crypto.randomUUID() }, body));
+    const reg = (user, phone, extra) => call('register', Object.assign({ consentPrivacy: true, firstName: 'มานี', lastName: 'มีนา', birthDate: '1991-02-03', phone }, extra), user);
+    const mem = async (user) => (await db.query(`select id, points, marketing_consent, consent_preticked, consent_bonus_at, oa_friend, oa_friend_at from members where shop_id = 'demo' and line_user_id = $1`, [user])).rows[0];
+    const shop0 = (await db.query(`select require_oa_friend, consent_preticked, consent_bonus_points, welcome_points from shops where id = 'demo'`)).rows[0];
+    ok(shop0.require_oa_friend === true && shop0.consent_preticked === true && shop0.consent_bonus_points === 0,
+      'ค่าเริ่มต้นร้าน (ผู้ใช้เลือก): บังคับเพิ่มเพื่อนก่อนสมัคร เปิด / ติ๊กยินยอมไว้ให้ เปิด / แต้มรับข่าวสาร 0', shop0);
+    const err = console.error; console.error = () => {};
+    const log = console.log; console.log = (...a) => { if (/^  [✓✗]/.test(String(a[0]))) log(...a); };
+    try {
+      // ---- ยังไม่เป็นเพื่อน → หน้าสมัครบอกให้เพิ่มเพื่อนก่อน ----
+      F._infoCache.clear();
+      r = await call('bootstrap', {}, 'U_R3_A');
+      ok(r.ok && !r.member && r.oa && r.oa.friend === false && r.oa.required === true && r.oa.addUrl === 'https://line.me/R/ti/p/%40demo-oa',
+        'ยังไม่เป็นเพื่อน → ต้องเพิ่มเพื่อนก่อน + ลิงก์เพิ่มเพื่อน @ไอดีของ OA', r.oa);
+      ok(r.signup && r.signup.preticked === true && r.signup.bonusPoints === 0 && r.signup.bonusAvailable === true, 'หน้าสมัครรู้ว่าติ๊กยินยอมไว้ให้ + แต้มรับข่าวสาร', r.signup);
+      r = await reg('U_R3_A', '0861230001', { consentMarketing: true });
+      ok(!r.ok && r.code === 'NOT_FRIEND' && !(await mem('U_R3_A')), 'ข้ามหน้าเพิ่มเพื่อนแล้วสมัครตรง → ตัวกลางไม่ให้สมัคร', r);
+      // ร้านปิดสวิตช์ → สมัครได้แม้ไม่เป็นเพื่อน
+      await db.query(`update shops set require_oa_friend = false where id = 'demo'`);
+      r = await call('bootstrap', {}, 'U_R3_B');
+      ok(r.ok && r.oa.friend === false && r.oa.required === false, 'ร้านปิด "บังคับเพิ่มเพื่อน" → ไม่ต้องเพิ่มเพื่อนก่อน');
+      r = await reg('U_R3_B', '0861230002', { consentMarketing: false });
+      let m = await mem('U_R3_B');
+      ok(r.ok && m.oa_friend === false && m.oa_friend_at && m.marketing_consent === false && m.consent_preticked === true,
+        'สมัครได้ + จดว่ายังไม่เป็นเพื่อน + จดว่าสมัครตอนช่องยินยอมถูกติ๊กไว้ให้ (ลูกค้าเอาติ๊กออก)', m);
+      await db.query(`update shops set require_oa_friend = true where id = 'demo'`);
+
+      // ---- เพิ่มเพื่อนแล้ว → สมัครได้ + แต้มรับข่าวสาร ----
+      await db.query(`update shops set consent_bonus_points = 20 where id = 'demo'`);
+      fake.state.friends.add('U_R3_A');
+      r = await call('bootstrap', {}, 'U_R3_A');
+      ok(r.ok && r.oa.friend === true && r.oa.addUrl === '' && r.signup.bonusPoints === 20, 'เพิ่มเพื่อนแล้ว → ไปหน้าสมัครได้ (เห็นแต้มรับข่าวสาร 20)', r.oa);
+      r = await reg('U_R3_A', '0861230001', { consentMarketing: true });
+      m = await mem('U_R3_A');
+      const w = shop0.welcome_points;
+      ok(r.ok && r.consentBonus === 20 && r.welcomePoints === w && r.member.points === w + 20 && m.points === w + 20 && m.consent_bonus_at && m.oa_friend === true,
+        `สมัคร + ยินยอม → แต้มต้อนรับ ${w} + แต้มรับข่าวสาร 20 / จดว่าเป็นเพื่อน`, { r, m });
+      const txs = (await db.query(`select type, points, balance_after from transactions where shop_id = 'demo' and member_id = $1 order by created_at`, [m.id])).rows;
+      ok(txs.length === (w > 0 ? 2 : 1) && txs[txs.length - 1].type === 'CONSENT' && txs[txs.length - 1].points === 20 && txs[txs.length - 1].balance_after === w + 20,
+        'ประวัติแต้ม: รายการ "รับข่าวสาร" ต่อจากแต้มต้อนรับ ยอดคงเหลือต่อกัน', txs);
+      r = await call('bootstrap', {}, 'U_R3_A');
+      ok(r.ok && r.history[0].type === 'CONSENT' && r.signup.bonusAvailable === false && r.oa.friend === true && !r.oa.required, 'เปิดบัตร: เห็นรายการรับข่าวสาร / ได้แต้มแล้ว (ไม่ชวนซ้ำ)', r.history[0]);
+
+      // ---- ปิดแล้วเปิดรับข่าวสารใหม่ → ไม่ได้แต้มซ้ำ / คนที่เพิ่งเปิดครั้งแรก → ได้ ----
+      const profile = { firstName: 'มานี', lastName: 'มีนา', birthDate: '1991-02-03' };
+      await call('updateProfile', Object.assign({ phone: '0861230001', consentMarketing: false }, profile), 'U_R3_A');
+      r = await call('updateProfile', Object.assign({ phone: '0861230001', consentMarketing: true }, profile), 'U_R3_A');
+      ok(r.ok && !r.consentBonus && (await mem('U_R3_A')).points === w + 20, 'ยกเลิกแล้วเปิดใหม่ → ไม่ได้แต้มซ้ำ', r);
+      r = await call('updateProfile', Object.assign({ phone: '0861230002', consentMarketing: true }, profile), 'U_R3_B');
+      m = await mem('U_R3_B');
+      ok(r.ok && r.consentBonus === 20 && r.member.points === w + 20 && m.consent_bonus_at, 'สมัครโดยไม่ยินยอม แล้วมาเปิดทีหลัง → ได้แต้มรับข่าวสาร 1 ครั้ง', r);
+      r = await call('updateProfile', Object.assign({ phone: '0861230002', consentMarketing: true }, profile), 'U_R3_B');
+      ok(r.ok && !r.consentBonus && r.changed === 0, 'บันทึกซ้ำ (เปิดอยู่แล้ว) → ไม่ได้เพิ่ม');
+      const chk = (await db.query(`select count(*)::int n from members m where shop_id = 'demo' and points <> coalesce((select sum(points) from transactions t where t.shop_id = 'demo' and t.member_id = m.id), 0)`)).rows[0].n;
+      ok(chk === 0, 'แต้มในบัตรตรงกับผลรวมประวัติทุกคน (ไฟล์ตรวจแต้มไม่ฟ้อง)');
+
+      // ---- สถานะเพื่อนอัปเดตตอนเปิดบัตร (บล็อก → ปุ่มเพิ่มเพื่อน / เป็นเพื่อนแล้วไม่ถาม LINE ซ้ำภายใน 1 วัน) ----
+      const calls0 = fake.state.calls;
+      await call('bootstrap', {}, 'U_R3_A');
+      ok(fake.state.calls === calls0, 'เป็นเพื่อนอยู่ + เช็กไม่เกิน 1 วัน → ไม่ถาม LINE ซ้ำ (เปิดบัตรเร็วเท่าเดิม)');
+      fake.state.friends.delete('U_R3_A');
+      await db.query(`update members set oa_friend_at = now() - interval '2 days' where shop_id = 'demo' and line_user_id = 'U_R3_A'`);
+      r = await call('bootstrap', {}, 'U_R3_A');
+      ok(r.ok && r.oa.friend === false && r.oa.addUrl && !r.oa.required && (await mem('U_R3_A')).oa_friend === false, 'บล็อก OA (เช็กครบรอบ) → บัตรมีปุ่มเพิ่มเพื่อน + จดว่าไม่เป็นเพื่อน', r.oa);
+      fake.state.failAll = 500;
+      r = await call('bootstrap', {}, 'U_R3_C');
+      ok(r.ok && r.oa.friend === null && !r.member, 'LINE ตอบไม่ได้ → ไม่รู้สถานะ (หน้าเว็บไม่ปิดกั้นการสมัคร)', r.oa);
+      r = await reg('U_R3_C', '0861230003', { consentMarketing: true });
+      fake.state.failAll = null;
+      ok(r.ok && (await mem('U_R3_C')).oa_friend === null, 'LINE ตอบไม่ได้ตอนสมัคร → สมัครได้ (สถานะว่างไว้)', r);
+      oaOn = false;
+      r = await call('bootstrap', {}, 'U_R3_D');
+      ok(r.ok && !('oa' in r) && r.signup, 'ร้านที่ไม่ได้เชื่อม OA → ไม่มีเรื่องเพิ่มเพื่อน (สมัครได้ตามปกติ)', r.oa);
+      oaOn = true;
+
+      // ---- หน้าส่งข้อความ: ได้รับจริง / ไม่เป็นเพื่อน / ยังไม่รู้ ----
+      const OW = 'TEST:U_DEMO_OWNER:เจ้าของ';
+      const owner = (action, body) => ra.handle(Object.assign({ action, shop: 'demo', idToken: OW, requestId: crypto.randomUUID() }, body));
+      const f = { joinedDays: 1 }; // เฉพาะคนที่เพิ่งสมัครในชุดนี้
+      r = await owner('adminAudience', { filter: f });
+      const exp = (await db.query(`select count(*) filter (where oa_friend)::int y, count(*) filter (where oa_friend = false)::int n, count(*)::int t
+        from members where shop_id = 'demo' and joined_at > now() - interval '1 day' and status = 'ACTIVE' and marketing_consent and line_user_id is not null`)).rows[0];
+      ok(r.ok && r.reach && r.reach.friend === exp.y && r.reach.notFriend === exp.n && r.reach.unknown === exp.t - exp.y - exp.n && r.sendable === exp.t && exp.n > 0,
+        `คัดกลุ่ม: ส่งได้ ${exp.t} = ได้รับจริง ${exp.y} + ไม่เป็นเพื่อน ${exp.n} + ยังไม่รู้ ${exp.t - exp.y - exp.n}`, r.reach);
+      // โควตาเหลือพอสำหรับคนที่อาจได้รับ (ไม่นับคนที่รู้แน่ว่าไม่เป็นเพื่อน) → ส่งได้
+      fake.state.limit = fake.state.used + (exp.t - exp.n);
+      r = await owner('adminBroadcastSend', { filter: f, draft: { text: 'โปรเฉพาะสมาชิกใหม่' }, expect: exp.t });
+      ok(r.ok && r.broadcast.status === 'DONE' && r.broadcast.sent === exp.t, 'โควตาพอสำหรับคนที่อาจได้รับ → ส่งได้ (ยังส่งให้ทุกคนที่ส่งได้ LINE ตัดสินเอง)', r);
+      fake.state.limit = fake.state.used + (exp.t - exp.n) - 1;
+      r = await owner('adminBroadcastSend', { filter: f, draft: { text: 'อีกรอบ' }, expect: exp.t });
+      ok(!r.ok && r.code === 'QUOTA_NOT_ENOUGH' && r.error.includes(U.fmtNum(exp.t - exp.n)), 'โควตาขาด 1 → ไม่ส่ง (บอกจำนวนที่ต้องใช้จริง)', r);
+      fake.state.limit = null;
+
+      // ---- ตั้งค่าร้าน 3 ข้อใหม่ (เจ้าของร้านเท่านั้น) ----
+      r = await owner('adminSettings', {});
+      const val = (k) => (r.items.find((x) => x.key === k) || {}).value;
+      ok(r.ok && val('REQUIRE_OA_FRIEND') === 'ON' && val('CONSENT_PRETICKED') === 'ON' && val('CONSENT_BONUS_POINTS') === '20', 'หน้าตั้งค่าร้านเห็น 3 ข้อใหม่', r.items && r.items.slice(-3));
+      r = await owner('adminSettingsSave', { values: { REQUIRE_OA_FRIEND: 'OFF', CONSENT_PRETICKED: 'OFF', CONSENT_BONUS_POINTS: '0' } });
+      const s1 = (await db.query(`select require_oa_friend, consent_preticked, consent_bonus_points from shops where id = 'demo'`)).rows[0];
+      ok(r.ok && r.changed === 3 && s1.require_oa_friend === false && s1.consent_preticked === false && s1.consent_bonus_points === 0, 'เจ้าของร้านปิดทั้งหมดได้', s1);
+      r = await call('bootstrap', {}, 'U_R3_D');
+      ok(r.ok && r.signup.preticked === false && r.signup.bonusPoints === 0 && r.oa.required === false, 'ปิดแล้ว → หน้าสมัครไม่ติ๊กไว้ให้ ไม่บังคับเพิ่มเพื่อน');
+      r = await owner('adminSettingsSave', { values: { REQUIRE_OA_FRIEND: 'maybe' } });
+      ok(!r.ok && r.code === 'BAD_INPUT', 'ค่าที่ไม่ใช่ เปิด/ปิด → ไม่รับ', r);
+      r = await ra.handle({ action: 'adminSettingsSave', shop: 'demo', idToken: 'TEST:U_DEMO_ADMIN:ผู้จัดการ', values: { CONSENT_PRETICKED: 'ON' } });
+      ok(!r.ok && r.code === 'NO_ROLE', 'ผู้จัดการแก้ไม่ได้', r);
+      await db.query(`update shops set require_oa_friend = true, consent_preticked = true, consent_bonus_points = 0 where id = 'demo'`);
+    } finally {
+      console.log = log;
+      console.error = err;
+    }
+  }
+
   console.log('\n[6] ข้อความถึงผู้ใช้');
   // ทุกไฟล์ใน api/ (ไฟล์ใหม่ถูกตรวจเองโดยไม่ต้องเพิ่มชื่อ)
   const apiFiles = ['index.js'].concat(fs.readdirSync(path.join(ROOT, 'api', '_lib')).filter(f => f.endsWith('.js')).map(f => '_lib/' + f));

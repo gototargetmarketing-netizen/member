@@ -191,6 +191,18 @@ input.input-err { border-color: var(--danger); }
 .bday p { margin: 2px 0 10px; color: var(--muted); font-size: 13.5px; }
 .bday-tag { font-size: 12px; font-weight: 700; color: var(--button); }
 .bday-gift { display: flex; align-items: center; gap: 6px; font-weight: 800; margin-bottom: 10px; }
+/* ส่งข้อความรอบ 3: ชวนเพิ่มเพื่อน LINE OA ของร้าน (การ์ดหน้าแรก + หน้าเพิ่มเพื่อนก่อนสมัคร) + ช่องยินยอมรับข่าวสาร */
+.oa-card { margin: 16px 16px 0; padding: 14px 16px; border-radius: var(--radius); display: flex; gap: 12px; align-items: center;
+  background: var(--surface); border: 1px solid color-mix(in srgb, var(--button) 35%, var(--line)); box-shadow: var(--shadow); }
+.oa-card-icon { width: 42px; height: 42px; border-radius: 14px; background: color-mix(in srgb, var(--button) 14%, var(--surface)); color: var(--button);
+  display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.oa-card b { display: block; font-size: 15px; }
+.oa-card small { display: block; color: var(--muted); font-size: 12.5px; }
+.gate-card { display: grid; gap: 12px; }
+.gate-steps { margin: 0 0 4px; padding-left: 22px; display: grid; gap: 6px; font-size: 14.5px; }
+.check-consent b { color: var(--text); }
+.consent-sub { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.hint.hint-warn { color: var(--warning); font-weight: 600; }
 /* หน้าลูกค้า: การ์ดแต้มพิเศษวันนี้ — กล่อง ×2 สีปุ่มร้าน + แสงวิ่งผ่านทุก 3 วินาที (ผู้ใช้เลือก 5 พ.ย. 2569) */
 .bonus-cards { display: flex; flex-direction: column; gap: 10px; margin: 16px 16px 0; }
 .bonus-card { padding: 14px 16px; border-radius: var(--radius); display: flex; gap: 14px; align-items: center;
@@ -536,6 +548,8 @@ input.input-err { border-color: var(--danger); }
 .aud-result .tbl th { position: sticky; top: 0; z-index: 1; }
 .aud-count { display: flex; align-items: baseline; gap: 8px; font-weight: 700; }
 .aud-count b { font-size: 40px; font-weight: 800; line-height: 1.1; color: var(--button); }
+.aud-reach { margin: 2px 0 10px; line-height: 1.6; color: var(--muted); }
+.aud-reach b { color: var(--text); }
 @media (max-width: 900px) { .aud-layout { grid-template-columns: 1fr; } }
 /* ส่งข้อความ: OA ของร้าน + ตัวอย่างหน้าตาในแชต LINE (ใช้สีของธีม ไม่ใช่สีของ LINE เอง) */
 .bc-oa { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

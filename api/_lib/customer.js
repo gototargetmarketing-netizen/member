@@ -8,6 +8,7 @@ const { once } = require('./once');
 const V = require('./views');
 const M = require('./members');
 const T = require('./tiers');
+const F = require('./oafriend');
 
 const BIRTHDAY_MIN_DAYS = 30; // ต้องเป็นสมาชิก ≥ 30 วัน และไม่ได้เพิ่งเปลี่ยนวันเกิด (กันสมัคร/แก้วันเกิดเพื่อรับของขวัญ)
 
@@ -41,8 +42,25 @@ select json_build_object(
   -- แต้มจากการซื้อ 12 เดือนล่าสุด (ระดับสมาชิก: บอกลูกค้าว่าขาดอีกกี่แต้มถึงระดับถัดไป)
   'points12m', (select coalesce(sum(${T.BASE_POINTS_SQL}), 0)::int from transactions t join shops s on s.id = t.shop_id
       where t.shop_id = $1 and t.member_id = (select id from m)
-      and t.type = 'EARN' and t.created_at > ($4::timestamptz - interval '12 months') and t.created_at <= $4::timestamptz)
+      and t.type = 'EARN' and t.created_at > ($4::timestamptz - interval '12 months') and t.created_at <= $4::timestamptz),
+  -- สถานะเพื่อน LINE OA ที่จดไว้ + ได้แต้มรับข่าวสารไปแล้วหรือยัง (ส่งข้อความรอบ 3)
+  'extra', (select json_build_object('friend', oa_friend, 'at', oa_friend_at, 'bonusAt', consent_bonus_at)
+      from members where shop_id = $1 and line_user_id = $2)
 ) as data`;
+
+// แต้มรับข่าวสาร (ครั้งเดียวต่อคน) — ต้องจองแถวสมาชิกไว้แล้ว / คืนจำนวนที่ให้ (0 = ไม่ได้ให้)
+async function giveConsentBonus(q, ctx, memberId, at) {
+  const bonus = U.toInt(ctx.shop.consent_bonus_points);
+  if (bonus <= 0) return 0;
+  const shopId = ctx.shop.id;
+  const r = await q.query(`update members set points = points + $3, consent_bonus_at = $4
+      where shop_id = $1 and id = $2 and consent_bonus_at is null returning points`, [shopId, memberId, bonus, at]);
+  if (!r.rows.length) return 0; // เคยได้ไปแล้ว (ยกเลิกแล้วกลับมาติ๊กใหม่ ไม่ได้ซ้ำ)
+  await q.query(`insert into transactions (shop_id, id, created_at, member_id, type, amount, points, balance_after, detail, staff)
+                 values ($1, $2, $3, $4, 'CONSENT', 0, $5, $6, 'แต้มรับข่าวสารจากร้าน', 'SYSTEM')`,
+    [shopId, M.newTxId(), at, memberId, bonus, U.toInt(r.rows[0].points)]);
+  return bonus;
+}
 
 // ---------- ของขวัญวันเกิด (ผู้ใช้ตกลง 4 พ.ย. 2569) ----------
 // รับได้ทั้งเดือนเกิด ปีละ 1 ครั้ง / ของขวัญ = ของรางวัลที่ type = BIRTHDAY
@@ -106,6 +124,20 @@ async function syncTierByLine(ctx, tiers) {
   });
 }
 
+// สถานะเพื่อน LINE OA (เฉพาะร้านที่เชื่อม OA แล้ว) → out.oa = { friend, required, addUrl }
+// required = ต้องเพิ่มเพื่อนก่อนถึงสมัครได้ / LINE ตอบไม่ได้ (friend = null) → ไม่ปิดกั้นลูกค้า
+async function friendStatus(ctx, out, m, extra) {
+  const oa = F.getOa(ctx);
+  if (!oa) return;
+  const known = m && F.stillFriend(extra, ctx.now);
+  const friend = known ? true : await F.isFriend(oa, ctx.user.userId);
+  // จดไว้ให้หน้าส่งข้อความนับ "ได้รับจริง" (เขียนเมื่อเปลี่ยน หรือถึงรอบเช็กใหม่)
+  if (m && !known && friend !== null) {
+    await ctx.db.query('update members set oa_friend = $3, oa_friend_at = $4 where shop_id = $1 and id = $2', [ctx.shop.id, m.id, friend, ctx.now]);
+  }
+  out.oa = { friend, required: !m && ctx.shop.require_oa_friend === true, addUrl: friend === true ? '' : await F.addFriendUrl(oa, ctx.shop.id) };
+}
+
 async function bootstrap(p, ctx) {
   const c = cfg(ctx.shop);
   const now = ctx.now;
@@ -136,6 +168,14 @@ async function bootstrap(p, ctx) {
     out.tiers = T.publicTiers(tiers);
     out.tierIntro = String(ctx.shop.tier_intro || ''); // ข้อความหัวหน้าสิทธิ์สมาชิก (ว่าง = หน้าเว็บใช้ข้อความตั้งต้น)
   }
+  const extra = d.extra || null;
+  // ช่องยินยอมรับข่าวสาร: ติ๊กไว้ให้ไหม + แต้มที่จะได้ (ยังไม่เคยได้เท่านั้น)
+  out.signup = {
+    preticked: ctx.shop.consent_preticked === true,
+    bonusPoints: U.toInt(ctx.shop.consent_bonus_points),
+    bonusAvailable: !(extra && extra.bonusAt)
+  };
+  await friendStatus(ctx, out, m, extra);
   if (!m) return out;
   out.birthday = birthdayOffer(m, now, d.coupons, d.rewards, d.birthLog, tc);
 
@@ -169,25 +209,40 @@ async function register(p, ctx) {
   const joined = M.joinedBranch(p.branch, await M.activeBranches(ctx.db, shopId));
   const now = ctx.now;
   const tiers = await T.loadTiers(ctx.db, shopId);
+  // ร้านบังคับเพิ่มเพื่อน LINE OA ก่อนสมัคร (ตรวจที่นี่ด้วย กันข้ามหน้าเพิ่มเพื่อน) — LINE ตอบไม่ได้ = ให้สมัครได้ ไม่ปิดกั้นลูกค้า
+  const oa = F.getOa(ctx);
+  const friend = oa ? await F.isFriend(oa, ctx.user.userId) : null;
+  if (friend === false && ctx.shop.require_oa_friend === true) {
+    throw userError('กรุณาเพิ่มเพื่อน LINE ของร้านก่อนสมัครสมาชิก', 'NOT_FRIEND');
+  }
+  const consent = p.consentMarketing === true;
 
   try {
     return await ctx.db.tx(async (q) => {
       const member = await M.insertWithNewId(q, () => c.memberPrefix + '-' + U.randomCode(6),
         `insert into members (shop_id, id, line_user_id, name, first_name, last_name, phone, birth_date, picture, points,
-                              joined_at, joined_branch, consent_version, consent_at, marketing_consent)
-         values ($1, $2, $3, $4, $5, $6, $7, $8::date, $9, $10, $11, $12, $13, $11, $14)
+                              joined_at, joined_branch, consent_version, consent_at, marketing_consent,
+                              consent_preticked, oa_friend, oa_friend_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8::date, $9, $10, $11, $12, $13, $11, $14, $15, $16, $17)
          on conflict (shop_id, id) do nothing
          returning ${V.MEMBER_COLS}`,
         (id) => [shopId, id, ctx.user.userId, firstName + ' ' + lastName, firstName, lastName, phone, birthDate,
-          ctx.user.picture || '', c.welcomePoints, now, joined, parseInt(c.consentVersion, 10) || 1, p.consentMarketing === true]);
+          ctx.user.picture || '', c.welcomePoints, now, joined, parseInt(c.consentVersion, 10) || 1, consent,
+          // ช่องยินยอมถูกติ๊กไว้ให้ตอนสมัคร (ตามค่าร้าน ไม่เชื่อหน้าเว็บ) — วันหลังต้องขอใหม่ จะถามเฉพาะคนกลุ่มนี้ได้
+          ctx.shop.consent_preticked === true, friend, friend === null ? null : now]);
       if (c.welcomePoints > 0) {
         await q.query(`insert into transactions (shop_id, id, created_at, member_id, type, amount, points, balance_after, detail, staff)
                        values ($1, $2, $3, $4, 'WELCOME', 0, $5, $5, 'แต้มต้อนรับสมาชิกใหม่', 'SYSTEM')`,
           [shopId, M.newTxId(), now, member.id, c.welcomePoints]);
       }
+      // แต้มรับข่าวสาร: จดหลังแต้มต้อนรับ 1 มิลลิวินาที (ประวัติเรียงถูก ยอดคงเหลือต่อกัน)
+      const bonus = consent ? await giveConsentBonus(q, ctx, member.id, new Date(now.getTime() + 1)) : 0;
+      if (bonus) member.points = U.toInt(member.points) + bonus;
       // ร้านเปิดใช้ระดับ: สมาชิกใหม่เริ่มที่ระดับแรก (จดประวัติ START)
       await T.syncMember(q, shopId, member, tiers, now);
-      return { member: V.publicMember(member, T.tiersOn(tiers) ? tiers : null), welcomePoints: c.welcomePoints };
+      const out = { member: V.publicMember(member, T.tiersOn(tiers) ? tiers : null), welcomePoints: c.welcomePoints };
+      if (bonus) out.consentBonus = bonus;
+      return out;
     });
   } catch (e) {
     if (e && e.code === '23505') {
@@ -314,9 +369,13 @@ async function updateProfile(p, ctx) {
       if (!m) throw userError('กรุณาสมัครสมาชิกก่อน', 'NOT_MEMBER');
       M.assertActiveMember(m);
       const changed = await M.applyProfile(q, shopId, m, input, { self: true, by: 'ลูกค้า' }, ctx.now);
+      // เปิดรับข่าวสารครั้งแรก → แต้มรับข่าวสาร (ครั้งเดียวต่อคน กันปิด-เปิดเพื่อเอาแต้ม)
+      const bonus = input.marketing === true && m.marketing_consent !== true ? await giveConsentBonus(q, ctx, m.id, ctx.now) : 0;
       const fresh = await M.memberById(q, shopId, m.id);
       const tiers = await T.loadTiers(q, shopId);
-      return { changed: changed.length, member: V.publicMember(fresh, T.tiersOn(tiers) ? tiers : null) };
+      const out = { changed: changed.length, member: V.publicMember(fresh, T.tiersOn(tiers) ? tiers : null) };
+      if (bonus) out.consentBonus = bonus;
+      return out;
     });
   } catch (e) {
     // เบอร์เพิ่งถูกคนอื่นใช้ไปพร้อมกันพอดี (ฐานข้อมูลกันซ้ำให้)

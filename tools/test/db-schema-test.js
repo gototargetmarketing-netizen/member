@@ -146,6 +146,24 @@ async function rejects(db, sql, params, msg) {
   await rejects(db, bc6('BC-RICH0003', '{"type":"text"}'), [], 'ไม่ใช่รายการ → ปฏิเสธ');
   await rejects(db, bc6('BC-RICH0004', JSON.stringify(Array(6).fill({ type: 'text', text: 'x' }))), [], 'เกิน 5 ข้อความ (LINE ส่งได้ครั้งละไม่เกิน 5) → ปฏิเสธ');
 
+  console.log('\n[11] ไฟล์ปรับตาราง 007 เพื่อน LINE OA + ยินยอมรับข่าวสาร + รันซ้ำได้');
+  const m007 = fs.readFileSync(require('path').join(dir, '007_oa_friend_consent.sql'), 'utf8');
+  await db.exec(m007);
+  await db.exec(m007);
+  const s7 = (await db.query(`select require_oa_friend, consent_preticked, consent_bonus_points from shops where id = 'khamwan'`)).rows[0];
+  ok(s7 && s7.require_oa_friend === true && s7.consent_preticked === true && s7.consent_bonus_points === 0,
+    'วาง 007 (สองรอบ ไม่ error) → ร้านเดิมได้ค่าเริ่มต้น บังคับเพิ่มเพื่อน เปิด / ติ๊กไว้ให้ เปิด / แต้ม 0', s7);
+  const m7 = (await db.query(`select oa_friend, consent_preticked, consent_bonus_at from members where shop_id = 'khamwan' limit 1`)).rows[0];
+  ok(m7 && m7.oa_friend === null && m7.consent_preticked === false && m7.consent_bonus_at === null, 'สมาชิกเดิม: ยังไม่รู้สถานะเพื่อน / ไม่ได้สมัครตอนติ๊กไว้ให้ / ยังไม่ได้แต้มรับข่าวสาร', m7);
+  await rejects(db, `update shops set consent_bonus_points = -1 where id = 'khamwan'`, [], 'แต้มรับข่าวสารติดลบ → ปฏิเสธ');
+  await rejects(db, `update shops set consent_bonus_points = 100001 where id = 'khamwan'`, [], 'แต้มรับข่าวสารเกิน 100,000 → ปฏิเสธ');
+  const mid = (await db.query(`select id from members where shop_id = 'khamwan' limit 1`)).rows[0].id;
+  await db.query(`insert into transactions (shop_id, id, created_at, member_id, type, amount, points, balance_after, detail, staff)
+    values ('khamwan', 'TX-CONSENT01', now(), $1, 'CONSENT', 0, 0, 0, 'ทดสอบ', 'SYSTEM')`, [mid]);
+  ok(true, 'รายการแต้มชนิดใหม่ CONSENT (รับข่าวสาร) บันทึกได้');
+  await rejects(db, `insert into transactions (shop_id, id, created_at, member_id, type, amount, points, balance_after, detail, staff)
+    values ('khamwan', 'TX-CONSENT02', now(), '${mid}', 'GIFT', 0, 0, 0, 'ทดสอบ', 'SYSTEM')`, [], 'ชนิดรายการที่ไม่รู้จัก → ยังปฏิเสธเหมือนเดิม');
+
   console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(1); });

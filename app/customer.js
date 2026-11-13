@@ -18,6 +18,11 @@ const unit = () => T('pointUnit', 'แต้ม');
 
 document.addEventListener('click', onClick);
 document.addEventListener('input', onPhoneInput);
+document.addEventListener('change', onConsentToggle);
+// กลับมาจากหน้าเพิ่มเพื่อนของ LINE → ตรวจใหม่เอง (หน้าเพิ่มเพื่อนก่อนสมัคร / การ์ดชวนเพิ่มเพื่อนบนหน้าแรก)
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && S.ready && document.querySelector('.gate-card, .oa-card')) checkFriend(null);
+});
 window.addEventListener('hashchange', () => { S.page = pageFromHash(); closeModal(); if (S.data) render(); window.scrollTo(0, 0); });
 main();
 
@@ -147,6 +152,7 @@ function onClick(e) {
     case 'tier-rules': showTierRules(); break;
     case 'profile-confirm': doSaveProfile(el); break;
     case 'birthday-claim': claimBirthday(el); break;
+    case 'friend-check': checkFriend(el); break;
     case 'close': closeModal(); break;
     case 'reload': window.location.reload(); break;
     case 'relogin': if (S.line) S.line.relogin(); break;
@@ -194,6 +200,8 @@ function testBanner() {
  * ===================================================== */
 function render() {
   const d = S.data;
+  // ร้านบังคับเพิ่มเพื่อน LINE OA ก่อนสมัคร (ส่งข้อความรอบ 3) — LINE ตอบไม่ได้ (friend = null) ไม่ปิดกั้น
+  if (!d.member && d.oa && d.oa.required && d.oa.friend === false) return renderFriendGate();
   if (!d.member) return renderRegister();
   if (d.member.status !== 'ACTIVE') {
     app.innerHTML = testBanner() + `
@@ -279,8 +287,59 @@ function birthValue(f) {
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
+/* ---------- เพิ่มเพื่อน LINE OA ก่อนสมัคร (ร้านเปิดสวิตช์ "บังคับเพิ่มเพื่อนก่อนสมัคร") ----------
+ * สาขาจาก QR ยังจำอยู่ในเครื่อง (captureJoinBranch) → เพิ่มเพื่อนแล้วกลับมาสมัครได้เลย
+ * กลับมาที่หน้านี้ (หลังเพิ่มเพื่อนในแอป LINE) → ตรวจใหม่เอง / หรือกดปุ่ม "เพิ่มเพื่อนแล้ว" */
+function renderFriendGate() {
+  const d = S.data;
+  const welcome = d.settings.welcomePoints;
+  app.innerHTML = testBanner() + `
+    <main class="screen register">
+      <div class="reg-hero">
+        ${logoHtml('logo-lg')}
+        <h1>เพิ่มเพื่อน LINE ของร้านก่อนสมัครสมาชิก</h1>
+        <p>รับโปรโมชัน ส่วนลด และสิทธิพิเศษเฉพาะสมาชิก${esc(cfg().name ? ' ' + cfg().name : '')} ทาง LINE</p>
+        ${welcome > 0 ? `<div class="chip chip-accent">${icon('gift', 16)} สมัครแล้วรับทันที ${fmtNum(welcome)} ${esc(unit())}</div>` : ''}
+      </div>
+      <section class="card gate-card">
+        <ol class="gate-steps">
+          <li><b>กดเพิ่มเพื่อน</b> แล้วกด "เพิ่ม" ในหน้าของ LINE</li>
+          <li><b>กลับมาที่หน้านี้</b> แล้วกรอกข้อมูลสมัครสมาชิก</li>
+        </ol>
+        ${d.oa.addUrl ? `<a class="btn btn-primary btn-block btn-lg" href="${esc(d.oa.addUrl)}" data-friend-add>${icon('chat', 20)} เพิ่มเพื่อน</a>` : ''}
+        <button type="button" class="btn btn-block" data-act="friend-check">${icon('check', 18)} เพิ่มเพื่อนแล้ว ไปสมัครสมาชิก</button>
+        <div class="form-error" id="gate-error" hidden></div>
+      </section>
+      ${creditHtml('credit-page')}
+    </main>`;
+}
+
+// กดเพิ่มเพื่อนแล้ว → ถามตัวกลางใหม่ (ตัวกลางถาม LINE จริง ไม่เชื่อหน้าเว็บ)
+async function checkFriend(btn) {
+  if (btn) setBusy(btn, true, 'กำลังตรวจ...');
+  try {
+    await refresh();
+    const box = document.getElementById('gate-error');
+    if (box && S.data.oa && S.data.oa.friend === false) {
+      box.textContent = 'ยังไม่พบว่าเพิ่มเพื่อนแล้ว กด "เพิ่มเพื่อน" แล้วกด "เพิ่ม" ในหน้าของ LINE ก่อน';
+      box.hidden = false;
+    }
+  } catch (e) {
+    if (btn) setBusy(btn, false);
+    toast(e.message, 'err');
+  }
+}
+
+// ข้อความช่องยินยอมรับข่าวสาร (ผู้ใช้เลือกแบบที่ 1 — 12 พ.ย. 2569) บรรทัดเล็กบอกช่องทาง + วิธียกเลิก ตาม PDPA
+function consentLabel(bonus) {
+  return `<span><b>${bonus > 0 ? `รับฟรี ${fmtNum(bonus)} ${esc(unit())}ทันที</b> เมื่อรับข่าวสารและโปรโมชันจากร้าน` : 'รับข่าวสาร โปรโมชัน และสิทธิพิเศษจากร้าน</b>'}
+    <small class="consent-sub">ส่งทาง LINE ของร้าน · ยกเลิกได้ทุกเมื่อที่ "แก้ไขข้อมูล"</small></span>`;
+}
+
 function renderRegister() {
   const welcome = S.data.settings.welcomePoints;
+  // ระบบเดิม (Apps Script) ไม่ส่ง signup มา → ช่องยินยอมแบบเดิม (ไม่ติ๊กไว้ให้)
+  const su = S.data.signup;
   app.innerHTML = testBanner() + `
     <main class="screen register">
       <div class="reg-hero">
@@ -300,8 +359,10 @@ function renderRegister() {
           ${phoneInput('')}</label>
         <label class="check"><input type="checkbox" name="consentPrivacy">
           <span>ฉันยอมรับ<button type="button" class="link" data-act="privacy">นโยบายความเป็นส่วนตัว</button>ของร้าน <em>*</em></span></label>
-        <label class="check"><input type="checkbox" name="consentMarketing">
-          <span>ยินดีรับข่าวสารและโปรโมชันทาง LINE (ยกเลิกได้ทุกเมื่อ)</span></label>
+        ${su ? `<label class="check check-consent"><input type="checkbox" name="consentMarketing" ${su.preticked ? 'checked' : ''}>
+          ${consentLabel(su.bonusAvailable ? su.bonusPoints : 0)}</label>`
+        : `<label class="check"><input type="checkbox" name="consentMarketing">
+          <span>ยินดีรับข่าวสารและโปรโมชันทาง LINE (ยกเลิกได้ทุกเมื่อ)</span></label>`}
         <div class="form-error" id="reg-error" hidden></div>
         <button class="btn btn-primary btn-block btn-lg" type="submit">สมัครสมาชิก</button>
       </form>
@@ -422,7 +483,7 @@ function pageProfile() {
              <small class="hint">${m.birthDate ? 'แก้วันเกิดได้ 1 ครั้ง (ใช้มอบสิทธิพิเศษเดือนเกิด)' : 'ใช้มอบสิทธิพิเศษเดือนเกิด'}</small>`}
       </div>
       <label class="switch-row">
-        <span><b>รับข่าวสารและโปรโมชันทาง LINE</b><small class="hint">ปิดได้ทุกเมื่อ</small></span>
+        <span><b>รับข่าวสารและโปรโมชันทาง LINE</b><small class="hint" id="consent-hint">${esc(consentHint(m.marketingConsent))}</small></span>
         <input type="checkbox" name="consentMarketing" class="switch-input" ${m.marketingConsent ? 'checked' : ''}>
         <span class="switch" aria-hidden="true"></span>
       </label>
@@ -430,6 +491,25 @@ function pageProfile() {
       <button class="btn btn-primary btn-block btn-lg" type="submit">บันทึกข้อมูล</button>
     </form>
     <p class="profile-note">ร้านใช้ข้อมูลนี้ตาม<button type="button" class="link" data-act="privacy">นโยบายความเป็นส่วนตัว</button> · ${esc(unit())}และคูปองไม่เปลี่ยน</p>`;
+}
+
+// คำใต้สวิตช์รับข่าวสาร: ยังไม่เคยได้แต้มรับข่าวสาร → บอกว่าเปิดแล้วได้กี่แต้ม / กำลังจะปิด → เตือนสั้นๆ ว่าจะพลาดอะไร (ไม่ห้ามปิด)
+function consentHint(on) {
+  const su = S.data.signup;
+  const m = S.data.member;
+  if (!on && m.marketingConsent) return 'ถ้ายกเลิก จะไม่ได้รับโปรโมชันและสิทธิพิเศษทาง LINE';
+  if (!on && su && su.bonusAvailable && su.bonusPoints > 0) return `เปิดรับ รับฟรี ${fmtNum(su.bonusPoints)} ${unit()}ทันที`;
+  return 'ปิดได้ทุกเมื่อ';
+}
+
+function onConsentToggle(e) {
+  const el = e.target;
+  if (!el || el.name !== 'consentMarketing' || !el.closest('#profile')) return;
+  const hint = document.getElementById('consent-hint');
+  if (hint) {
+    hint.textContent = consentHint(el.checked);
+    hint.classList.toggle('hint-warn', !el.checked && S.data.member.marketingConsent);
+  }
 }
 
 function onProfileSubmit(e) {
@@ -478,7 +558,12 @@ async function doSaveProfile(btn) {
     S.data.member = r.member;
     writeCache(S.data);
     closeModal();
-    toast(r.changed ? 'บันทึกข้อมูลแล้ว' : 'ข้อมูลเหมือนเดิม ไม่มีอะไรเปลี่ยน', 'ok');
+    if (r.consentBonus) {
+      await refresh().catch(() => {}); // แต้มในบัตร + ประวัติ อัปเดตทันที
+      toast(`บันทึกแล้ว รับ ${fmtNum(r.consentBonus)} ${unit()} จากการรับข่าวสาร`, 'ok');
+    } else {
+      toast(r.changed ? 'บันทึกข้อมูลแล้ว' : 'ข้อมูลเหมือนเดิม ไม่มีอะไรเปลี่ยน', 'ok');
+    }
     go('home');
   } catch (e) {
     setBusy(btn, false);
@@ -512,6 +597,21 @@ function badgesHtml() {
       </div>
     </section>`;
   }).join('')}</div>`;
+}
+
+// ยังไม่เป็นเพื่อน / บล็อก LINE OA ของร้าน → ชวนเพิ่มเพื่อน (ไม่งั้นไม่ได้รับโปรโมชันทาง LINE)
+function friendCard() {
+  const oa = S.data.oa;
+  if (!oa || oa.friend !== false || !oa.addUrl) return '';
+  return `
+    <section class="oa-card">
+      <div class="oa-card-icon">${icon('chat', 22)}</div>
+      <div class="grow">
+        <b>เพิ่มเพื่อน LINE ของร้าน</b>
+        <small>รับโปรโมชันและสิทธิพิเศษสำหรับสมาชิก</small>
+      </div>
+      <a class="btn btn-primary btn-sm" href="${esc(oa.addUrl)}" data-friend-add>เพิ่มเพื่อน</a>
+    </section>`;
 }
 
 function birthdayCard() {
@@ -589,12 +689,15 @@ async function onRegister(e) {
     });
     try { localStorage.removeItem(joinKey()); } catch (e) { /* ข้าม */ }
     await refresh();
-    if (r.welcomePoints > 0) {
+    const bonus = r.consentBonus || 0;
+    if (r.welcomePoints > 0 || bonus > 0) {
+      const lines = [r.welcomePoints > 0 ? `<b>${fmtNum(r.welcomePoints)} ${esc(unit())}</b> ต้อนรับสมาชิกใหม่` : '',
+        bonus > 0 ? `<b>${fmtNum(bonus)} ${esc(unit())}</b> รับข่าวสารจากร้าน` : ''].filter(Boolean);
       openModal(`
         <div class="modal-center">
           <div class="big-icon ok">${icon('gift', 34)}</div>
           <h2>ยินดีต้อนรับ!</h2>
-          <p>คุณได้รับ <b>${fmtNum(r.welcomePoints)} ${esc(unit())}</b> ต้อนรับสมาชิกใหม่</p>
+          <p>คุณได้รับ ${lines.join(' + ')}</p>
           <button class="btn btn-primary btn-block" data-act="close">เริ่มใช้งาน</button>
         </div>`);
     } else {
@@ -602,6 +705,8 @@ async function onRegister(e) {
     }
   } catch (err) {
     setBusy(btn, false);
+    // ยังไม่ได้เพิ่มเพื่อน OA (ร้านบังคับ) → กลับไปหน้าเพิ่มเพื่อน ข้อมูลที่กรอกเก็บไว้ให้
+    if (err.code === 'NOT_FRIEND') { saveRegisterDraft(); toast(err.message, 'err'); return refresh().catch(() => {}); }
     showErr(err.message);
   }
 }
@@ -645,6 +750,7 @@ function pageHome() {
     </header>
     ${memberCard(m)}
     ${tierCard(m)}
+    ${friendCard()}
     ${birthdayCard()}
     ${badgesHtml()}
     <section class="section">
@@ -904,8 +1010,8 @@ function showCouponQr(code) {
 /* =====================================================
  * ประวัติแต้ม
  * ===================================================== */
-const TX_LABEL = { EARN: 'สะสมจากการซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกของรางวัล', ADJUST: 'ปรับโดยร้าน' };
-const TX_ICON = { EARN: 'up', WELCOME: 'star', REDEEM: 'gift', ADJUST: 'coins' };
+const TX_LABEL = { EARN: 'สะสมจากการซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกของรางวัล', ADJUST: 'ปรับโดยร้าน', CONSENT: 'รับข่าวสารจากร้าน' };
+const TX_ICON = { EARN: 'up', WELCOME: 'star', REDEEM: 'gift', ADJUST: 'coins', CONSENT: 'chat' };
 
 function pageHistory() {
   const all = S.data.history;
