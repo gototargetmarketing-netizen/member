@@ -1287,7 +1287,7 @@ function fakeLine() {
         return res;
       };
       let res = await runCron('', 'Bearer ');
-      ok(res.statusCode === 401 && res.body.ready && res.body.ready.checkPointsFile === true && res.body.ready.shopFiles >= 2 && res.body.ready.secretSet === false,
+      ok(res.statusCode === 401 && res.body.ready && res.body.ready.checkPoints === true && res.body.ready.shopFiles >= 2 && res.body.ready.secretSet === false,
         'ยังไม่ตั้ง CRON_SECRET → ไม่รับ (บอกแค่ว่าไฟล์ที่ต้องใช้ครบ)', res.body);
       res = await runCron('ลับมาก', 'Bearer ผิด');
       ok(res.statusCode === 401 && sent.length === 0, 'รหัสผิด → ไม่รับ ไม่ตรวจ ไม่ส่ง');
@@ -1296,8 +1296,11 @@ function fakeLine() {
       res = await runCron('ลับมาก', 'Bearer ลับมาก', { query: async () => { throw dbDown(); } });
       ok(res.statusCode === 500 && /งานตรวจประจำวันทำไม่สำเร็จ/.test(texts().pop() || '') && /ต่อฐานข้อมูลไม่ได้/.test(texts().pop() || ''), 'งานตรวจเองล้ม → แจ้ง "งานตรวจประจำวันทำไม่สำเร็จ" (ไม่เงียบ)');
       const vj = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8'));
-      ok((vj.crons || []).some((c) => c.path === '/api/cron' && c.schedule === '0 1 * * *') && /check_points\.sql/.test(vj.functions['api/cron.js'].includeFiles) && /shops/.test(vj.functions['api/cron.js'].includeFiles),
-        'vercel.json: งานตรวจทุกวัน 08:00 เวลาไทย (01:00 UTC) + แนบไฟล์ตรวจแต้มและไฟล์ร้าน');
+      ok((vj.crons || []).some((c) => c.path === '/api/cron' && c.schedule === '0 1 * * *') && vj.functions['api/cron.js'].includeFiles === 'shops/**',
+        'vercel.json: งานตรวจทุกวัน 08:00 เวลาไทย (01:00 UTC) + แนบไฟล์ร้าน');
+      // โฟลเดอร์ db/ ไม่ขึ้น Vercel (.vercelignore) → คำสั่งตรวจแต้มอยู่ในโมดูล JS ต้องเหมือนไฟล์ที่ผู้ดูแลวางเองทุกตัวอักษร
+      ok(A.CHECK_POINTS_SQL === fs.readFileSync(path.join(ROOT, 'db', 'check_points.sql'), 'utf8'),
+        'api/_lib/check-points.js ตรงกับ db/check_points.sql ทุกตัวอักษร (แก้ไฟล์ .sql แล้วต้องคัดลอกไปด้วย)');
       // ลิงก์ทดสอบ: ขึ้นต้นข้อความให้รู้
       A.configure({ env: Object.assign({}, ENV, { VERCEL_ENV: 'preview' }), fetch: fakeFetch, now: () => clock }); sent.length = 0;
       await A.noteConfig('NO_LIFF', 'demo');

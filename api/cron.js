@@ -6,7 +6,6 @@
 // ไม่ตั้ง CRON_SECRET = ไม่รับเลย (ปลอดภัยไว้ก่อน — งานนี้อ่านข้อมูลทุกร้าน แม้คำตอบจะไม่มีข้อมูลส่วนตัว)
 'use strict';
 const crypto = require('crypto');
-const fs = require('fs');
 const { getDb } = require('./_lib/db');
 const { createOa, tokenFor } = require('./_lib/lineoa');
 const features = require('./_lib/features');
@@ -31,9 +30,9 @@ function authorized(header, secret) {
 function createCronHandler(deps) {
   return async function handler(req, res) {
     if (!authorized(req.headers && req.headers.authorization, deps.secret())) {
-      // บอกแค่ว่าไฟล์ที่งานตรวจต้องใช้ถูกแนบมาครบไหม (ไม่มีข้อมูลร้าน) — ไว้เช็กจากภายนอกหลังขึ้นเว็บว่า includeFiles ใน vercel.json ได้ผล
+      // บอกแค่ว่าสิ่งที่งานตรวจต้องใช้มาครบไหม (ไม่มีข้อมูลร้าน) — ไว้เช็กจากภายนอกหลังขึ้นเว็บ (ไฟล์ร้านจาก includeFiles ใน vercel.json)
       return send(res, 401, { ok: false, error: 'ไม่มีสิทธิ์', code: 'UNAUTHORIZED',
-        ready: { checkPointsFile: fs.existsSync(alerts.CHECK_POINTS_FILE), shopFiles: features.shopFileCount(), secretSet: !!deps.secret() } });
+        ready: { checkPoints: /แต้มไม่ตรง/.test(alerts.CHECK_POINTS_SQL), shopFiles: features.shopFileCount(), secretSet: !!deps.secret() } });
     }
     try {
       const r = await alerts.runDaily({ db: deps.db(), features: deps.features, oa: deps.oa, now: deps.now ? deps.now() : new Date() });

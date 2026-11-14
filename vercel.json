@@ -2,7 +2,7 @@
   "regions": ["sin1"],
   "functions": {
     "api/index.js": { "includeFiles": "shops/**" },
-    "api/cron.js": { "includeFiles": "{shops/**,db/check_points.sql}", "maxDuration": 60 }
+    "api/cron.js": { "includeFiles": "shops/**", "maxDuration": 60 }
   },
   "crons": [
     { "path": "/api/cron", "schedule": "0 1 * * *" }

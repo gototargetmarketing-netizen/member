@@ -14,8 +14,6 @@
 //   ทุกเช้า — runDaily (เรียกจาก api/cron.js ที่ Vercel Cron เรียกวันละครั้ง) แจ้งเฉพาะวันที่เจอปัญหา + สรุปตามรอบ
 'use strict';
 
-const fs = require('fs');
-const path = require('path');
 const crypto = require('crypto');
 const U = require('./util');
 const { createOa, tokenFor } = require('./lineoa');
@@ -126,7 +124,8 @@ async function noteConfig(code, shopId, action) {
 }
 
 // ---------- ตรวจทุกเช้า ----------
-const CHECK_POINTS_FILE = path.join(__dirname, '..', '..', 'db', 'check_points.sql');
+// คำสั่งเดียวกับ db/check_points.sql (ไฟล์ที่ผู้ดูแลวางใน Supabase เอง) — เก็บเป็นโมดูล JS เพราะโฟลเดอร์ db/ ไม่ขึ้น Vercel
+const CHECK_POINTS_SQL = require('./check-points');
 
 function caDaysLeft(now) {
   try {
@@ -153,7 +152,7 @@ async function runDaily(deps) {
   const facts = [];
 
   // 1) แต้มไม่ตรง — ไฟล์เดียวกับที่ผู้ดูแลวางใน Supabase เอง (ผลตรงกันเสมอ)
-  const pointRows = (await db.query(fs.readFileSync(CHECK_POINTS_FILE, 'utf8'))).rows;
+  const pointRows = (await db.query(CHECK_POINTS_SQL)).rows;
   pointRows.filter((r) => U.toInt(r['แต้มไม่ตรง']) > 0).forEach((r) => {
     const list = String(r['รายชื่อที่ไม่ตรง'] || '').split(', ').slice(0, 5).join('\n  ');
     problems.push(`ร้าน ${r['ร้าน']}: แต้มไม่ตรง ${U.fmtNum(r['แต้มไม่ตรง'])} คน\n  ${list}\n  → คู่มือฉุกเฉิน เหตุ 3`);
@@ -225,4 +224,4 @@ async function runDaily(deps) {
   return { problems, summary: summaryDay, sent };
 }
 
-module.exports = { configure, enabled, sendText, noteError, noteConfig, runDaily, describe, CONFIG_CODES, CHECK_POINTS_FILE, ERR_THRESHOLD, _state: state };
+module.exports = { configure, enabled, sendText, noteError, noteConfig, runDaily, describe, CONFIG_CODES, CHECK_POINTS_SQL, ERR_THRESHOLD, _state: state };
