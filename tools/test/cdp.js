@@ -6,7 +6,23 @@ const fs = require('fs');
 const CHROME = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
+// มีเบราว์เซอร์อื่นเปิดพอร์ตนี้อยู่ก่อนไหม (เช่น ตัวที่ค้างจากชุดทดสอบรอบก่อนที่ถูกสั่งหยุดกลางทาง)
+// เคยเกิด 13 พ.ย. 2569: Chrome ตัวที่ค้างยังจำช่วง "7 วัน" ในหลังบ้าน ชุดทดสอบไปต่อกับตัวนั้นเงียบๆ
+// → ข้อ "กราฟ 30 แท่ง" ไม่ผ่าน ทั้งที่หน้าเว็บไม่ได้เสีย — จึงหยุดแล้วบอกให้ชัดแทนการใช้ตัวเก่าต่อ
+async function portBusy(port) {
+  try {
+    const r = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1000) });
+    return r.ok;
+  } catch (e) {
+    return false; // ไม่มีใครตอบ = พอร์ตว่าง
+  }
+}
+
 async function launch({ port = 9333, profile, width = 390, height = 844, dpr = 2, mobile = true, args = [] } = {}) {
+  if (await portBusy(port)) {
+    throw new Error(`มีเบราว์เซอร์ทดสอบตัวเก่าค้างอยู่ที่พอร์ต ${port} (น่าจะจากรอบก่อนที่หยุดกลางทาง) — ปิดก่อนแล้วค่อยรันใหม่:\n` +
+      `  kill $(lsof -nP -t -sTCP:LISTEN -iTCP:${port})`);
+  }
   fs.rmSync(profile, { recursive: true, force: true });
   const proc = spawn(CHROME, [
     '--headless=new', `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`,
