@@ -339,6 +339,9 @@ async function seed() {
     // คืนค่าตั้งต้น (ไม่ให้กระทบส่วนอื่นของชุดทดสอบ)
     await api('adminBrandSave', 'U_ADM_OWNER', { values: { SHOP_NAME: '', COLOR_PRIMARY: '', TEXT_POINT_UNIT: '', PRIVACY_TEXT: '' } });
     await b.nav(`${WEB}/khamwan`);
+    // ล้างข้อความนโยบาย = นโยบายฉบับใหม่อีกรอบ → ระบบใหม่ขึ้นหน้ายอมรับนโยบายก่อน (ระบบเดิมไม่มี)
+    await b.waitFor(`/คำหวาน CUISINE/.test(document.querySelector('.mc-shop')?.innerText || '') || !!document.querySelector('[data-act=policy-accept]')`, 10000, 'บัตรสมาชิก หรือหน้ายอมรับนโยบาย');
+    if (await b.eval(`!!document.querySelector('[data-act=policy-accept]')`)) await b.click('[data-act=policy-accept]');
     await b.waitFor(`/คำหวาน CUISINE/.test(document.querySelector('.mc-shop')?.innerText || '')`, 10000, 'กลับเป็นชื่อเดิม');
     ok((await b.eval(`getComputedStyle(document.documentElement).getPropertyValue('--primary').trim().toUpperCase()`)) === '#1F1914', 'ล้างค่าในหลังบ้าน → กลับไปใช้ชื่อและสีในไฟล์ตั้งค่าร้าน');
     await b.eval(asUser('U_ADM_OWNER', 'เจ้าของร้าน'));
