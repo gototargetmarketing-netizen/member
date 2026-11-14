@@ -55,6 +55,8 @@ async function readFeatures(shopId) {
   } catch (e) {
     console.error('อ่านแพ็กเกจของร้าน ' + shopId + ' ไม่ได้ (' + (e && e.code === 'ENOENT' ? 'ไม่พบ ' + file +
       ' — ตรวจ includeFiles ใน vercel.json' : (e && e.message) || e) + ') → ปิดทุกแพ็กเกจของร้านนี้ไว้ก่อน');
+    // แจ้งผู้ดูแล (ร้านที่มีจริงในฐานข้อมูลแต่อ่านไฟล์ไม่ได้ = ทุกแพ็กเกจถูกปิดโดยไม่มีใครรู้) — โหลดตอนใช้ กันวนกันระหว่างไฟล์
+    require('./alerts').noteConfig('PACKAGE_FILE', shopId).catch(() => {});
     return ALL_OFF;
   }
 }

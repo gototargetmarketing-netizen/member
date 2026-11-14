@@ -10,7 +10,9 @@ const { createTestDb, DB_DIR } = require('./pglite-db');
 const ROOT = path.join(__dirname, '..', '..');
 const { createApp } = require(path.join(ROOT, 'api', '_lib', 'router.js'));
 const { createVerifier, ISSUER } = require(path.join(ROOT, 'api', '_lib', 'line.js'));
-const { connectionConfig } = require(path.join(ROOT, 'api', '_lib', 'db.js'));
+const { connectionConfig, getDb } = require(path.join(ROOT, 'api', '_lib', 'db.js'));
+// ตัวต่อฐานข้อมูลจริงตอนยังไม่ตั้ง DATABASE_URL (ชุดทดสอบไม่มีค่านี้ → ตอบ NO_DB)
+const getDbNoEnv = () => { const keep = process.env.DATABASE_URL; delete process.env.DATABASE_URL; try { return getDb(); } finally { if (keep !== undefined) process.env.DATABASE_URL = keep; } };
 const indexHandler = require(path.join(ROOT, 'api', 'index.js'));
 const U = require(path.join(ROOT, 'api', '_lib', 'util.js'));
 
@@ -1173,6 +1175,140 @@ function fakeLine() {
     } finally {
       console.log = log;
       console.error = errLog;
+    }
+  }
+
+  console.log('\n[5.12] แจ้งเตือนผู้ดูแลทาง LINE (ทันที + ตรวจทุกเช้า) — LINE จำลอง ไม่ส่งจริง');
+  {
+    const A = require(path.join(ROOT, 'api', '_lib', 'alerts.js'));
+    const { createCronHandler } = require(path.join(ROOT, 'api', 'cron.js'));
+    const sent = [];
+    let failFetch = null;
+    const fakeFetch = async (url, opt) => {
+      if (failFetch) return { ok: false, status: failFetch, text: async () => '{"message":"x"}' };
+      sent.push({ url, body: opt.body ? JSON.parse(opt.body) : null, key: (opt.headers || {})['X-Line-Retry-Key'] });
+      return { ok: true, status: 200, text: async () => '{}' };
+    };
+    let clock = Date.parse('2026-11-16T01:00:00Z'); // วันจันทร์ 08:00 เวลาไทย
+    const TO = ['U' + 'a'.repeat(32), 'U' + 'b'.repeat(32)];
+    const ENV = { ALERT_LINE_TOKEN: 'tok-test', ALERT_LINE_TO: TO.join(',') + ', ไม่ใช่LINEID', VERCEL_ENV: 'production' };
+    const texts = () => sent.map((x) => x.body.messages[0].text);
+    const dbDown = () => Object.assign(new Error('connect ECONNREFUSED 10.0.0.1:6543'), { code: 'ECONNREFUSED' });
+    const errLog = console.error; console.error = () => {};
+    try {
+      // ไม่ได้ตั้งค่า = ไม่ส่งอะไรเลย
+      A.configure({ env: {}, fetch: fakeFetch, now: () => clock });
+      for (let i = 0; i < 10; i++) await A.noteError('bootstrap', dbDown());
+      await A.noteConfig('NO_DB', 'demo', 'bootstrap');
+      ok(sent.length === 0 && !A.enabled(), 'ยังไม่ตั้ง ALERT_LINE_TOKEN / ALERT_LINE_TO → ไม่ส่งอะไรเลย ระบบทำงานปกติ');
+
+      // ทันที: error ระบบถึงเกณฑ์
+      A.configure({ env: ENV, fetch: fakeFetch, now: () => clock });
+      for (let i = 0; i < 4; i++) { clock += 1000; await A.noteError('bootstrap', dbDown()); }
+      ok(sent.length === 0, 'error 4 ครั้งใน 10 นาที → ยังไม่แจ้ง (ครั้งเดียวอาจแค่เน็ตสะดุด)');
+      clock += 1000; await A.noteError('bootstrap', dbDown());
+      ok(sent.length === 1 && /multicast$/.test(sent[0].url) && JSON.stringify(sent[0].body.to) === JSON.stringify(TO), 'ครั้งที่ 5 → แจ้งทันที 1 ข้อความ ถึงผู้รับ 2 คน (LINE ID รูปแบบผิดถูกตัดทิ้ง)', sent[0] && sent[0].body.to);
+      ok(/ระบบขัดข้อง 5 ครั้งใน 10 นาที/.test(texts()[0]) && /ต่อฐานข้อมูลไม่ได้/.test(texts()[0]) && /bootstrap/.test(texts()[0]) && !/10\.0\.0\.1|6543/.test(texts()[0]),
+        'ข้อความบอกจำนวน + สาเหตุแบบอ่านเข้าใจ (ไม่มีที่อยู่เครื่อง/รายละเอียดภายใน)', texts()[0]);
+      for (let i = 0; i < 20; i++) { clock += 1000; await A.noteError('bootstrap', dbDown()); }
+      ok(sent.length === 1, 'error ต่อเนื่องอีก 20 ครั้ง → ไม่แจ้งซ้ำภายใน 30 นาที');
+      clock += 31 * 60 * 1000;
+      for (let i = 0; i < 5; i++) { clock += 1000; await A.noteError('redeem', new TypeError("Cannot read properties of undefined (reading 'x') 0812345678 a@b.co")); }
+      ok(sent.length === 2 && /โค้ดผิดพลาด/.test(texts()[1]) && !/0812345678|a@b\.co/.test(texts()[1]), 'ผ่าน 30 นาทีแล้วยังพัง → แจ้งอีก / ตัวเลขยาว อีเมล ถูกตัดออกจากข้อความ', texts()[1]);
+
+      // ทันที: ปัญหาตั้งค่า
+      ok(await A.noteConfig('NO_DB', '', 'bootstrap') && /DATABASE_URL/.test(texts()[2]), 'ยังไม่ตั้งรหัสฐานข้อมูล → แจ้งตั้งแต่ครั้งแรก');
+      ok(!(await A.noteConfig('NO_DB', '', 'bootstrap')), 'เรื่องเดิมซ้ำภายใน 6 ชม. → ไม่แจ้งซ้ำ');
+      ok(await A.noteConfig('OA_TOKEN', 'demo', 'adminBroadcastSend') && /ร้าน demo/.test(texts()[3]), 'รหัส LINE OA ของร้านใช้ไม่ได้ → แจ้งพร้อมชื่อร้าน');
+      ok(!(await A.noteConfig('NOT_FRIEND', 'demo', 'register')), 'error ที่ลูกค้าแก้เองได้ (เช่น ยังไม่เพิ่มเพื่อน) → ไม่แจ้ง');
+      clock += 6 * 3600 * 1000 + 1000;
+      ok(await A.noteConfig('NO_DB', '', 'bootstrap'), 'ผ่าน 6 ชม. ยังไม่แก้ → แจ้งอีกครั้ง');
+
+      // ผ่านตัวกลางจริง: ฐานข้อมูลล่ม / ยังไม่ตั้งรหัส
+      sent.length = 0;
+      A.configure({ env: ENV, fetch: fakeFetch, now: () => clock });
+      const downApp = createApp({ db: () => ({ query: async () => { throw dbDown(); } }), verifier: createVerifier({ fetch: fakeLine().fetch }), region: 'test' });
+      for (let i = 0; i < 5; i++) r = await downApp.handle({ action: 'bootstrap', shop: 'demo', idToken: 'x' });
+      ok(!r.ok && r.code === 'ERROR' && sent.length === 1 && /ระบบขัดข้อง 5 ครั้ง/.test(texts()[0]), 'ตัวกลาง: ฐานข้อมูลล่ม 5 คำขอ → ลูกค้าเห็น "ระบบขัดข้อง" + ผู้ดูแลได้แจ้งเตือน 1 ข้อความ', r);
+      const noDb = createApp({ db: getDbNoEnv, verifier: createVerifier({ fetch: fakeLine().fetch }), region: 'test' });
+      r = await noDb.handle({ action: 'bootstrap', shop: 'demo' });
+      ok(!r.ok && r.code === 'NO_DB' && sent.length === 2 && /DATABASE_URL/.test(texts()[1]), 'ตัวกลาง: ยังไม่ตั้งรหัสฐานข้อมูล → ผู้ดูแลได้แจ้งเตือนทันที', r.code);
+
+      // ตรวจทุกเช้า (ฐานข้อมูลใหม่ของส่วนนี้ — ร้าน demo ข้อมูลทดลอง)
+      const ddb = await createTestDb();
+      const featOn = async () => ({ broadcast: true });
+      const quotaOa = (used, limit) => ({ quota: async () => ({ type: 'limited', value: limit }), consumption: async () => ({ totalUsage: used }) });
+      const daily = (extra) => A.runDaily(Object.assign({ db: ddb, features: featOn, oa: () => quotaOa(120, 300), now: new Date(clock) }, extra || {}));
+      const mon = Date.parse('2026-11-16T01:00:00Z'), tue = Date.parse('2026-11-17T01:00:00Z');
+      sent.length = 0;
+      clock = mon; A.configure({ env: ENV, fetch: fakeFetch, now: () => clock });
+      let d = await daily();
+      ok(d.problems.length === 0 && d.summary && d.sent && sent.length === 1, 'วันจันทร์ ไม่มีปัญหา → ส่งสรุปประจำสัปดาห์ (ยืนยันว่าระบบแจ้งเตือนยังทำงาน)', d.problems);
+      const t0 = texts()[0];
+      ok(/✅ ระบบปกติ/.test(t0) && /สรุปประจำสัปดาห์/.test(t0) && /ร้านที่เปิดใช้ \d+ ร้าน · สมาชิก [\d,]+ คน/.test(t0) && /ฐานข้อมูล [\d.]+ MB จาก 500 MB/.test(t0) &&
+        /ร้าน demo: LINE OA ใช้ไป 120\/300/.test(t0) && /ใบรับรอง SSL เหลือ [\d,]+ วัน/.test(t0), 'สรุป: ร้าน สมาชิก ฐานข้อมูล โควตา OA ใบรับรอง', t0);
+      clock = tue; A.configure({ env: ENV, fetch: fakeFetch, now: () => clock }); sent.length = 0;
+      d = await daily({ now: new Date(tue) });
+      ok(!d.sent && sent.length === 0, 'วันอังคาร ไม่มีปัญหา → เงียบ (ไม่เปลืองโควตา)');
+      // แต้มเพี้ยน + ส่งข้อความไม่สำเร็จ + โควตาใกล้หมด + รหัส OA เสีย
+      const [bad] = (await ddb.query(`select id from members where shop_id = 'demo' order by id limit 1`)).rows;
+      await ddb.query(`update members set points = points + 7 where shop_id = 'demo' and id = $1`, [bad.id]);
+      await ddb.query(`insert into broadcasts (shop_id, id, request_id, created_by, recipients, total, sent, status, created_at, updated_at)
+        values ('demo', 'BC-ALERT01', 'req-alert-01', 'U_OWNER', array['DM-000001'], 1200, 500, 'PARTIAL', $1, $1)`, [new Date(tue - 3600 * 1000)]);
+      d = await daily({ now: new Date(tue), oa: () => quotaOa(290, 300) });
+      const t1 = texts()[0] || '';
+      ok(d.sent && d.problems.length === 2 && /พบ 2 เรื่อง/.test(t1) && new RegExp('แต้มไม่ตรง 1 คน[\\s\\S]*' + bad.id).test(t1) && /ส่งได้ไม่ครบ \(500\/1,200 คน BC-ALERT01\)/.test(t1),
+        'วันอังคาร เจอปัญหา → แจ้ง: แต้มไม่ตรง (รหัสสมาชิก) + ส่งข้อความไม่ครบ', t1);
+      ok(!/สรุปประจำสัปดาห์/.test(t1) && !/0[689]\d{8}/.test(t1), 'วันที่ไม่ใช่วันสรุป → แจ้งเฉพาะปัญหา / ไม่มีเบอร์ลูกค้าในข้อความ');
+      sent.length = 0;
+      d = await daily({ now: new Date(tue), oa: () => ({ quota: async () => { const e = new Error('401'); e.status = 401; throw e; }, consumption: async () => ({}) }) });
+      ok(d.problems.some((p) => /ร้าน demo: รหัส LINE OA ของร้านใช้ไม่ได้/.test(p)), 'รหัส LINE OA ของร้านใช้ไม่ได้ → อยู่ในรายการปัญหา', d.problems);
+      // ส่งซ้ำวันเดียวกัน = key เดิม (LINE ไม่ส่งซ้ำ)
+      sent.length = 0;
+      await daily({ now: new Date(tue) }); await daily({ now: new Date(tue) });
+      ok(sent.length === 2 && sent[0].key === sent[1].key && /^[0-9a-f-]{36}$/.test(sent[0].key), 'งานตรวจถูกเรียกซ้ำในวันเดียวกัน → รหัสกันส่งซ้ำเดิม (LINE ไม่ส่งซ้ำ)');
+      // แก้แล้ว + สรุปรายวัน + เพดานพื้นที่
+      await ddb.query(`update members set points = points - 7 where shop_id = 'demo' and id = $1`, [bad.id]);
+      await ddb.query(`update broadcasts set status = 'DONE', sent = total where id = 'BC-ALERT01'`);
+      A.configure({ env: Object.assign({}, ENV, { ALERT_SUMMARY: 'daily' }), fetch: fakeFetch, now: () => clock }); sent.length = 0;
+      d = await daily({ now: new Date(tue) });
+      ok(d.sent && /✅ ระบบปกติ/.test(texts()[0]) && /สรุปประจำวัน/.test(texts()[0]), 'ALERT_SUMMARY=daily → สรุปทุกเช้า แม้ไม่มีปัญหา');
+      A.configure({ env: Object.assign({}, ENV, { ALERT_DB_LIMIT_MB: '1' }), fetch: fakeFetch, now: () => clock }); sent.length = 0;
+      d = await daily({ now: new Date(tue) });
+      ok(d.problems.some((p) => /ฐานข้อมูลใช้ไป .* จาก 1 MB/.test(p)), 'ฐานข้อมูลใช้เกิน 80% ของเพดาน → แจ้งทุกเช้า', d.problems);
+
+      // ทางเข้างานตรวจ (api/cron.js)
+      A.configure({ env: ENV, fetch: fakeFetch, now: () => clock }); sent.length = 0;
+      const mkRes = () => ({ statusCode: 0, headers: {}, setHeader(k, v) { this.headers[k] = v; }, end(s) { this.body = JSON.parse(s); } });
+      const runCron = async (secret, auth, db) => {
+        const h = createCronHandler({ db: () => db || ddb, secret: () => secret, features: featOn, oa: () => quotaOa(1, 300), now: () => new Date(tue) });
+        const res = mkRes();
+        await h({ headers: auth ? { authorization: auth } : {} }, res);
+        return res;
+      };
+      let res = await runCron('', 'Bearer ');
+      ok(res.statusCode === 401 && res.body.ready && res.body.ready.checkPointsFile === true && res.body.ready.shopFiles >= 2 && res.body.ready.secretSet === false,
+        'ยังไม่ตั้ง CRON_SECRET → ไม่รับ (บอกแค่ว่าไฟล์ที่ต้องใช้ครบ)', res.body);
+      res = await runCron('ลับมาก', 'Bearer ผิด');
+      ok(res.statusCode === 401 && sent.length === 0, 'รหัสผิด → ไม่รับ ไม่ตรวจ ไม่ส่ง');
+      res = await runCron('ลับมาก', 'Bearer ลับมาก');
+      ok(res.statusCode === 200 && res.body.ok && res.body.problems === 0 && !('rows' in res.body), 'รหัสถูก → ตรวจ (คำตอบมีแค่จำนวน ไม่มีข้อมูลร้าน)', res.body);
+      res = await runCron('ลับมาก', 'Bearer ลับมาก', { query: async () => { throw dbDown(); } });
+      ok(res.statusCode === 500 && /งานตรวจประจำวันทำไม่สำเร็จ/.test(texts().pop() || '') && /ต่อฐานข้อมูลไม่ได้/.test(texts().pop() || ''), 'งานตรวจเองล้ม → แจ้ง "งานตรวจประจำวันทำไม่สำเร็จ" (ไม่เงียบ)');
+      const vj = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8'));
+      ok((vj.crons || []).some((c) => c.path === '/api/cron' && c.schedule === '0 1 * * *') && /check_points\.sql/.test(vj.functions['api/cron.js'].includeFiles) && /shops/.test(vj.functions['api/cron.js'].includeFiles),
+        'vercel.json: งานตรวจทุกวัน 08:00 เวลาไทย (01:00 UTC) + แนบไฟล์ตรวจแต้มและไฟล์ร้าน');
+      // ลิงก์ทดสอบ: ขึ้นต้นข้อความให้รู้
+      A.configure({ env: Object.assign({}, ENV, { VERCEL_ENV: 'preview' }), fetch: fakeFetch, now: () => clock }); sent.length = 0;
+      await A.noteConfig('NO_LIFF', 'demo');
+      ok(/^\[ลิงก์ทดสอบ\]/.test(texts()[0]), 'แจ้งจากลิงก์ทดสอบ → ขึ้นต้น [ลิงก์ทดสอบ] (ไม่สับสนกับเว็บจริง)');
+      // LINE ส่งไม่ได้ → ไม่โยน error ต่อ
+      failFetch = 500;
+      ok((await A.sendText('ทดสอบ')) === false, 'LINE ส่งแจ้งเตือนไม่ได้ → แค่จด log ไม่กระทบคำตอบของลูกค้า');
+      failFetch = null;
+    } finally {
+      console.error = errLog;
+      A.configure({ env: {}, fetch: globalThis.fetch, now: () => Date.now() });
     }
   }
 

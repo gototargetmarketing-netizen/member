@@ -12,8 +12,9 @@ const staff = require('./staff');
 const admin = require('./admin');
 const broadcast = require('./broadcast');
 const features = require('./features');
+const alerts = require('./alerts');
 
-const API_VERSION = '0.12.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก / 0.6.1 = ลบคำสั่งวัดความเร็วชั่วคราว (speedCard) / 0.7 = ส่งข้อความตามกลุ่ม รอบ 1 (คัดกลุ่ม) / 0.8 = รอบ 2 (ส่งผ่าน LINE OA ของร้าน) / 0.9 = รูปเป็นริชเมสเสจเต็มจอ / 0.10 = รอบ 3 (เพิ่มเพื่อน OA ก่อนสมัคร + แต้มรับข่าวสาร) / 0.11 = ตัวกลางตรวจแพ็กเกจของร้าน / 0.12 = PDPA ขั้นที่ 2 (ลบบัญชี + ยอมรับนโยบายฉบับใหม่)
+const API_VERSION = '0.13.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก / 0.6.1 = ลบคำสั่งวัดความเร็วชั่วคราว (speedCard) / 0.7 = ส่งข้อความตามกลุ่ม รอบ 1 (คัดกลุ่ม) / 0.8 = รอบ 2 (ส่งผ่าน LINE OA ของร้าน) / 0.9 = รูปเป็นริชเมสเสจเต็มจอ / 0.10 = รอบ 3 (เพิ่มเพื่อน OA ก่อนสมัคร + แต้มรับข่าวสาร) / 0.11 = ตัวกลางตรวจแพ็กเกจของร้าน / 0.12 = PDPA ขั้นที่ 2 (ลบบัญชี + ยอมรับนโยบายฉบับใหม่) / 0.13 = แจ้งเตือนผู้ดูแลทาง LINE
 const { ALL_STAFF, MANAGERS } = staff;
 const OWNER = ['OWNER'];
 const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/; // ตรงกับเงื่อนไขในตาราง shops
@@ -160,8 +161,10 @@ function createApp(deps) {
       return { ok: false, error: 'คำขอไม่ถูกต้อง', code: 'BAD_REQUEST' };
     }
 
+    let action = '';
+    let shopId = '';
     try {
-      const action = String(body.action || '');
+      action = String(body.action || '');
       const def = Object.prototype.hasOwnProperty.call(ACTIONS, action) ? ACTIONS[action] : null;
       if (!def) throw userError('ไม่รู้จักคำสั่งนี้', 'UNKNOWN_ACTION');
 
@@ -169,6 +172,7 @@ function createApp(deps) {
       const ctx = { deps, cold, t0, region: deps.region || 'local', now: new Date(deps.now ? deps.now() : Date.now()) };
       if (def.shop) {
         ctx.shop = await loadShop(body.shop);
+        shopId = ctx.shop.id;
         ctx.db = deps.db();
         // แพ็กเกจของร้าน (ชุดทดสอบใส่แทนได้ด้วย deps.features) — คำสั่งลูกค้าก็ใช้ (หน้าเพิ่มเพื่อน OA มีเฉพาะแพ็กเกจส่งข้อความ)
         ctx.features = await (deps.features ? deps.features(ctx.shop.id) : features.loadFeatures(ctx.shop.id));
@@ -201,6 +205,11 @@ function createApp(deps) {
       // ข้อความที่ตั้งใจบอกผู้ใช้ → ส่งกลับตามนั้น / ข้อผิดพลาดอื่น → ไม่ส่งรายละเอียดภายในออกไป (จดลง log ของ Vercel แทน)
       const known = err && err.userMessage;
       if (!known) console.error(err && err.stack ? err.stack : err);
+      // แจ้งผู้ดูแลทาง LINE: error ระบบถึงเกณฑ์ / ปัญหาตั้งค่าที่ลูกค้าเห็นแค่ "ติดต่อผู้ดูแลระบบ" (ส่งไม่ได้ก็ไม่กระทบคำตอบ)
+      try {
+        if (!known) await alerts.noteError(action, err);
+        else if (alerts.CONFIG_CODES[err.code]) await alerts.noteConfig(err.code, shopId || String(body.shop || ''), action);
+      } catch (e) { /* แจ้งเตือนพังห้ามทำให้คำตอบพัง */ }
       const out = {
         ok: false,
         error: known ? err.userMessage : 'ระบบขัดข้อง กรุณาลองใหม่อีกครั้ง',
