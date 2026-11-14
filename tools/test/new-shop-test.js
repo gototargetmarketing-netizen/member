@@ -80,6 +80,11 @@ const cfgOf = (dir, id) => NS.loadModule(path.join(dir, 'shops', id, 'config.js'
   ok(JSON.stringify(c.features) === JSON.stringify({ tiers: true, branches: true, maxBranches: 5, export: false, broadcast: true }), 'สวิตช์ = แพ็กเกจ 3 + ปรับเอง (5 สาขา ไม่มีส่งออก)', c.features);
   ok(c.colors.button === '#2E7D32' && /^#[0-9A-F]{6}$/.test(c.colors.cardFrom) && /^#[0-9A-F]{6}$/.test(c.colors.cardTo) && c.logoText === 'บ', 'สี + ตัวอักษรโลโก้', c.colors);
   ok(['name', 'liffId', 'apiUrl', 'theme', 'colors', 'font', 'texts', 'features', 'legal'].every((k) => k in c) && fs.existsSync(path.join(ROOT, 'themes', c.theme + '.css')), 'มีครบทุกช่องที่หน้าเว็บใช้ + ไฟล์ธีมมีจริง');
+  // นโยบายตั้งต้นฉบับ 14 พ.ย. 2569: ใส่ชื่อร้านให้ / บอกสิทธิ์ลบบัญชีเอง / ไม่เอ่ยชื่อผู้ให้บริการ (กฎของโปรเจค + ผู้ใช้เลือก)
+  const pol = (c.legal && c.legal.privacyText) || '';
+  ok(pol.startsWith("ร้าน บ้านสวน 'คาเฟ่' \"เชียงใหม่\" (") && /ลบบัญชีสมาชิก/.test(pol) && /สิงคโปร์/.test(pol) && /รหัสที่แปลงจากบัญชี LINE/.test(pol) &&
+    !/Go To Target|Supabase|Vercel|Google|ชีต|\{ชื่อร้าน\}/i.test(pol) && pol.length <= 3000,
+    'นโยบายตั้งต้น: ใส่ชื่อร้าน + สิทธิ์ลบบัญชี + เก็บที่สิงคโปร์ + รหัสแปลง LINE / ไม่เอ่ยชื่อผู้ให้บริการ / ≤ 3,000 ตัว (เพดานหลังบ้าน)', pol.slice(0, 120));
   const list = await shopsList(S);
   ok(list.length === 3 && list[2].id === 'baansuan' && list[2].domains[0] === 'member.baansuan.com', 'เพิ่มใน shops.js (โดเมนตัด https:// และ / ท้าย)', list);
   ok(/Endpoint URL = https:\/\/member\.baansuan\.com/.test(r.out) && /baansuan-owner\.sql/.test(r.out), 'บอกขั้นตอนต่อ (Endpoint ใช้โดเมนร้าน + ไฟล์อนุมัติเจ้าของ)');
