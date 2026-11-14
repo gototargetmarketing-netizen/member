@@ -61,7 +61,8 @@ async function main() {
   }
 }
 
-const LOADING_TEXT = { register: 'กำลังสมัครสมาชิก...', redeem: 'กำลังแลกของรางวัล...', updateProfile: 'กำลังบันทึก...', claimBirthday: 'กำลังรับของขวัญ...' };
+const LOADING_TEXT = { register: 'กำลังสมัครสมาชิก...', redeem: 'กำลังแลกของรางวัล...', updateProfile: 'กำลังบันทึก...', claimBirthday: 'กำลังรับของขวัญ...',
+  acceptPolicy: 'กำลังบันทึก...', deleteAccount: 'กำลังลบบัญชี...' };
 
 /* ---------- สาขาที่ลูกค้าสแกน QR สมัครสมาชิก (ลิงก์ ...?branch=B001) ----------
  * จำไว้ในเครื่องจนกว่าจะสมัครเสร็จ: ระหว่างนั้นหน้าอาจโหลดใหม่หลายรอบ (LINE พาไปเข้าสู่ระบบ / เชื่อมต่อใหม่)
@@ -153,6 +154,10 @@ function onClick(e) {
     case 'profile-confirm': doSaveProfile(el); break;
     case 'birthday-claim': claimBirthday(el); break;
     case 'friend-check': checkFriend(el); break;
+    case 'policy-accept': acceptPolicy(el); break;
+    case 'delete-account': confirmDeleteAccount(); break;
+    case 'delete-next': deleteAccountStep2(); break;
+    case 'delete-confirm': doDeleteAccount(el); break;
     case 'close': closeModal(); break;
     case 'reload': window.location.reload(); break;
     case 'relogin': if (S.line) S.line.relogin(); break;
@@ -203,6 +208,8 @@ function render() {
   // ร้านบังคับเพิ่มเพื่อน LINE OA ก่อนสมัคร (ส่งข้อความรอบ 3) — LINE ตอบไม่ได้ (friend = null) ไม่ปิดกั้น
   if (!d.member && d.oa && d.oa.required && d.oa.friend === false) return renderFriendGate();
   if (!d.member) return renderRegister();
+  // ร้านแก้นโยบาย → ต้องกดยอมรับฉบับใหม่ก่อนใช้บัตร (เป็นหน้าเต็ม ไม่ใช่ป๊อปอัป → ปิดข้ามไม่ได้ / ตัวกลางกันแลกของซ้ำอีกชั้น)
+  if (d.privacy && d.privacy.needAccept && d.member.status === 'ACTIVE') return renderPolicyGate();
   if (d.member.status !== 'ACTIVE') {
     app.innerHTML = testBanner() + `
       <div class="state-page">
@@ -312,6 +319,106 @@ function renderFriendGate() {
       </section>
       ${creditHtml('credit-page')}
     </main>`;
+}
+
+/* =====================================================
+ * PDPA ขั้นที่ 2 (14 พ.ย. 2569 — ระบบใหม่เท่านั้น: ระบบเดิมไม่ส่ง S.data.privacy จึงไม่มีหน้านี้/ปุ่มลบบัญชี)
+ * ===================================================== */
+// ข้อความตามร่างที่ผู้ใช้กับน้องตกลง
+function renderPolicyGate() {
+  app.innerHTML = testBanner() + `
+    <main class="screen register">
+      <div class="reg-hero">
+        ${logoHtml('logo-lg')}
+        <h1>ร้านปรับปรุงนโยบายความเป็นส่วนตัว</h1>
+        <p>กรุณาอ่านและกดยอมรับเพื่อใช้บัตรสมาชิกต่อ</p>
+      </div>
+      <section class="card gate-card">
+        <button type="button" class="btn btn-block" data-act="privacy">${icon('shield', 18)} อ่านนโยบาย</button>
+        <button type="button" class="btn btn-primary btn-block btn-lg" data-act="policy-accept">${icon('check', 20)} ยอมรับ</button>
+        <div class="form-error" id="policy-error" hidden></div>
+        <p class="policy-leave">ไม่ต้องการใช้ต่อ? <button type="button" class="link link-danger" data-act="delete-account">ลบบัญชีสมาชิก</button></p>
+      </section>
+      ${creditHtml('credit-page')}
+    </main>`;
+}
+
+async function acceptPolicy(btn) {
+  setBusy(btn, true, 'กำลังบันทึก...');
+  try {
+    await S.api.call('acceptPolicy', { version: S.data.privacy.version });
+    await refresh();
+    toast('ยอมรับนโยบายแล้ว ขอบคุณครับ', 'ok');
+  } catch (e) {
+    // ร้านเพิ่งแก้นโยบายอีกระหว่างอ่าน → โหลดฉบับล่าสุดให้อ่านใหม่
+    if (e.code === 'POLICY_CHANGED') await refresh().catch(() => {});
+    setBusy(btn, false);
+    const box = document.getElementById('policy-error');
+    if (box) { box.textContent = e.message; box.hidden = false; } else toast(e.message, 'err');
+  }
+}
+
+// ลบบัญชี: ยืนยัน 2 ชั้น (บอกสิ่งที่จะหาย → พิมพ์คำว่า "ลบ") กันกดพลาด — ตัวกลางตรวจคำว่า "ลบ" ซ้ำ
+function confirmDeleteAccount() {
+  const m = S.data.member;
+  if (!m) return;
+  const coupons = (S.data.coupons || []).filter(c => c.status === 'ACTIVE').length;
+  const lost = [m.points > 0 ? `${unit()}คงเหลือ <b>${fmtNum(m.points)} ${esc(unit())}</b>` : '', coupons ? `คูปองที่ยังไม่ใช้ <b>${fmtNum(coupons)} ใบ</b>` : '']
+    .filter(Boolean).join(' และ');
+  openModal(`
+    <div class="modal-head"><h2>ลบบัญชีสมาชิก?</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <p class="notice notice-danger">${icon('alert', 18)}<span>${lost ? lost + ' จะหายทั้งหมด และกู้คืนไม่ได้' : 'ข้อมูลสมาชิกจะถูกลบ และกู้คืนไม่ได้'}</span></p>
+    <p class="muted small">ร้านจะลบชื่อ เบอร์ วันเกิด และรูปโปรไฟล์ของคุณ ประวัติยอดซื้อจะเหลือแบบไม่มีชื่อ ถ้าสมัครใหม่ภายหลังจะเริ่มจาก 0</p>
+    <div class="modal-actions">
+      <button class="btn" data-act="close">ยกเลิก</button>
+      <button class="btn btn-danger-outline" data-act="delete-next">ต่อไป</button>
+    </div>`);
+}
+
+function deleteAccountStep2() {
+  const box = openModal(`
+    <div class="modal-head"><h2>ยืนยันลบบัญชี</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <label class="field"><span>พิมพ์คำว่า <b>ลบ</b> เพื่อยืนยัน</span>
+      <input id="delete-word" autocomplete="off" maxlength="10" inputmode="text"></label>
+    <div class="form-error" id="delete-error" hidden></div>
+    <div class="modal-actions">
+      <button class="btn" data-act="close">ยกเลิก</button>
+      <button class="btn btn-danger" data-act="delete-confirm" disabled>ลบบัญชี</button>
+    </div>`);
+  const input = box.querySelector('#delete-word');
+  const go = box.querySelector('[data-act="delete-confirm"]');
+  input.addEventListener('input', () => { go.disabled = input.value.trim() !== 'ลบ'; });
+  input.focus();
+}
+
+async function doDeleteAccount(btn) {
+  const word = (document.getElementById('delete-word') || {}).value || '';
+  if (word.trim() !== 'ลบ') return;
+  setBusy(btn, true, 'กำลังลบ...');
+  try {
+    await S.api.call('deleteAccount', { confirm: 'ลบ' });
+  } catch (e) {
+    // NOT_MEMBER = ลบสำเร็จไปแล้ว (เช่น กดซ้ำตอนเน็ตช้า) → ทำต่อเหมือนสำเร็จ
+    if (e.code !== 'NOT_MEMBER') {
+      setBusy(btn, false);
+      const box = document.getElementById('delete-error');
+      if (box) { box.textContent = e.message; box.hidden = false; } else toast(e.message, 'err');
+      return;
+    }
+  }
+  // ลบบัตรที่จำไว้ในเครื่องด้วย (มีชื่อ/แต้ม) แล้วกลับไปหน้าแรก (= หน้าสมัคร)
+  writeCache({ member: null });
+  window.location.hash = '';
+  S.page = 'home';
+  closeModal();
+  await refresh().catch(() => {});
+  openModal(`
+    <div class="modal-center">
+      <div class="big-icon ok">${icon('check', 34)}</div>
+      <h2>ลบบัญชีแล้ว</h2>
+      <p>ข้อมูลสมาชิกของคุณถูกลบเรียบร้อย</p>
+      <button class="btn btn-block" data-act="close">ปิด</button>
+    </div>`);
 }
 
 // กดเพิ่มเพื่อนแล้ว → ถามตัวกลางใหม่ (ตัวกลางถาม LINE จริง ไม่เชื่อหน้าเว็บ)
@@ -490,7 +597,8 @@ function pageProfile() {
       <div class="form-error" id="profile-error" hidden></div>
       <button class="btn btn-primary btn-block btn-lg" type="submit">บันทึกข้อมูล</button>
     </form>
-    <p class="profile-note">ร้านใช้ข้อมูลนี้ตาม<button type="button" class="link" data-act="privacy">นโยบายความเป็นส่วนตัว</button> · ${esc(unit())}และคูปองไม่เปลี่ยน</p>`;
+    <p class="profile-note">ร้านใช้ข้อมูลนี้ตาม<button type="button" class="link" data-act="privacy">นโยบายความเป็นส่วนตัว</button> · ${esc(unit())}และคูปองไม่เปลี่ยน</p>
+    ${S.data.privacy && S.data.privacy.canDelete ? '<p class="profile-delete"><button type="button" class="link link-danger" data-act="delete-account">ลบบัญชีสมาชิก</button></p>' : ''}`;
 }
 
 // คำใต้สวิตช์รับข่าวสาร: ยังไม่เคยได้แต้มรับข่าวสาร → บอกว่าเปิดแล้วได้กี่แต้ม / กำลังจะปิด → เตือนสั้นๆ ว่าจะพลาดอะไร (ไม่ห้ามปิด)
@@ -652,6 +760,7 @@ async function claimBirthday(btn) {
     if (r.coupon) showCouponQr(r.coupon.code);
   } catch (e) {
     setBusy(btn, false);
+    if (e.code === 'POLICY_NEEDED') { await refresh().catch(() => {}); return; } // ร้านเพิ่งแก้นโยบาย → หน้ายอมรับนโยบาย
     toast(e.message, 'err');
   }
 }
@@ -954,6 +1063,8 @@ async function doRedeem(id, btn) {
       </div>`);
   } catch (e) {
     setBusy(btn, false);
+    // ร้านแก้นโยบายระหว่างเปิดบัตรค้างไว้ → โหลดใหม่ = ขึ้นหน้ายอมรับนโยบาย
+    if (e.code === 'POLICY_NEEDED') { closeModal(); await refresh().catch(() => {}); return; }
     const box = document.getElementById('redeem-error');
     if (box) { box.textContent = e.message; box.hidden = false; } else toast(e.message, 'err');
   }
@@ -1010,7 +1121,7 @@ function showCouponQr(code) {
 /* =====================================================
  * ประวัติแต้ม
  * ===================================================== */
-const TX_LABEL = { EARN: 'สะสมจากการซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกของรางวัล', ADJUST: 'ปรับโดยร้าน', CONSENT: 'รับข่าวสารจากร้าน' };
+const TX_LABEL = { EARN: 'สะสมจากการซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกของรางวัล', ADJUST: 'ปรับโดยร้าน', CONSENT: 'รับข่าวสารจากร้าน', DELETE: 'ลบบัญชี' };
 const TX_ICON = { EARN: 'up', WELCOME: 'star', REDEEM: 'gift', ADJUST: 'coins', CONSENT: 'chat' };
 
 function pageHistory() {

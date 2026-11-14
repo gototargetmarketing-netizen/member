@@ -16,7 +16,7 @@ const F = require('./features');
 const PAGE_SIZE = 50;
 const MAX_RANGE_DAYS = 366;
 const MAX_BRANCHES = 50;
-const TX_TYPES = ['EARN', 'WELCOME', 'REDEEM', 'ADJUST', 'CONSENT'];
+const TX_TYPES = ['EARN', 'WELCOME', 'REDEEM', 'ADJUST', 'CONSENT', 'DELETE'];
 const STAFF_STATUSES = ['PENDING', 'ACTIVE', 'DISABLED'];
 const MULTIPLIERS = [1.5, 2, 3];
 
@@ -269,7 +269,7 @@ async function adminMe(p, ctx) {
 const SUMMARY_SQL = `
 select p.k,
   (select count(*) from members m where m.shop_id = $1 and ($4::text = '' or m.joined_branch = $4::text)
-      and m.joined_at >= p.f and m.joined_at < p.e)::int as new_members,
+      and m.joined_at >= p.f and m.joined_at < p.e and m.status <> 'DELETED')::int as new_members,
   (select count(*) from coupons c where c.shop_id = $1 and ($4::text = '' or c.used_branch = $4::text)
       and c.status = 'USED' and c.used_at >= p.f and c.used_at < p.e)::int as coupons_used,
   t.bills, t.sales, t.buyers, t.points_issued, t.points_redeemed
@@ -295,7 +295,7 @@ async function adminDashboard(p, ctx) {
   const totals = (await db.query(`select count(*)::int as members, count(*) filter (where status = 'ACTIVE')::int as active,
       coalesce(sum(points) filter (where status = 'ACTIVE'), 0)::float8 as outstanding,
       count(*) filter (where $2::text = '' or joined_branch = $2::text)::int as branch_members
-    from members where shop_id = $1`, [shopId, branch])).rows[0];
+    from members where shop_id = $1 and status <> 'DELETED'`, [shopId, branch])).rows[0]; // ลบบัญชีแล้วไม่นับเป็นสมาชิก (ยอดซื้อเดิมยังนับ)
 
   const sums = {};
   (await db.query(SUMMARY_SQL, args.concat([per.prevFrom]))).rows.forEach((r) => {
@@ -317,11 +317,11 @@ async function adminDashboard(p, ctx) {
       from transactions where shop_id = $1 and ($4::text = '' or branch = $4::text) and type = 'EARN' and created_at >= $2 and created_at < $3
       group by 1`, args)).rows.forEach((r) => { if (at[r.k]) { at[r.k].bills = r.bills; at[r.k].sales = U.round2(r.sales); } });
   (await db.query(`select to_char(joined_at at time zone 'Asia/Bangkok', '${fmt}') as k, count(*)::int as n
-      from members where shop_id = $1 and ($4::text = '' or joined_branch = $4::text) and joined_at >= $2 and joined_at < $3
+      from members where shop_id = $1 and ($4::text = '' or joined_branch = $4::text) and joined_at >= $2 and joined_at < $3 and status <> 'DELETED'
       group by 1`, args)).rows.forEach((r) => { if (at[r.k]) at[r.k].newMembers = r.n; });
 
   // ลูกค้าที่ซื้อมากสุด (ลูกค้าสมัครสาขาหนึ่ง ซื้ออีกสาขาได้ → ชื่อจากสมาชิกทั้งร้าน) / เท่ากัน = ใครซื้อก่อนขึ้นก่อน
-  const topMembers = (await db.query(`select t.member_id, coalesce(max(m.name), '') as name, sum(t.amount)::float8 as sales, count(*)::int as bills
+  const topMembers = (await db.query(`select t.member_id, coalesce(max(${V.memberNameSql('m')}), '') as name, sum(t.amount)::float8 as sales, count(*)::int as bills
       from transactions t left join members m on m.shop_id = t.shop_id and m.id = t.member_id
       where t.shop_id = $1 and ($4::text = '' or t.branch = $4::text) and t.type = 'EARN' and t.created_at >= $2 and t.created_at < $3
       group by t.member_id order by round(sum(t.amount)::numeric, 2) desc, min(t.created_at) limit 5`, args)).rows
@@ -383,7 +383,7 @@ async function compareBranches(db, shopId, per) {
       from transactions where shop_id = $1 and created_at >= $2 and created_at < $3 group by 1`, args)).rows
     .forEach((r) => Object.assign(rows[r.b], { sales: U.round2(r.sales), bills: r.bills, buyers: r.buyers, pointsIssued: r.points_issued }));
   (await db.query(`select ${key('joined_branch')} as b, count(*)::int as n from members
-      where shop_id = $1 and joined_at >= $2 and joined_at < $3 group by 1`, args)).rows.forEach((r) => { rows[r.b].newMembers = r.n; });
+      where shop_id = $1 and joined_at >= $2 and joined_at < $3 and status <> 'DELETED' group by 1`, args)).rows.forEach((r) => { rows[r.b].newMembers = r.n; });
   (await db.query(`select ${key('used_branch')} as b, count(*)::int as n from coupons
       where shop_id = $1 and status = 'USED' and used_at >= $2 and used_at < $3 group by 1`, args)).rows.forEach((r) => { rows[r.b].couponsUsed = r.n; });
   // สาขาที่ปิดแล้วและไม่มีข้อมูลในช่วงนี้ / แถว "อื่นๆ" ที่ว่าง → ไม่ต้องแสดง
@@ -407,7 +407,8 @@ async function adminMembers(p, ctx) {
   if (on) await T.syncDue(ctx.db, ctx.shop.id, tiers, ctx.now); // ระดับที่ครบกำหนดลดก่อนกรอง/แสดง
   const tierFilter = on && T.tierById(tiers, String(p.tier || '')) ? String(p.tier) : '';
 
-  const where = `shop_id = $1 and ($2::text = '' or joined_branch = $2::text) and ($3::int = 0 or extract(month from birth_date) = $3::int)
+  // ลบบัญชีแล้วไม่อยู่ในรายชื่อเลย (ไม่มีข้อมูลให้ดู — ประวัติยอดซื้อเดิมดูได้ที่ "รายการแต้ม")
+  const where = `shop_id = $1 and status <> 'DELETED' and ($2::text = '' or joined_branch = $2::text) and ($3::int = 0 or extract(month from birth_date) = $3::int)
     and ($4::text = '' or status = $4::text)
     and ($5::text = '' or strpos(lower(name), $5::text) > 0 or strpos(lower(id), $5::text) > 0
          or ($6::text <> '' and strpos(phone, $6::text) > 0) or ($7::text <> '' and phone = $7::text))
@@ -439,18 +440,19 @@ async function adminMembers(p, ctx) {
 async function adminMemberDetail(p, ctx) {
   const id = U.cleanMemberId(p.memberId);
   const shopId = ctx.shop.id;
-  let m = await M.memberById(ctx.db, shopId, id);
+  let m = await M.memberById(ctx.db, shopId, id, false, true); // ลบแล้วก็เปิดดูได้ (กดมาจากประวัติยอดซื้อ) — ข้อมูลส่วนตัวว่างอยู่แล้ว
   if (!m) throw userError('ไม่พบสมาชิก', 'NOT_FOUND');
+  const deleted = U.upper(m.status) === M.STATUS_DELETED;
   const tiers = await T.loadTiers(ctx.db, shopId);
   const on = T.tiersOn(tiers);
-  if (on) {
+  if (on && !deleted) {
     m = await ctx.db.tx(async (q) => {
       const locked = await M.memberById(q, shopId, id, true);
       await T.syncMember(q, shopId, locked, tiers, ctx.now);
       return locked;
     });
   }
-  const extra = (await ctx.db.query('select line_user_id, consent_version, consent_at from members where shop_id = $1 and id = $2', [shopId, id])).rows[0];
+  const extra = (await ctx.db.query('select line_user_id, consent_version, consent_at, deleted_at from members where shop_id = $1 and id = $2', [shopId, id])).rows[0];
   const now = ctx.now;
   const owner = ctx.staff.role === 'OWNER';
   const out = adminMember(m, ctx.staff.role, on ? tiers : null);
@@ -460,6 +462,11 @@ async function adminMemberDetail(p, ctx) {
   out.marketingConsent = m.marketing_consent === true;
   out.note = String(m.note || '');
   out.lineLinked = !!extra.line_user_id;
+  if (deleted) {
+    out.deleted = true;
+    out.name = M.DELETED_NAME;
+    out.deletedAt = U.iso(extra.deleted_at);
+  }
   out.firstName = String(m.first_name || '');
   out.lastName = String(m.last_name || '');
   out.joinedBranch = U.upper(m.joined_branch);
@@ -486,6 +493,7 @@ async function adminMemberDetail(p, ctx) {
   }
   const coupons = (await ctx.db.query(`select ${V.COUPON_COLS} from coupons where shop_id = $1 and member_id = $2 order by issued_at desc limit 200`, [shopId, id])).rows;
   return Object.assign(on ? { tiers: T.publicTiers(tiers) } : {}, {
+    canDelete: !deleted, // ระบบใหม่เท่านั้น → หน้าเว็บแสดงปุ่ม "ลบข้อมูลสมาชิก" (ระบบเดิมไม่ส่ง = ไม่มีปุ่ม) / ตรวจสิทธิ์เจ้าของร้านที่ตัวกลาง
     member: out,
     history: history.map((tx) => Object.assign(V.publicTx(tx), { staff: String(tx.staff || ''), ref: String(tx.ref || ''), branch: U.upper(tx.branch) })),
     coupons: coupons.map((c) => Object.assign(V.publicCoupon(c, now), { usedBy: String(c.used_by || ''), usedBranch: U.upper(c.used_branch) }))
@@ -513,7 +521,7 @@ async function adminTransactions(p, ctx) {
     .map((r) => String(r.staff)).sort();
   const pg = page(p.page, sum.count);
   const items = (await ctx.db.query(`select t.id, t.created_at, t.type, t.amount::float8 as amount, t.points, t.balance_after, t.detail,
-      t.member_id, t.staff, t.ref, t.branch, coalesce(m.name, '') as member_name
+      t.member_id, t.staff, t.ref, t.branch, ${V.memberNameSql('m')} as member_name
       from ${from} where ${filtered} order by t.created_at desc, t.id desc limit ${PAGE_SIZE} offset ${pg.start}`, args)).rows;
   return {
     items: items.map((tx) => Object.assign(V.publicTx(tx), {
@@ -542,7 +550,7 @@ async function adminCoupons(p, ctx) {
   });
   const total = status ? counts[status] : all;
   const pg = page(p.page, total);
-  const rows = (await ctx.db.query(`select ${V.COUPON_COLS.split(', ').map((c) => 'c.' + c).join(', ')}, coalesce(m.name, '') as member_name
+  const rows = (await ctx.db.query(`select ${V.COUPON_COLS.split(', ').map((c) => 'c.' + c).join(', ')}, ${V.memberNameSql('m')} as member_name
       from coupons c left join members m on m.shop_id = c.shop_id and m.id = c.member_id
       where ${where} and ($6::text = '' or ${state} = $6::text)
       order by c.issued_at desc limit ${PAGE_SIZE} offset ${pg.start}`, args.concat([status]))).rows;
@@ -635,7 +643,7 @@ async function adminExport(p, ctx) {
   if (kind === 'members') {
     columns = ['รหัสสมาชิก', 'ชื่อ', 'นามสกุล', 'เบอร์โทร', 'วันเกิด', 'แต้มคงเหลือ', 'ยอดซื้อรวม', 'จำนวนครั้งที่มา',
       'วันที่สมัคร', 'มาล่าสุด', 'ยินยอมรับข่าวสาร', 'สถานะ'];
-    rows = (await ctx.db.query(`select ${V.MEMBER_COLS} from members where shop_id = $1 order by joined_at, id`, [shopId])).rows.map((m) => {
+    rows = (await ctx.db.query(`select ${V.MEMBER_COLS} from members where shop_id = $1 and status <> 'DELETED' order by joined_at, id`, [shopId])).rows.map((m) => {
       const first = String(m.first_name || '') || String(m.name || '');
       return [String(m.id), first, String(m.last_name || ''), fmtPhone(m.phone), String(m.birth_date || ''),
         U.toInt(m.points), U.toNum(m.total_spend), U.toInt(m.visit_count), fmtDateTimeOrBlank(m.joined_at),
@@ -646,7 +654,7 @@ async function adminExport(p, ctx) {
   } else if (kind === 'transactions') {
     const per = period(p);
     columns = ['รหัสรายการ', 'วันเวลา', 'รหัสสมาชิก', 'ชื่อสมาชิก', 'ประเภท', 'ยอดซื้อ', 'แต้ม', 'แต้มคงเหลือ', 'รายละเอียด', 'พนักงาน'];
-    rows = (await ctx.db.query(`select t.id, t.created_at, t.member_id, coalesce(m.name, '') as member_name, t.type, t.amount::float8 as amount,
+    rows = (await ctx.db.query(`select t.id, t.created_at, t.member_id, ${V.memberNameSql('m')} as member_name, t.type, t.amount::float8 as amount,
         t.points, t.balance_after, t.detail, t.staff, t.branch
         from transactions t left join members m on m.shop_id = t.shop_id and m.id = t.member_id
         where t.shop_id = $1 and t.created_at >= $2 and t.created_at < $3 order by t.created_at, t.id`, [shopId, per.from, per.end])).rows.map((tx) =>
@@ -827,6 +835,24 @@ async function adminMemberStatus(p, ctx) {
   });
 }
 
+// ลบข้อมูลสมาชิกให้ลูกค้าที่มาขอที่ร้าน (PDPA ขั้นที่ 2 — เจ้าของร้านเท่านั้น เพราะกู้คืนไม่ได้)
+// เหตุผลจดในประวัติแก้ข้อมูล → หน้าเว็บเตือนว่าห้ามใส่ชื่อ/เบอร์ลูกค้า / ต้องพิมพ์ "ลบ" ยืนยันเหมือนลูกค้าลบเอง
+async function adminMemberDelete(p, ctx) {
+  const id = U.cleanMemberId(p.memberId);
+  const reason = U.cleanNote(p.reason);
+  if (reason.length < 3) throw userError('กรุณาใส่เหตุผลที่ลบ', 'NO_REASON');
+  if (String(p.confirm || '').trim() !== 'ลบ') throw userError('กรุณาพิมพ์คำว่า "ลบ" เพื่อยืนยัน', 'BAD_CONFIRM');
+  const shopId = ctx.shop.id;
+  return once(ctx, 'memberDelete', p.requestId, async (q) => {
+    const m = await M.memberById(q, shopId, id, true, true);
+    if (!m) throw userError('ไม่พบสมาชิก', 'NOT_FOUND');
+    if (U.upper(m.status) === M.STATUS_DELETED) return { deleted: true, memberId: id, already: true };
+    const r = await M.deleteMember(q, shopId, m, { by: ctx.staff.name, log: 'ลบบัญชีโดยเจ้าของร้าน: ' + reason }, ctx.now);
+    console.log('ลบบัญชีสมาชิก ' + id + ' ร้าน ' + shopId + ' โดย ' + ctx.staff.name + ' (แต้ม ' + r.points + ' / คูปองยกเลิก ' + r.cancelled + ')');
+    return { deleted: true, memberId: id };
+  });
+}
+
 // เจ้าของร้านแก้ชื่อ/เบอร์/วันเกิดให้ลูกค้า (วันเกิดไม่จำกัดครั้ง / รับข่าวสารแก้ไม่ได้ — ลูกค้าเลือกเองเท่านั้น)
 async function adminMemberUpdate(p, ctx) {
   const id = U.cleanMemberId(p.memberId);
@@ -873,7 +899,10 @@ async function adminSettingsSave(p, ctx) {
 }
 
 async function adminBrand(p, ctx) {
-  return { values: brandValues(ctx.shop), consentVersion: String(ctx.shop.consent_version || '1') };
+  // ยอมรับนโยบายฉบับล่าสุดแล้วกี่คน (นับเฉพาะสมาชิกที่ยังไม่ลบ) — ใต้ช่องนโยบายในหน้าตาร้าน
+  const c = (await ctx.db.query(`select count(*)::int as total, count(*) filter (where consent_version >= $2)::int as accepted
+      from members where shop_id = $1 and status <> 'DELETED'`, [ctx.shop.id, M.policyVersion(ctx.shop)])).rows[0];
+  return { values: brandValues(ctx.shop), consentVersion: String(ctx.shop.consent_version || '1'), policyAccepted: { accepted: c.accepted, total: c.total } };
 }
 
 // แก้ข้อความนโยบาย → เพิ่มเลขฉบับนโยบายให้เอง (ต้องรู้ว่าลูกค้ายอมรับฉบับไหน ตาม PDPA) / ค่าเดิมซ้ำ = ไม่มีอะไรเปลี่ยน
@@ -957,7 +986,7 @@ async function adminBranches(p, ctx) {
     items.forEach((b) => { if (U.upper(s.role) === 'OWNER' || !list || list.indexOf(b.id) >= 0) staffCount[b.id] = (staffCount[b.id] || 0) + 1; });
   });
   const memberCount = {};
-  (await ctx.db.query(`select joined_branch as b, count(*)::int as n from members where shop_id = $1 and joined_branch <> '' group by 1`, [shopId])).rows
+  (await ctx.db.query(`select joined_branch as b, count(*)::int as n from members where shop_id = $1 and joined_branch <> '' and status <> 'DELETED' group by 1`, [shopId])).rows
     .forEach((r) => { memberCount[U.upper(r.b)] = r.n; });
   items.forEach((b) => { b.staff = staffCount[b.id] || 0; b.members = memberCount[b.id] || 0; });
   return { items, online: memberCount[V.BRANCH_ONLINE] || 0 };
@@ -1071,7 +1100,7 @@ async function adminRuleSave(p, ctx) {
 // จำนวนสมาชิกแต่ละระดับ (ทั้งร้าน)
 async function tierCounts(db, shopId, tiers) {
   const n = {};
-  (await db.query('select tier_id, count(*)::int as n from members where shop_id = $1 group by tier_id', [shopId])).rows
+  (await db.query(`select tier_id, count(*)::int as n from members where shop_id = $1 and status <> 'DELETED' group by tier_id`, [shopId])).rows
     .forEach((r) => { n[r.tier_id || ''] = r.n; });
   return tiers.map((t) => ({ id: t.id, name: t.name, color: t.color, count: n[t.id] || 0 }));
 }
@@ -1294,7 +1323,7 @@ function deleter(kind) {
 }
 
 module.exports = {
-  adminMe, adminDashboard, adminMembers, adminMember: adminMemberDetail, adminTransactions, adminCoupons, adminStaff, adminStaffUpdate,
+  adminMe, adminDashboard, adminMembers, adminMember: adminMemberDetail, adminMemberDelete, adminTransactions, adminCoupons, adminStaff, adminStaffUpdate,
   adminExport, adminRewards, adminRewardSave, adminPromos, adminPromoSave, adminMemberStatus, adminMemberUpdate,
   adminSettings, adminSettingsSave, adminUploadImage, adminBrand, adminBrandSave, adminBranches, adminBranchSave, adminRules, adminRuleSave,
   adminRewardDelete: deleter('reward'), adminPromoDelete: deleter('promo'), adminRuleDelete: deleter('rule'),

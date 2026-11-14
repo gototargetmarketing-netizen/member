@@ -522,6 +522,69 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
       'หน้าส่งข้อความ: "ได้รับจริง" + "ยังไม่เป็นเพื่อนหรือบล็อก 1 คน"', await b.text('.aud-reach'));
     await oaSet({ friends: null });
 
+    console.log('\n[10] PDPA ขั้นที่ 2: หน้ายอมรับนโยบายฉบับใหม่ + ลูกค้าลบบัญชีเอง + เจ้าของร้านลบให้');
+    const [v10] = await sql(`select consent_version from shops where id = 'demo'`);
+    await sql(`update shops set consent_version = $1 where id = 'demo'`, [v10.consent_version + 1]);
+    await b.eval(asUser('U_E2E_R3', 'ลูกค้ารอบสาม'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo#home`);
+    await b.waitFor(`/ร้านปรับปรุงนโยบายความเป็นส่วนตัว/.test(document.body.innerText) && document.querySelector('[data-act=policy-accept]')`, 10000, 'หน้ายอมรับนโยบาย');
+    ok(!(await b.eval(`!!document.querySelector('.member-card')`)) && !(await b.eval(`!!document.querySelector('.nav')`)),
+      'ร้านแก้นโยบาย → เปิดบัตรเจอหน้ายอมรับนโยบาย (ยังไม่เห็นบัตร/เมนู)');
+    await b.shot(path.join(OUT, 'n20-policy-gate.png'));
+    await b.click('[data-act=privacy]');
+    await b.waitFor(`document.querySelector('.modal .prose')`, 5000, 'อ่านนโยบาย');
+    await b.click('.modal [data-act=close]');
+    await b.click('[data-act=policy-accept]');
+    await b.waitFor(`document.querySelector('.member-card')`, 10000, 'บัตรหลังยอมรับ');
+    const [acc10] = await sql(`select consent_version from members where shop_id = 'demo' and line_user_id = 'U_E2E_R3'`);
+    ok(acc10.consent_version === v10.consent_version + 1, 'กด "ยอมรับ" → เข้าบัตรได้ + จดฉบับที่ยอมรับ', acc10);
+
+    // ลูกค้าลบบัญชีเอง (ยืนยัน 2 ชั้น)
+    await b.nav(`${WEB}/demo#profile`);
+    await b.waitFor(`document.querySelector('[data-act=delete-account]')`, 8000, 'ลิงก์ลบบัญชี');
+    await b.click('[data-act=delete-account]');
+    await b.waitFor(`document.querySelector('.modal [data-act=delete-next]')`, 3000, 'ขั้นแรก');
+    ok(/30 แต้ม/.test(await b.text('.modal')) && /กู้คืนไม่ได้/.test(await b.text('.modal')), 'ขั้นแรก: บอกแต้มที่จะหาย + กู้คืนไม่ได้', await b.text('.modal'));
+    await b.click('.modal [data-act=delete-next]');
+    await b.waitFor(`document.querySelector('#delete-word')`, 3000, 'ขั้นที่สอง');
+    ok(await b.eval(`document.querySelector('[data-act=delete-confirm]').disabled`), 'ขั้นที่สอง: ยังไม่พิมพ์ "ลบ" → ปุ่มลบกดไม่ได้');
+    await b.type('#delete-word', 'ลบ');
+    ok(!(await b.eval(`document.querySelector('[data-act=delete-confirm]').disabled`)), 'พิมพ์ "ลบ" → ปุ่มลบบัญชีกดได้');
+    await b.shot(path.join(OUT, 'n21-delete-confirm.png'));
+    await b.click('[data-act=delete-confirm]');
+    await b.waitFor(`/ลบบัญชีแล้ว/.test((document.querySelector('.modal') || {}).innerText || '') && document.querySelector('#reg')`, 10000, 'ลบแล้ว → หน้าสมัคร');
+    const [del10] = await sql(`select status, phone, name from members where shop_id = 'demo' and phone is null and status = 'DELETED' and id = (
+      select member_id from profile_log where shop_id = 'demo' and changed = 'ลบบัญชี (ลูกค้าลบเอง)' order by created_at desc limit 1)`);
+    ok(del10 && del10.name === '', 'ลบบัญชีสำเร็จ → กลับไปหน้าสมัคร + ฐานข้อมูลไม่มีชื่อ/เบอร์แล้ว', del10);
+    ok(!(await b.eval(`Object.keys(localStorage).some((k) => k.indexOf('crm_last:demo:U_E2E_R3') === 0)`)), 'บัตรที่จำไว้ในเครื่องถูกลบด้วย');
+    await b.click('.modal [data-act=close]');
+
+    // เจ้าของร้านลบให้ในหลังบ้าน
+    const [t10] = await sql(`select id from members where shop_id = 'demo' and status = 'ACTIVE' and line_user_id like 'U_DEMO_%' order by id desc limit 1`);
+    await b.eval(asUser('U_DEMO_OWNER', 'เจ้าของร้าน'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo/admin#member/${t10.id}`);
+    await b.waitFor(`document.querySelector('[data-act=member-delete]')`, 10000, 'ปุ่มลบข้อมูลสมาชิก');
+    await b.click('[data-act=member-delete]');
+    await b.waitFor(`document.querySelector('form[data-form=member-delete]')`, 3000, 'หน้าต่างลบ');
+    ok(/ห้ามใส่ชื่อหรือเบอร์ลูกค้า/.test(await b.text('.modal')), 'หน้าต่างลบเตือนห้ามใส่ชื่อ/เบอร์ในเหตุผล');
+    await b.type('form[data-form=member-delete] input[name=reason]', 'ลูกค้าขอที่หน้าร้าน');
+    await b.type('form[data-form=member-delete] input[name=confirm]', 'ลบ');
+    await b.shot(path.join(OUT, 'n22-admin-delete.png'));
+    await b.click('form[data-form=member-delete] button[type=submit]');
+    await b.waitFor(`location.hash === '#members' && /ลบข้อมูลสมาชิกแล้ว/.test((document.querySelector('.toast.show') || {}).innerText || '')`, 10000, 'ลบแล้วกลับรายชื่อ');
+    const [g10] = await sql(`select status from members where shop_id = 'demo' and id = $1`, [t10.id]);
+    ok(g10.status === 'DELETED', 'เจ้าของร้านลบให้ → สถานะลบแล้ว + กลับไปหน้ารายชื่อ');
+    await b.nav(`${WEB}/demo/admin#member/${t10.id}`);
+    await b.waitFor(`/ลบบัญชีแล้ว/.test(document.getElementById('view').innerText)`, 10000, 'หน้าสมาชิกที่ลบแล้ว');
+    ok(/สมาชิกที่ลบแล้ว/.test(await b.text('#view')) && !(await b.eval(`!!document.querySelector('[data-act=member-status], [data-act=member-delete], form[data-form=adjust]')`)),
+      'เปิดหน้าสมาชิกที่ลบแล้ว → "สมาชิกที่ลบแล้ว" ไม่มีปุ่มแก้/ระงับ/ปรับแต้ม');
+    await b.nav(`${WEB}/demo/admin#brand`);
+    await b.waitFor(`document.querySelector('.policy-count')`, 10000, 'ตัวนับยอมรับนโยบาย');
+    ok(/ยอมรับฉบับที่ \d+ แล้ว [\d,]+ จาก [\d,]+ คน/.test(await b.text('.policy-count')), 'หน้าตาร้าน: "ยอมรับฉบับที่ N แล้ว X จาก Y คน"', await b.text('.policy-count'));
+    await sql(`update shops set consent_version = $1 where id = 'demo'`, [v10.consent_version]);
+
     const errs = b.logs.filter((l) => /EXCEPTION|console\.error/.test(l));
     ok(errs.length === 0, 'ไม่มีข้อผิดพลาดในหน้าเว็บ', errs);
   } catch (e) {

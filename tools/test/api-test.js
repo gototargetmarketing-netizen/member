@@ -1028,6 +1028,154 @@ function fakeLine() {
     }
   }
 
+  console.log('\n[5.11] PDPA ขั้นที่ 2: ลบบัญชีสมาชิก (ลูกค้าลบเอง / เจ้าของร้านลบให้) + ยอมรับนโยบายฉบับใหม่');
+  {
+    const Mx = require(path.join(ROOT, 'api', '_lib', 'members.js'));
+    const pa = createApp({ db: () => db, verifier: createVerifier({ fetch: fakeLine().fetch }), allowTestTokens: true, region: 'test' });
+    const OW = 'TEST:U_DEMO_OWNER:เจ้าของ';
+    const call = (action, body, tok) => pa.handle(Object.assign({ action, shop: 'demo', idToken: tok || OW, requestId: crypto.randomUUID() }, body));
+    const cust = (user) => 'TEST:' + user + ':ลูกค้า ' + user;
+    const row = async (id) => (await db.query(`select * from members where shop_id = 'demo' and id = $1`, [id])).rows[0];
+    const pointsOk = async (id) => {
+      const s = (await db.query(`select coalesce(sum(points), 0)::int as total from transactions where shop_id = 'demo' and member_id = $1`, [id])).rows[0].total;
+      const last = (await db.query(`select balance_after from transactions where shop_id = 'demo' and member_id = $1 order by created_at desc, id desc limit 1`, [id])).rows[0];
+      const m = await row(id);
+      return m.points === s && (!last || last.balance_after === m.points);
+    };
+    const log = console.log; console.log = (...a) => { if (/^  [✓✗]/.test(String(a[0]))) log(...a); };
+    const errLog = console.error; console.error = () => {};
+    try {
+      await db.query(`update shops set consent_bonus_points = 15 where id = 'demo'`);
+      const reg = (user, phone) => call('register', { consentPrivacy: true, consentMarketing: true, firstName: 'ลบได้', lastName: 'ทดสอบสิทธิ์', birthDate: '1990-05-06', phone }, cust(user));
+      r = await reg('U_PD_1', '0861234501');
+      ok(r.ok && r.consentBonus === 15, 'สมัครพร้อมรับข่าวสาร → ได้แต้มรับข่าวสาร 15', r);
+      const oldId = r.member.memberId;
+      r = await call('addPurchase', { memberId: oldId, amount: 1000, branchId: 'B01' });
+      ok(r.ok, 'มียอดซื้อ 1,000 บาท (ไว้ดูว่ายอดขายร้านไม่หายหลังลบ)', r.code);
+      await db.query(`insert into coupons (shop_id, code, member_id, reward_id, name, points_used, issued_at, expires_at, status)
+        select 'demo', 'CP-PDPA0001', $1, id, name, 0, now(), now() + interval '30 days', 'ACTIVE' from rewards where shop_id = 'demo' order by id limit 1`, [oldId]);
+      const before = await row(oldId);
+      ok(before.points > 0, 'ก่อนลบ: มีแต้ม ' + before.points + ' + คูปองที่ยังไม่ใช้ 1 ใบ');
+      r = await call('bootstrap', {}, cust('U_PD_1'));
+      ok(r.ok && r.privacy && r.privacy.canDelete === true && r.privacy.needAccept === false, 'หน้าลูกค้าได้ privacy: ลบบัญชีได้ / ไม่ต้องยอมรับนโยบายใหม่', r.privacy);
+
+      // ---------- ลูกค้าลบเอง ----------
+      r = await call('deleteAccount', {}, cust('U_PD_1'));
+      ok(!r.ok && r.code === 'BAD_CONFIRM', 'ไม่พิมพ์ "ลบ" → ไม่ลบ', r);
+      r = await call('deleteAccount', { confirm: 'ลบ' }, cust('U_PD_1'));
+      ok(r.ok && r.deleted === true, 'พิมพ์ "ลบ" → ลบบัญชีสำเร็จ', r);
+      const gone = await row(oldId);
+      ok(gone.status === 'DELETED' && gone.line_user_id === null && gone.phone === null && gone.name === '' && gone.first_name === '' &&
+        gone.last_name === '' && gone.birth_date === null && gone.picture === '' && gone.points === 0 && gone.marketing_consent === false && gone.deleted_at,
+        'ข้อมูลส่วนตัวถูกลบจริงทุกช่อง (ชื่อ เบอร์ วันเกิด รูป LINE ID) + แต้ม 0', gone);
+      ok(gone.line_hash === Mx.lineHash('demo', 'U_PD_1') && /^[0-9a-f]{64}$/.test(gone.line_hash) && gone.line_hash.indexOf('U_PD_1') < 0,
+        'เก็บแค่รหัสแปลงของ LINE ID (ย้อนกลับไม่ได้)');
+      ok(Number(gone.total_spend) === 1000 && gone.visit_count === 1, 'ยอดซื้อสะสมยังอยู่ (ภาพรวมของร้านไม่เพี้ยน)');
+      const dtx = (await db.query(`select points, balance_after, detail from transactions where shop_id = 'demo' and member_id = $1 and type = 'DELETE'`, [oldId])).rows;
+      ok(dtx.length === 1 && dtx[0].points === -before.points && dtx[0].balance_after === 0, 'แต้มเป็น 0 ด้วยรายการ "ลบบัญชี" 1 รายการ', dtx);
+      ok(await pointsOk(oldId), 'ตรวจแต้ม (แบบ db/check_points.sql): ยอดในประวัติ = แต้มในบัตร = 0');
+      const cp = (await db.query(`select status from coupons where shop_id = 'demo' and code = 'CP-PDPA0001'`)).rows[0];
+      ok(cp.status === 'CANCELLED', 'คูปองที่ยังไม่ใช้ถูกยกเลิก');
+      const plog = (await db.query(`select changed, by_name from profile_log where shop_id = 'demo' and member_id = $1 order by created_at desc limit 1`, [oldId])).rows[0];
+      ok(plog && plog.changed === 'ลบบัญชี (ลูกค้าลบเอง)' && plog.by_name === 'ลูกค้า', 'ประวัติแก้ข้อมูลจด "ลบบัญชี (ลูกค้าลบเอง)" ไม่มีข้อมูลส่วนตัว', plog);
+      const rl = (await db.query(`select count(*)::int as n from request_log where shop_id = 'demo' and (user_id = 'U_PD_1' or position($1 in result::text) > 0 or position('0861234501' in result::text) > 0)`,
+        [JSON.stringify(oldId)])).rows[0].n;
+      ok(rl === 0, 'คำตอบที่จำไว้กันกดซ้ำ (request_log) ที่มีข้อมูลคนนี้ถูกลบหมด (รวมของพนักงานที่บันทึกยอดให้)', rl);
+      r = await call('deleteAccount', { confirm: 'ลบ' }, cust('U_PD_1'));
+      ok(!r.ok && r.code === 'NOT_MEMBER', 'กดลบซ้ำ → NOT_MEMBER (หน้าเว็บถือว่าลบแล้ว)', r);
+
+      // ---------- หลังลบ: ไม่เหลือที่ไหน ----------
+      r = await call('staffLookup', { query: oldId });
+      ok(!r.ok && r.code === 'NOT_FOUND', 'พนักงานค้นรหัสเดิม → ไม่พบ', r.code);
+      r = await call('staffLookup', { query: '0861234501' });
+      ok(!r.ok && r.code === 'NOT_FOUND', 'พนักงานค้นเบอร์เดิม → ไม่พบ', r.code);
+      for (const [a, b] of [['addPurchase', { memberId: oldId, amount: 100, branchId: 'B01' }], ['adjustPoints', { memberId: oldId, points: 5, reason: 'ทดสอบ' }],
+        ['adminMemberUpdate', { memberId: oldId, firstName: 'กลับ', lastName: 'มาใหม่', birthDate: '1990-01-01', phone: '0861234599' }],
+        ['adminMemberStatus', { memberId: oldId, status: 'BLOCKED', reason: 'ทดสอบ' }]]) {
+        r = await call(a, b);
+        ok(!r.ok && r.code === 'NOT_FOUND', a + ' ให้สมาชิกที่ลบแล้ว → ไม่พบ', r.code);
+      }
+      r = await call('adminMembers', { q: oldId.toLowerCase() });
+      ok(r.ok && r.items.every((x) => x.memberId !== oldId), 'รายชื่อสมาชิกในหลังบ้าน → ไม่มีคนที่ลบแล้ว');
+      r = await call('adminMember', { memberId: oldId });
+      ok(r.ok && r.member.deleted === true && r.member.name === 'สมาชิกที่ลบแล้ว' && !r.member.phone && !r.member.birthDate, 'เปิดหน้าสมาชิกที่ลบแล้ว (จากประวัติยอดซื้อ) → "สมาชิกที่ลบแล้ว" ไม่มีข้อมูลส่วนตัว', r.member);
+      const today = U.thaiDay(new Date());
+      r = await call('adminTransactions', { from: today, to: today, q: oldId.toLowerCase() });
+      ok(r.ok && r.items.length >= 3 && r.items.every((x) => x.memberName === 'สมาชิกที่ลบแล้ว'), 'รายการแต้มเดิมยังอยู่ ชื่อเป็น "สมาชิกที่ลบแล้ว"', r.items && r.items.map((x) => x.memberName));
+      r = await call('adminExport', { kind: 'members' });
+      ok(r.ok && r.rows.every((x) => x[0] !== oldId) && JSON.stringify(r.rows).indexOf('0861234501') < 0, 'ไฟล์ Excel สมาชิก → ไม่มีคนที่ลบแล้ว');
+      r = await call('adminAudience', { filter: {} });
+      const aud = r.ok && r.preview ? r.preview.map((x) => x.memberId) : [];
+      ok(r.ok && aud.indexOf(oldId) < 0, 'ส่งข้อความตามกลุ่ม → ไม่มีคนที่ลบแล้ว');
+
+      // ---------- สมัครใหม่ด้วย LINE + เบอร์เดิม ----------
+      r = await call('bootstrap', {}, cust('U_PD_1'));
+      ok(r.ok && r.member === null && r.signup.bonusPoints === 15 && r.signup.bonusAvailable === false, 'กลับมาเปิดหน้าสมัคร → ไม่โชว์ว่าได้แต้มรับข่าวสาร (เคยได้แล้ว)', r.signup);
+      r = await reg('U_PD_1', '0861234501');
+      const newId = r.member && r.member.memberId;
+      ok(r.ok && newId && newId !== oldId && !r.consentBonus && r.member.points === r.welcomePoints, 'สมัครใหม่ด้วย LINE + เบอร์เดิมได้ รหัสใหม่ / ได้แต้มต้อนรับ / ไม่ได้แต้มรับข่าวสารซ้ำ', r);
+      r = await reg('U_PD_2', '0861234502');
+      ok(r.ok && r.consentBonus === 15, 'คนอื่นที่ไม่เคยลบ ยังได้แต้มรับข่าวสารตามปกติ', r.consentBonus);
+      const id2 = r.member.memberId;
+
+      // ---------- เจ้าของร้านลบให้ ----------
+      r = await call('adminMemberDelete', { memberId: id2, reason: 'ลูกค้าโทรมาขอ', confirm: 'ลบ' }, 'TEST:U_NOT_STAFF:คนนอก');
+      ok(!r.ok && r.code !== 'NOT_FOUND', 'ไม่ใช่เจ้าของร้าน → ไม่ได้', r.code);
+      r = await call('adminMemberDelete', { memberId: id2, reason: '', confirm: 'ลบ' });
+      ok(!r.ok && r.code === 'NO_REASON', 'ไม่ใส่เหตุผล → ไม่ลบ', r.code);
+      r = await call('adminMemberDelete', { memberId: id2, reason: 'ลูกค้าโทรมาขอ', confirm: 'ไม่' });
+      ok(!r.ok && r.code === 'BAD_CONFIRM', 'ไม่พิมพ์ "ลบ" → ไม่ลบ', r.code);
+      const rid = crypto.randomUUID();
+      r = await pa.handle({ action: 'adminMemberDelete', shop: 'demo', idToken: OW, requestId: rid, memberId: id2, reason: 'ลูกค้าโทรมาขอ', confirm: 'ลบ' });
+      const r2 = await pa.handle({ action: 'adminMemberDelete', shop: 'demo', idToken: OW, requestId: rid, memberId: id2, reason: 'ลูกค้าโทรมาขอ', confirm: 'ลบ' });
+      ok(r.ok && r.deleted && r2.ok && JSON.stringify(r2) === JSON.stringify(r), 'เจ้าของร้านลบให้ได้ + กดซ้ำได้ผลเดิม', [r, r2]);
+      r = await call('adminMemberDelete', { memberId: id2, reason: 'ลูกค้าโทรมาขอ', confirm: 'ลบ' });
+      ok(r.ok && r.already === true, 'ลบคนที่ลบไปแล้ว → ตอบว่าลบแล้ว', r);
+      const g2 = await row(id2);
+      const p2 = (await db.query(`select changed, by_name from profile_log where shop_id = 'demo' and member_id = $1 order by created_at desc limit 1`, [id2])).rows[0];
+      ok(g2.status === 'DELETED' && g2.phone === null && await pointsOk(id2) && p2.changed === 'ลบบัญชีโดยเจ้าของร้าน: ลูกค้าโทรมาขอ' && p2.by_name === 'เจ้าของร้านทดลอง',
+        'ลบครบ + จดเหตุผลและชื่อผู้ลบในประวัติ', p2);
+      r = await call('bootstrap', {}, cust('U_PD_2'));
+      ok(r.ok && r.member === null, 'ลูกค้าเปิดบัตรหลังร้านลบให้ → กลับไปหน้าสมัคร');
+
+      // ---------- ยอมรับนโยบายฉบับใหม่ ----------
+      const v0 = (await db.query(`select consent_version from shops where id = 'demo'`)).rows[0].consent_version;
+      await db.query(`update shops set consent_version = $1 where id = 'demo'`, [v0 + 1]);
+      const V1 = String(v0 + 1);
+      r = await call('bootstrap', {}, cust('U_PD_1'));
+      ok(r.ok && r.privacy.needAccept === true && r.privacy.version === V1, 'ร้านแก้นโยบาย → ลูกค้าเดิมต้องยอมรับฉบับใหม่', r.privacy);
+      const rw = (await db.query(`select id from rewards where shop_id = 'demo' and status = 'ACTIVE' and deleted_at is null and type <> 'BIRTHDAY' order by points limit 1`)).rows[0];
+      r = await call('redeem', { rewardId: rw.id }, cust('U_PD_1'));
+      ok(!r.ok && r.code === 'POLICY_NEEDED', 'ยังไม่ยอมรับ → แลกของรางวัลไม่ได้ (ตัวกลางกันซ้ำ)', r.code);
+      r = await call('claimBirthday', {}, cust('U_PD_1'));
+      ok(!r.ok && r.code === 'POLICY_NEEDED', 'ยังไม่ยอมรับ → รับของขวัญวันเกิดไม่ได้', r.code);
+      r = await call('updateProfile', { firstName: 'ลบได้', lastName: 'ทดสอบสิทธิ์', birthDate: '1990-05-06', phone: '0861234501', consentMarketing: false }, cust('U_PD_1'));
+      ok(r.ok && r.member.marketingConsent === false, 'ยังไม่ยอมรับ → ปิดรับข่าวสารได้ (ถอนความยินยอมได้เสมอ)', r.code);
+      r = await call('addPurchase', { memberId: newId, amount: 200, branchId: 'B01' });
+      ok(r.ok, 'ยังไม่ยอมรับ → พนักงานบันทึกยอดให้ที่เคาน์เตอร์ได้', r.code);
+      r = await call('acceptPolicy', { version: String(v0) }, cust('U_PD_1'));
+      ok(!r.ok && r.code === 'POLICY_CHANGED', 'ยอมรับฉบับเก่า (ร้านแก้อีกระหว่างอ่าน) → ให้อ่านฉบับล่าสุดก่อน', r.code);
+      r = await call('acceptPolicy', { version: V1 }, cust('U_PD_1'));
+      const acc = await row(newId);
+      ok(r.ok && r.accepted && acc.consent_version === v0 + 1 && acc.consent_at, 'กดยอมรับ → จดฉบับที่ + เวลา', r);
+      r = await call('acceptPolicy', { version: V1 }, cust('U_PD_1'));
+      ok(r.ok && r.already === true, 'กดยอมรับซ้ำ → ไม่จดซ้ำ', r);
+      const pl = (await db.query(`select count(*)::int as n from profile_log where shop_id = 'demo' and member_id = $1 and changed = $2`, [newId, 'ยอมรับนโยบายความเป็นส่วนตัว ฉบับที่ ' + V1])).rows[0].n;
+      ok(pl === 1, 'ประวัติแก้ข้อมูลจด "ยอมรับนโยบาย ฉบับที่ ' + V1 + '" ครั้งเดียว', pl);
+      r = await call('bootstrap', {}, cust('U_PD_1'));
+      ok(r.ok && r.privacy.needAccept === false, 'ยอมรับแล้ว → ไม่ถามอีก');
+      r = await call('acceptPolicy', { version: V1 }, cust('U_NOBODY'));
+      ok(!r.ok && r.code === 'NOT_MEMBER', 'ยังไม่เป็นสมาชิก → ยอมรับไม่ได้', r.code);
+      r = await call('adminBrand', {});
+      const live = (await db.query(`select count(*)::int as n from members where shop_id = 'demo' and status <> 'DELETED'`)).rows[0].n;
+      ok(r.ok && r.policyAccepted && r.policyAccepted.accepted === 1 && r.policyAccepted.total === live, 'หน้าตาร้าน: "ยอมรับฉบับล่าสุดแล้ว 1 จาก ' + live + ' คน" (ไม่นับคนที่ลบแล้ว)', r.policyAccepted);
+      await db.query(`update shops set consent_version = $1, consent_bonus_points = 0 where id = 'demo'`, [v0]);
+    } finally {
+      console.log = log;
+      console.error = errLog;
+    }
+  }
+
   console.log('\n[6] ข้อความถึงผู้ใช้');
   // ทุกไฟล์ใน api/ (ไฟล์ใหม่ถูกตรวจเองโดยไม่ต้องเพิ่มชื่อ)
   const apiFiles = ['index.js'].concat(fs.readdirSync(path.join(ROOT, 'api', '_lib')).filter(f => f.endsWith('.js')).map(f => '_lib/' + f));

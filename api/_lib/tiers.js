@@ -73,6 +73,7 @@ const untilFor = (tier, day) => (tier.rank === 0 ? null : addMonths(day, KEEP_MO
 // คืน { tier, up } และบันทึกลงตาราง (เฉพาะเมื่อเปลี่ยน)
 async function syncMember(q, shopId, m, tiers, now, opt = {}) {
   if (!tiersOn(tiers)) return { tier: null, up: null };
+  if (U.upper(m && m.status) === 'DELETED') return { tier: null, up: null }; // ลบบัญชีแล้ว: ไม่ปรับระดับ ไม่จดประวัติเพิ่ม
   const today = U.thaiDay(now);
   let tier = tierById(tiers, m.tier_id);
   let until = m.tier_until || null;
@@ -133,7 +134,7 @@ async function syncMember(q, shopId, m, tiers, now, opt = {}) {
 async function syncDue(db, shopId, tiers, now) {
   if (!tiersOn(tiers)) return 0;
   const today = U.thaiDay(now);
-  const due = await db.query(`select id from members where shop_id = $1 and (tier_id is null or tier_until < $2::date)`, [shopId, today]);
+  const due = await db.query(`select id from members where shop_id = $1 and status <> 'DELETED' and (tier_id is null or tier_until < $2::date)`, [shopId, today]); // ลบแล้วไม่ต้องคิดระดับ
   for (const row of due.rows) {
     await db.tx(async (q) => {
       const m = (await q.query(`select id, tier_id, tier_since, to_char(tier_until, 'YYYY-MM-DD') as tier_until from members

@@ -103,6 +103,9 @@ function diff(a, b, p, out) {
       delete o.canDelete;
       // ส่งข้อความรอบ 3 (ระบบใหม่เท่านั้น — ระบบเดิมหยุดพัฒนาแล้ว): ช่องยินยอม/แต้มรับข่าวสาร + ค่าตั้งร้าน 3 ข้อใหม่
       delete o.signup;
+      // PDPA ขั้นที่ 2 (ระบบใหม่เท่านั้น): สถานะนโยบาย/ลบบัญชีในหน้าลูกค้า + ตัวนับคนยอมรับนโยบายในหน้าตาร้าน
+      delete o.privacy;
+      delete o.policyAccepted;
       if (Array.isArray(o.items)) o.items = o.items.filter((x) => !(x && NEW_SETTINGS.includes(x.key)));
       return tweak ? tweak(o, side) : o;
     };

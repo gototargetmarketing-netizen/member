@@ -285,7 +285,7 @@ async function adjustPoints(p, ctx) {
 async function staffRecent(p, ctx) {
   const branch = p.branchId ? await resolveStaffBranch(ctx, p) : '';
   const r = await ctx.db.query(
-    `select t.id, t.created_at, t.type, t.amount::float8 as amount, t.points, t.balance_after, t.detail, t.member_id, t.staff, m.name as member_name
+    `select t.id, t.created_at, t.type, t.amount::float8 as amount, t.points, t.balance_after, t.detail, t.member_id, t.staff, ${V.memberNameSql('m')} as member_name
      from transactions t left join members m on m.shop_id = t.shop_id and m.id = t.member_id
      where t.shop_id = $1 and ($2::text = '' or t.branch = $2::text)
      order by t.created_at desc limit 15`, [ctx.shop.id, branch]);

@@ -13,7 +13,7 @@ const admin = require('./admin');
 const broadcast = require('./broadcast');
 const features = require('./features');
 
-const API_VERSION = '0.11.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก / 0.6.1 = ลบคำสั่งวัดความเร็วชั่วคราว (speedCard) / 0.7 = ส่งข้อความตามกลุ่ม รอบ 1 (คัดกลุ่ม) / 0.8 = รอบ 2 (ส่งผ่าน LINE OA ของร้าน) / 0.9 = รูปเป็นริชเมสเสจเต็มจอ / 0.10 = รอบ 3 (เพิ่มเพื่อน OA ก่อนสมัคร + แต้มรับข่าวสาร) / 0.11 = ตัวกลางตรวจแพ็กเกจของร้าน
+const API_VERSION = '0.12.0'; // 0.2 = ลูกค้า (ขั้น 3 รอบ 1) / 0.3 = พนักงาน (รอบ 2) / 0.4 = หลังบ้าน (รอบ 3) / 0.5 = ปุ่มลบ + ระดับสมาชิก (ขั้น 4) / 0.6 = ระดับนับแต้ม + หน้าสิทธิ์สมาชิก / 0.6.1 = ลบคำสั่งวัดความเร็วชั่วคราว (speedCard) / 0.7 = ส่งข้อความตามกลุ่ม รอบ 1 (คัดกลุ่ม) / 0.8 = รอบ 2 (ส่งผ่าน LINE OA ของร้าน) / 0.9 = รูปเป็นริชเมสเสจเต็มจอ / 0.10 = รอบ 3 (เพิ่มเพื่อน OA ก่อนสมัคร + แต้มรับข่าวสาร) / 0.11 = ตัวกลางตรวจแพ็กเกจของร้าน / 0.12 = PDPA ขั้นที่ 2 (ลบบัญชี + ยอมรับนโยบายฉบับใหม่)
 const { ALL_STAFF, MANAGERS } = staff;
 const OWNER = ['OWNER'];
 const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/; // ตรงกับเงื่อนไขในตาราง shops
@@ -33,6 +33,9 @@ const ACTIONS = {
   redeem: { shop: true, auth: true, run: customer.redeem },
   claimBirthday: { shop: true, auth: true, run: customer.claimBirthday },
   updateProfile: { shop: true, auth: true, run: customer.updateProfile },
+  // PDPA ขั้นที่ 2 (14 พ.ย. 2569): ยอมรับนโยบายฉบับใหม่ / ลบบัญชีตัวเอง
+  acceptPolicy: { shop: true, auth: true, run: customer.acceptPolicy },
+  deleteAccount: { shop: true, auth: true, run: customer.deleteAccount },
 
   // พนักงาน (ขั้น 3 รอบ 2) — staffMe ไม่ระบุบทบาท: คนที่ยังไม่ได้รับสิทธิ์ต้องเปิดได้ เพื่อส่งคำขอสิทธิ์
   staffMe: { shop: true, auth: true, run: staff.staffMe },
@@ -60,6 +63,8 @@ const ACTIONS = {
   adminMemberStatus: { shop: true, auth: true, roles: MANAGERS, run: admin.adminMemberStatus },
   // แก้ชื่อ/เบอร์/วันเกิดให้ลูกค้า: เจ้าของร้านเท่านั้น (คนเดียวที่เห็นเบอร์เต็มและวันเกิดอยู่แล้ว)
   adminMemberUpdate: { shop: true, auth: true, roles: OWNER, run: admin.adminMemberUpdate },
+  // ลบข้อมูลสมาชิก (PDPA): เจ้าของร้านเท่านั้น — ลบแล้วกู้คืนไม่ได้
+  adminMemberDelete: { shop: true, auth: true, roles: OWNER, run: admin.adminMemberDelete },
   adminSettings: { shop: true, auth: true, roles: MANAGERS, run: admin.adminSettings },
   // อัตราแต้มมีผลกับทุกบิลถัดไป → เจ้าของร้านเท่านั้น
   adminSettingsSave: { shop: true, auth: true, roles: OWNER, run: admin.adminSettingsSave },

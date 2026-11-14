@@ -199,6 +199,11 @@ input.input-err { border-color: var(--danger); }
 .oa-card b { display: block; font-size: 15px; }
 .oa-card small { display: block; color: var(--muted); font-size: 12.5px; }
 .gate-card { display: grid; gap: 12px; }
+.policy-count { display: block; margin-top: 6px; color: var(--text); }
+.notice-danger { background: color-mix(in srgb, var(--danger) 10%, var(--surface)); color: var(--danger); }
+/* PDPA ขั้นที่ 2: ลิงก์ลบบัญชี (ตัวเล็ก ล่างสุด ไม่เด่น — ใช้เมื่อจำเป็นจริง) */
+.policy-leave, .profile-delete { text-align: center; font-size: 13px; color: var(--muted); margin: 4px 0 0; }
+.profile-delete { padding: 0 20px 20px; }
 .gate-steps { margin: 0 0 4px; padding-left: 22px; display: grid; gap: 6px; font-size: 14.5px; }
 .check-consent b { color: var(--text); }
 .consent-sub { display: block; color: var(--muted); font-size: 12.5px; margin-top: 2px; }

@@ -327,6 +327,12 @@ async function seed() {
     await b.eval(asUser('U_ADM_C1', 'ลูกค้า'));
     await b.nav('about:blank');
     await b.nav(`${WEB}/khamwan`);
+    // ระบบใหม่ (PDPA ขั้นที่ 2): แก้นโยบายแล้ว ลูกค้าเดิมต้องกดยอมรับฉบับใหม่ก่อนเห็นบัตร / ระบบเดิม (Apps Script) ไม่มีหน้านี้ → เห็นบัตรเลย
+    await b.waitFor(`/ร้านทดสอบสีใหม่/.test(document.querySelector('.mc-shop')?.innerText || '') || !!document.querySelector('[data-act=policy-accept]')`, 10000, 'บัตรสมาชิก หรือหน้ายอมรับนโยบาย');
+    if (await b.eval(`!!document.querySelector('[data-act=policy-accept]')`)) {
+      ok(/ร้านปรับปรุงนโยบายความเป็นส่วนตัว/.test(await b.text()), 'ระบบใหม่: แก้นโยบาย → ลูกค้าเดิมเจอหน้ายอมรับนโยบายฉบับใหม่ก่อน');
+      await b.click('[data-act=policy-accept]');
+    }
     await b.waitFor(`/ร้านทดสอบสีใหม่/.test(document.querySelector('.mc-shop')?.innerText || '')`, 10000, 'บัตรสมาชิกชื่อร้านใหม่');
     ok((await b.eval(`getComputedStyle(document.documentElement).getPropertyValue('--primary').trim().toUpperCase()`)) === '#0F766E' && /ดาว/.test(await b.text('.mc-points')), 'หน้าลูกค้าใช้ชื่อ สี และคำเรียกแต้มใหม่');
     await b.shot(path.join(OUT, 'a18-customer-brand.png'));

@@ -53,6 +53,8 @@ async function giveConsentBonus(q, ctx, memberId, at) {
   const bonus = U.toInt(ctx.shop.consent_bonus_points);
   if (bonus <= 0) return 0;
   const shopId = ctx.shop.id;
+  // LINE นี้เคยได้ไปแล้วในบัญชีที่ลบทิ้ง (เทียบรหัสแปลง) → ไม่ให้ซ้ำ กันลบแล้วสมัครใหม่เพื่อเก็บแต้ม (ผู้ใช้เลือกแบบ ก 14 พ.ย. 2569)
+  if (await M.bonusUsedBefore(q, shopId, ctx.user.userId)) return 0;
   const r = await q.query(`update members set points = points + $3, consent_bonus_at = $4
       where shop_id = $1 and id = $2 and consent_bonus_at is null returning points`, [shopId, memberId, bonus, at]);
   if (!r.rows.length) return 0; // เคยได้ไปแล้ว (ยกเลิกแล้วกลับมาติ๊กใหม่ ไม่ได้ซ้ำ)
@@ -170,11 +172,15 @@ async function bootstrap(p, ctx) {
   }
   const extra = d.extra || null;
   // ช่องยินยอมรับข่าวสาร: ติ๊กไว้ให้ไหม + แต้มที่จะได้ (ยังไม่เคยได้เท่านั้น)
+  const bonusPoints = U.toInt(ctx.shop.consent_bonus_points);
   out.signup = {
     preticked: ctx.shop.consent_preticked === true,
-    bonusPoints: U.toInt(ctx.shop.consent_bonus_points),
-    bonusAvailable: !(extra && extra.bonusAt)
+    bonusPoints,
+    // ยังไม่เป็นสมาชิก + เคยได้ในบัญชีที่ลบไปแล้ว → ไม่ได้อีก (ค้นเฉพาะร้านที่แจกแต้มและหน้าสมัครเท่านั้น)
+    bonusAvailable: !(extra && extra.bonusAt) && !(bonusPoints > 0 && !m && await M.bonusUsedBefore(ctx.db, ctx.shop.id, ctx.user.userId))
   };
+  // PDPA ขั้นที่ 2 (เฉพาะระบบใหม่ — ระบบเดิมไม่ส่งช่องนี้ หน้าเว็บจึงไม่แสดงปุ่มลบบัญชี/ป๊อปอัปนโยบาย)
+  out.privacy = { version: String(M.policyVersion(ctx.shop)), needAccept: M.needsPolicy(m, ctx.shop), canDelete: !!m };
   await friendStatus(ctx, out, m, extra);
   if (!m) return out;
   out.birthday = birthdayOffer(m, now, d.coupons, d.rewards, d.birthLog, tc);
@@ -292,6 +298,7 @@ async function redeem(p, ctx) {
     if (dup.rows[0]) return { duplicate: true, points: U.toInt(dup.rows[0].balance_after) };
     if (!m) throw userError('กรุณาสมัครสมาชิกก่อน', 'NOT_MEMBER');
     M.assertActiveMember(m);
+    M.assertPolicy(m, ctx.shop); // ยังไม่ยอมรับนโยบายฉบับใหม่ = แลกไม่ได้ (กันข้ามป๊อปอัปในหน้าเว็บ)
 
     const now = ctx.now;
     const tiers = await T.loadTiers(q, shopId);
@@ -329,6 +336,7 @@ async function claimBirthday(p, ctx) {
     const m = await M.memberByLine(q, shopId, ctx.user.userId, true);
     if (!m) throw userError('กรุณาสมัครสมาชิกก่อน', 'NOT_MEMBER');
     M.assertActiveMember(m);
+    M.assertPolicy(m, ctx.shop);
     const now = ctx.now;
     const log = (await q.query('select created_at, changed from profile_log where shop_id = $1 and member_id = $2 order by created_at desc limit 20',
       [shopId, m.id])).rows;
@@ -386,4 +394,40 @@ async function updateProfile(p, ctx) {
   }
 }
 
-module.exports = { bootstrap, register, redeem, claimBirthday, updateProfile, birthdayBlock, birthdayReward, BOOT_SQL };
+// ยอมรับนโยบายฉบับใหม่ — ต้องบอกฉบับที่เห็น (ร้านแก้นโยบายอีกระหว่างลูกค้าอ่าน → ให้อ่านฉบับล่าสุดก่อน ไม่จดว่ายอมรับฉบับที่ไม่ได้เห็น)
+async function acceptPolicy(p, ctx) {
+  const shopId = ctx.shop.id;
+  const current = M.policyVersion(ctx.shop);
+  if (String(p.version || '') !== String(current)) {
+    throw userError('ร้านเพิ่งปรับนโยบายอีกครั้ง กรุณาอ่านฉบับล่าสุดแล้วกดยอมรับ', 'POLICY_CHANGED');
+  }
+  return ctx.db.tx(async (q) => {
+    const m = await M.memberByLine(q, shopId, ctx.user.userId, true);
+    if (!m) throw userError('กรุณาสมัครสมาชิกก่อน', 'NOT_MEMBER');
+    M.assertActiveMember(m);
+    // กดซ้ำ / ยอมรับไปแล้ว → ตอบผลเดิม ไม่จดซ้ำ
+    if (!M.needsPolicy(m, ctx.shop)) return { accepted: true, version: String(current), already: true };
+    await q.query('update members set consent_version = $3, consent_at = $4 where shop_id = $1 and id = $2', [shopId, m.id, current, ctx.now]);
+    await q.query('insert into profile_log (shop_id, created_at, member_id, changed, by_name) values ($1, $2, $3, $4, $5)',
+      [shopId, ctx.now, m.id, 'ยอมรับนโยบายความเป็นส่วนตัว ฉบับที่ ' + current, 'ลูกค้า']);
+    return { accepted: true, version: String(current) };
+  });
+}
+
+// ลูกค้าลบบัญชีตัวเอง (PDPA: สิทธิ์ขอลบข้อมูล) — ต้องพิมพ์คำว่า "ลบ" มาด้วย (หน้าเว็บยืนยัน 2 ชั้น ตัวกลางตรวจซ้ำ)
+// ไม่ใช้ once(): once จดคำตอบพร้อม LINE ID ไว้ใน request_log ถาวร = ข้อมูลที่ต้องลบค้างอยู่
+// กดซ้ำหลังลบสำเร็จ → NOT_MEMBER (หน้าเว็บถือว่าลบแล้ว)
+async function deleteAccount(p, ctx) {
+  if (String(p.confirm || '').trim() !== 'ลบ') throw userError('กรุณาพิมพ์คำว่า "ลบ" เพื่อยืนยัน', 'BAD_CONFIRM');
+  const shopId = ctx.shop.id;
+  return ctx.db.tx(async (q) => {
+    const m = await M.memberByLine(q, shopId, ctx.user.userId, true);
+    if (!m) throw userError('ไม่พบบัญชีสมาชิก', 'NOT_MEMBER');
+    // บัญชีที่ร้านระงับไว้ก็ลบเองได้ (สิทธิ์ตามกฎหมาย ไม่ขึ้นกับสถานะ)
+    const r = await M.deleteMember(q, shopId, m, { by: 'ลูกค้า', log: 'ลบบัญชี (ลูกค้าลบเอง)' }, ctx.now);
+    console.log('ลูกค้าลบบัญชี ' + m.id + ' ร้าน ' + shopId + ' (แต้ม ' + r.points + ' / คูปองยกเลิก ' + r.cancelled + ')');
+    return { deleted: true };
+  });
+}
+
+module.exports = { bootstrap, register, redeem, claimBirthday, updateProfile, acceptPolicy, deleteAccount, birthdayBlock, birthdayReward, BOOT_SQL };

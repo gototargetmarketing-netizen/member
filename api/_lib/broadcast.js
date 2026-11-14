@@ -78,7 +78,7 @@ function cleanFilter(raw, tiers, now) {
 }
 
 // เงื่อนไข SQL ชุดเดียว (ค่าว่าง/null = ไม่กรองข้อนั้น) — ไม่ต่อข้อความ SQL จากค่าที่ส่งมา
-const WHERE = `shop_id = $1
+const WHERE = `shop_id = $1 and status <> 'DELETED'
   and (cardinality($2::text[]) = 0 or tier_id = any($2::text[]))
   and (cardinality($3::text[]) = 0 or joined_branch = any($3::text[]))
   and ($4::int = 0 or extract(month from birth_date) = $4::int)

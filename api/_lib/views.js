@@ -13,7 +13,10 @@ const BRANCH_ADMIN = 'ADMIN';   // ปรับแต้มจากหลัง
 const MEMBER_COLS = `id, line_user_id, name, first_name, last_name, phone,
   to_char(birth_date, 'YYYY-MM-DD') as birth_date, birth_date_edits, picture, points,
   total_spend::float8 as total_spend, visit_count, tier_id, tier_since, to_char(tier_until, 'YYYY-MM-DD') as tier_until,
-  joined_at, last_visit_at, status, marketing_consent, joined_branch, note`;
+  joined_at, last_visit_at, status, marketing_consent, joined_branch, note, consent_version`;
+
+// ชื่อสมาชิกในประวัติยอดซื้อ/คูปองที่หลังบ้านและพนักงานเห็น — ลบบัญชีแล้วแสดง "สมาชิกที่ลบแล้ว" (ต้องตรงกับ DELETED_NAME ใน members.js)
+const memberNameSql = (a) => `case when ${a}.status = 'DELETED' then 'สมาชิกที่ลบแล้ว' else coalesce(${a}.name, '') end`;
 
 const REWARD_COLS = `id, name, description, type, points, image, valid_days, quota, issued, limit_per_member,
   to_char(start_date, 'YYYY-MM-DD') as start_date, to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status, min_tier_id`;
@@ -192,7 +195,7 @@ function publicRule(r, names, tiers) {
   return o;
 }
 
-module.exports = {
+module.exports = { memberNameSql,
   REWARD_BIRTHDAY, BIRTH_SELF_EDITS, RULE_MULTIPLIERS, BRANCH_ONLINE, BRANCH_ADMIN, MEMBER_COLS, REWARD_COLS, COUPON_COLS,
   publicMember, staffMember, publicTx, couponState, publicCoupon, listRewards, listPromos, ruleFromRow, rulesOn, branchNames, publicRule, tierName
 };

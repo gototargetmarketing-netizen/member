@@ -164,6 +164,28 @@ async function rejects(db, sql, params, msg) {
   await rejects(db, `insert into transactions (shop_id, id, created_at, member_id, type, amount, points, balance_after, detail, staff)
     values ('khamwan', 'TX-CONSENT02', now(), '${mid}', 'GIFT', 0, 0, 0, 'ทดสอบ', 'SYSTEM')`, [], 'ชนิดรายการที่ไม่รู้จัก → ยังปฏิเสธเหมือนเดิม');
 
+  console.log('\n[12] ไฟล์ปรับตาราง 008 ลบบัญชีสมาชิก (PDPA ขั้นที่ 2) + รันซ้ำได้');
+  const m008 = fs.readFileSync(require('path').join(dir, '008_member_delete_policy.sql'), 'utf8');
+  await db.exec(m008);
+  await db.exec(m008);
+  const live8 = (await db.query(`select count(*)::int as n from members where status <> 'DELETED' and phone is not null and deleted_at is null and line_hash is null`)).rows[0].n;
+  const all8 = (await db.query(`select count(*)::int as n from members`)).rows[0].n;
+  ok(live8 === all8 && all8 > 0, 'วาง 008 (สองรอบ ไม่ error) → สมาชิกเดิมทุกคน (' + all8 + ') ผ่านกติกาใหม่ ไม่มีใครถูกเปลี่ยน');
+  const [d1, d2] = (await db.query(`select id from members where shop_id = 'khamwan' order by id limit 2`)).rows.map((r) => r.id);
+  const wipe = (id, extra, name = '') => `update members set status = 'DELETED', deleted_at = now(), line_user_id = null, name = '${name}', first_name = '', last_name = '',
+    phone = null, birth_date = null, picture = '', note = '', points = 0, marketing_consent = false${extra || ''} where shop_id = 'khamwan' and id = '${id}'`;
+  await rejects(db, `update members set status = 'DELETED', deleted_at = now() where shop_id = 'khamwan' and id = '${d1}'`, [], 'สถานะลบแล้วแต่ข้อมูลส่วนตัวยังอยู่ → ปฏิเสธ (ด่านสุดท้ายถ้าโค้ดลืมล้าง)');
+  await rejects(db, wipe(d1, '', 'ยังมีชื่อ'), [], 'ลบแล้วแต่ลืมล้างชื่อช่องเดียว → ปฏิเสธ');
+  await rejects(db, wipe(d1, `, line_hash = 'ไม่ใช่รหัสแปลง'`), [], 'รหัสแปลงรูปแบบผิด → ปฏิเสธ');
+  await db.query(wipe(d1, `, line_hash = '${'a'.repeat(64)}'`));
+  await db.query(wipe(d2));
+  ok(true, 'ลบครบทุกช่อง → บันทึกได้ / สมาชิกที่ลบแล้ว 2 คนไม่มีเบอร์พร้อมกันได้ (เบอร์ห้ามซ้ำไม่ชน)');
+  await rejects(db, `update members set phone = null where shop_id = 'khamwan' and status <> 'DELETED' and id not in ('${d1}', '${d2}') and id = (select min(id) from members where shop_id = 'khamwan' and status <> 'DELETED')`, [], 'สมาชิกที่ยังไม่ลบ ไม่มีเบอร์ → ปฏิเสธ');
+  await rejects(db, `update members set line_hash = '${'b'.repeat(64)}' where shop_id = 'khamwan' and id = (select min(id) from members where shop_id = 'khamwan' and status <> 'DELETED')`, [], 'สมาชิกที่ยังไม่ลบ มีรหัสแปลง → ปฏิเสธ');
+  await db.query(`insert into transactions (shop_id, id, created_at, member_id, type, amount, points, balance_after, detail, staff)
+    values ('khamwan', 'TX-DELETE01', now(), $1, 'DELETE', 0, 0, 0, 'ลบบัญชีสมาชิก', 'ลูกค้า')`, [d1]);
+  ok(true, 'รายการแต้มชนิดใหม่ DELETE (ลบบัญชี) บันทึกได้');
+
   console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(1); });

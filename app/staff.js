@@ -8,7 +8,7 @@ import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmt
 
 const SCANNER_JS = 'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js';
 const ROLE_LABEL = { OWNER: 'เจ้าของร้าน', ADMIN: 'ผู้จัดการ', CASHIER: 'แคชเชียร์' };
-const TX_LABEL = { EARN: 'ยอดซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกรางวัล', ADJUST: 'ปรับแต้ม', CONSENT: 'รับข่าวสาร' };
+const TX_LABEL = { EARN: 'ยอดซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกรางวัล', ADJUST: 'ปรับแต้ม', CONSENT: 'รับข่าวสาร', DELETE: 'ลบบัญชี' };
 
 const app = document.getElementById('app');
 const S = {

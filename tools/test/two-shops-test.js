@@ -119,6 +119,9 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
     bootstrap: [{ as: 'U_B1', body: {}, check: (r) => r.ok && r.member === null, note: 'ลูกค้าร้าน B เปิดร้าน A → ยังไม่เป็นสมาชิก (ไม่เห็นบัตรร้าน B)' }],
     updateProfile: [{ as: 'U_B1', body: { firstName: 'แก้', lastName: 'ข้ามร้าน', birthDate: '1990-03-01', phone: '0861111111' }, reject: true }],
     claimBirthday: [{ as: 'U_B1', body: {}, reject: true }],
+    // PDPA ขั้นที่ 2: ลูกค้าร้าน B ยอมรับนโยบาย/ลบบัญชีที่ร้าน A → ไม่ใช่สมาชิกร้าน A (บัญชีร้าน B ต้องไม่ถูกลบ)
+    acceptPolicy: [{ as: 'U_B1', body: { version: '1' }, reject: true }],
+    deleteAccount: [{ as: 'U_B1', body: { confirm: 'ลบ' }, reject: true }],
     redeem: [{ as: 'U_A1', body: { rewardId: 'R002' }, reject: true, note: 'แลกของรางวัลที่มีเฉพาะร้าน B' }],
     staffMe: [{ as: OA, body: {} }, { as: 'OB', body: {}, check: (r) => r.ok && r.staff.status === 'PENDING', note: 'เจ้าของร้าน B เปิดหน้าพนักงานร้าน A → รออนุมัติ (ไม่ได้สิทธิ์ตามร้าน B)' }],
     staffLookup: [
@@ -184,6 +187,7 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
     adminBranchSave: [{ as: OA, body: { branch: { id: 'B002', name: 'แก้ข้ามร้าน' } }, reject: true }],
     adminMemberStatus: [{ as: OA, body: { memberId: onlyB, status: 'BLOCKED', reason: 'ลองข้ามร้าน' }, reject: true },
       { as: OA, body: { memberId: clash, status: 'BLOCKED', reason: 'รหัสชนกัน' }, check: (r) => r.ok, note: 'ระงับรหัสที่ชนกัน → ระงับคนของร้าน A' }],
+    adminMemberDelete: [{ as: OA, body: { memberId: onlyB, reason: 'ทดสอบลบข้ามร้าน', confirm: 'ลบ' }, reject: true, note: 'เจ้าของร้าน A ลบสมาชิกที่มีเฉพาะร้าน B' }],
     adminMemberUpdate: [{ as: OA, body: { memberId: onlyB, firstName: 'แก้', lastName: 'ข้ามร้าน', birthDate: '1990-01-01', phone: '0899999999' }, reject: true }],
     adminSettings: [{ as: OA, body: {} }],
     adminSettingsSave: [{ as: OA, body: { values: { POINT_RATE_BAHT: 12 } }, check: (r) => r.ok, note: 'เจ้าของร้าน A แก้อัตราแต้มร้านตัวเองได้ (ร้าน B ต้องไม่เปลี่ยน)' }],

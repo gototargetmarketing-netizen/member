@@ -10,7 +10,7 @@ import { tierBanner } from './tier.js';
 import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, setBusy, showLoading, hideLoading, creditHtml, bootHtml, qrSvg, loadScript } from './ui.js';
 
 const ROLE_LABEL = { OWNER: 'เจ้าของร้าน', ADMIN: 'ผู้จัดการ', CASHIER: 'แคชเชียร์' };
-const TX_LABEL = { EARN: 'ยอดซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกรางวัล', ADJUST: 'ปรับแต้ม', CONSENT: 'รับข่าวสาร' };
+const TX_LABEL = { EARN: 'ยอดซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกรางวัล', ADJUST: 'ปรับแต้ม', CONSENT: 'รับข่าวสาร', DELETE: 'ลบบัญชี' };
 const COUPON_LABEL = { ACTIVE: 'ใช้ได้', USED: 'ใช้แล้ว', EXPIRED: 'หมดอายุ', CANCELLED: 'ยกเลิก' };
 const STAFF_STATUS_LABEL = { PENDING: 'รออนุมัติ', ACTIVE: 'ใช้งานได้', DISABLED: 'ปิดสิทธิ์' };
 const PAGES = [
@@ -41,8 +41,8 @@ const PRESETS = [
 const RANGE_KEY = 'crm_admin_range';
 const BRANCH_KEY = 'crm_admin_branch';
 // ข้อความในป๊อปอัป "กำลังโหลด" ตามคำสั่ง (คำสั่งอ่านข้อมูลอื่นๆ = "กำลังโหลด...")
-const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave', 'adminMemberUpdate', 'adminRuleSave', 'adminTiersSave', 'adminMemberTier'];
-const LOADING_TEXT = { adminAudience: 'กำลังคัดกลุ่มลูกค้า...', adminBroadcastInfo: null, adminBroadcastTest: 'กำลังส่งทดสอบ...', adminBroadcastSend: 'กำลังส่งข้อความ...', adminBroadcastResume: 'กำลังส่งต่อ...', adminUploadRichImage: 'กำลังอัปโหลดรูป...', adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...', adminRewardDelete: 'กำลังลบ...', adminPromoDelete: 'กำลังลบ...', adminRuleDelete: 'กำลังลบ...' };
+const SAVE_ACTIONS = ['adjustPoints', 'adminStaffUpdate', 'adminRewardSave', 'adminPromoSave', 'adminMemberStatus', 'adminMemberDelete', 'adminSettingsSave', 'adminBrandSave', 'adminBranchSave', 'adminMemberUpdate', 'adminRuleSave', 'adminTiersSave', 'adminMemberTier'];
+const LOADING_TEXT = { adminAudience: 'กำลังคัดกลุ่มลูกค้า...', adminBroadcastInfo: null, adminBroadcastTest: 'กำลังส่งทดสอบ...', adminBroadcastSend: 'กำลังส่งข้อความ...', adminBroadcastResume: 'กำลังส่งต่อ...', adminUploadRichImage: 'กำลังอัปโหลดรูป...', adminExport: 'กำลังเตรียมไฟล์...', adminUploadImage: 'กำลังอัปโหลดรูป...', adminRewardDelete: 'กำลังลบ...', adminPromoDelete: 'กำลังลบ...', adminRuleDelete: 'กำลังลบ...', adminMemberDelete: 'กำลังลบข้อมูลสมาชิก...' };
 // ร่างข้อความตามกลุ่ม: image = ลิงก์ฐานของริชเมสเสจ (ไม่มีนามสกุล) / imageHeight = ความสูงเมื่อกว้าง 1040 / link = แตะรูปแล้วเปิด (ว่าง = บัตรสมาชิก)
 const BC_EMPTY = () => ({ text: '', image: '', imageHeight: '', link: '' });
 
@@ -168,6 +168,7 @@ function onClick(e) {
     case 'tier-filter': Object.assign(S.members, { tier: id || '', page: 1 }); break; // ลิงก์ #members พาไปหน้ารายชื่อที่กรองแล้ว
     case 'item-delete-confirm': doDelete(el.dataset.kind, id, el); break;
     case 'member-status': openMemberStatus(); break;
+    case 'member-delete': openMemberDelete(); break;
     case 'member-edit': openMemberEdit(); break;
     case 'settings-confirm': doSaveSettings(el); break;
     case 'brand-confirm': doSaveBrand(S.pendingBrand, el); break;
@@ -213,6 +214,7 @@ function onSubmit(e) {
     case 'promo': savePromo(form); break;
     case 'rule': saveRule(form); break;
     case 'member-status': saveMemberStatus(form); break;
+    case 'member-delete': saveMemberDelete(form); break;
     case 'member-edit': saveMemberEdit(form); break;
     case 'tiers': confirmTiers(form); break;
     case 'member-tier': saveMemberTier(form); break;
@@ -1169,6 +1171,7 @@ function renderMember(r) {
   S.member = m;
   S.memberTiers = r.tiers || [];
   const owner = isOwner();
+  const deleted = m.deleted === true; // ลบบัญชีแล้ว (PDPA): เหลือแต่ประวัติแบบไม่มีชื่อ — แก้/ระงับ/ปรับแต้มไม่ได้
   document.getElementById('view').innerHTML = `
     <a class="back-link" href="#members">${icon('left', 16)} รายชื่อสมาชิก</a>
     <section class="card adm-card member-head">
@@ -1177,15 +1180,15 @@ function renderMember(r) {
         <div class="m-name">${esc(m.name)}</div>
         <div class="m-sub mono">${esc(m.memberId)}</div>
       </div>
-      ${m.status === 'ACTIVE' ? statusChip('active', 'ใช้งานได้') : statusChip('blocked', 'ถูกระงับ')}
+      ${deleted ? statusChip('blocked', 'ลบบัญชีแล้ว') : m.status === 'ACTIVE' ? statusChip('active', 'ใช้งานได้') : statusChip('blocked', 'ถูกระงับ')}
     </section>
     <div class="kpis kpis-3">
       <div class="kpi"><div class="kpi-label">${esc(unit())}คงเหลือ</div><div class="kpi-value">${fmtNum(m.points)}</div></div>
       <div class="kpi"><div class="kpi-label">ยอดซื้อรวม</div><div class="kpi-value">฿${fmtMoney(m.totalSpend)}</div></div>
       <div class="kpi"><div class="kpi-label">จำนวนครั้งที่มา</div><div class="kpi-value">${fmtNum(m.visitCount)}</div></div>
     </div>
-    ${memberTierHtml(m, owner)}
-    <div class="adm-grid2">
+    ${deleted ? `<p class="notice">${icon('shield', 18)}<span>ลบบัญชีสมาชิกแล้วเมื่อ ${fmtDateTime(m.deletedAt)} — ชื่อ เบอร์ วันเกิด และบัญชี LINE ถูกลบตามคำขอ เหลือเฉพาะประวัติยอดซื้อแบบไม่มีชื่อ</span></p>` : memberTierHtml(m, owner)}
+    ${deleted ? '' : `<div class="adm-grid2">
       <section class="card adm-card">
         <div class="card-head"><h2>ข้อมูลสมาชิก</h2></div>
         <dl class="kv">
@@ -1206,6 +1209,7 @@ function renderMember(r) {
           ${m.status === 'ACTIVE'
             ? `<button class="btn btn-sm btn-danger-outline" data-act="member-status">${icon('shield', 16)} ระงับสมาชิก</button>`
             : `<button class="btn btn-sm btn-primary" data-act="member-status">${icon('check', 16)} เปิดใช้อีกครั้ง</button>`}
+          ${owner && r.canDelete ? `<button class="btn btn-sm btn-danger-outline" data-act="member-delete">${icon('x', 16)} ลบข้อมูลสมาชิก</button>` : ''}
         </div>
         ${owner ? '' : '<p class="muted small">ผู้จัดการไม่เห็นเบอร์เต็มและวันเกิด (เจ้าของร้านเห็น)</p>'}
       </section>
@@ -1218,7 +1222,7 @@ function renderMember(r) {
           <p class="muted small">ทุกการปรับจะบันทึกชื่อคุณและเหตุผลไว้ในประวัติ</p>
         </form>
       </section>
-    </div>
+    </div>`}
     <section class="card adm-card flush">
       <div class="card-head pad"><h2>ประวัติ${esc(unit())}</h2><span class="muted small">${fmtNum(r.history.length)} รายการล่าสุด</span></div>
       <div class="tbl-wrap"><table class="tbl">
@@ -1364,6 +1368,46 @@ function openMemberStatus() {
         <button class="btn ${blocking ? 'btn-danger' : 'btn-primary'}" type="submit">${blocking ? 'ระงับ' : 'เปิดใช้'}</button>
       </div>
     </form>`);
+}
+
+/* =====================================================
+ * ลบข้อมูลสมาชิก (PDPA ขั้นที่ 2 — เจ้าของร้านเท่านั้น สำหรับลูกค้าที่มาขอที่ร้าน/โทรมาขอ)
+ * ===================================================== */
+function openMemberDelete() {
+  const m = S.member;
+  if (!m || !isOwner()) return;
+  openModal(`
+    <div class="modal-head"><h2>ลบข้อมูลสมาชิก</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <p><b>${esc(m.name)}</b> <span class="muted mono">${esc(m.memberId)}</span></p>
+    <form class="form" data-form="member-delete" autocomplete="off">
+      <p class="notice notice-danger">${icon('alert', 18)}<span>ลบแล้วกู้คืนไม่ได้: ชื่อ เบอร์ วันเกิด และบัญชี LINE จะถูกลบ ${esc(unit())}คงเหลือ ${fmtNum(m.points)} เป็น 0 และคูปองที่ยังไม่ใช้ถูกยกเลิก ประวัติยอดซื้อเหลือแบบไม่มีชื่อ</span></p>
+      <label class="field"><span>เหตุผล <em>*</em></span><input name="reason" maxlength="150" placeholder="เช่น ลูกค้าขอลบที่หน้าร้าน">
+        <small class="hint">ห้ามใส่ชื่อหรือเบอร์ลูกค้า (เหตุผลถูกเก็บไว้ในประวัติ)</small></label>
+      <label class="field"><span>พิมพ์คำว่า <b>ลบ</b> เพื่อยืนยัน <em>*</em></span><input name="confirm" maxlength="10"></label>
+      <div class="modal-actions">
+        <button class="btn" type="button" data-act="close">ยกเลิก</button>
+        <button class="btn btn-danger" type="submit">ลบข้อมูล</button>
+      </div>
+    </form>`);
+}
+
+async function saveMemberDelete(form) {
+  const m = S.member;
+  const reason = form.elements.reason.value.trim();
+  if (reason.length < 3) return toast('กรุณาใส่เหตุผลที่ลบ', 'err');
+  if (form.elements.confirm.value.trim() !== 'ลบ') return toast('กรุณาพิมพ์คำว่า "ลบ" เพื่อยืนยัน', 'err');
+  const btn = form.querySelector('button[type="submit"]');
+  setBusy(btn, true);
+  try {
+    await withRequestId('mdel|' + m.memberId, rid => S.api.call('adminMemberDelete', { memberId: m.memberId, reason, confirm: 'ลบ', requestId: rid }));
+    closeModal();
+    toast('ลบข้อมูลสมาชิกแล้ว', 'ok');
+    resetPages();
+    window.location.hash = 'members';
+  } catch (e) {
+    setBusy(btn, false);
+    toast(e.message, 'err');
+  }
 }
 
 async function saveMemberStatus(form) {
@@ -2351,7 +2395,11 @@ function renderBrand(r) {
         <h2 class="form-section">นโยบายความเป็นส่วนตัว</h2>
         <label class="field"><span>ข้อความที่ลูกค้าอ่านตอนสมัคร <small>ตอนนี้เป็นฉบับที่ ${esc(r.consentVersion)}</small></span>
           <textarea name="PRIVACY_TEXT" rows="9" maxlength="3000" placeholder="${esc((base.legal && base.legal.privacyText) || '')}" ${dis}>${esc(v.PRIVACY_TEXT)}</textarea>
-          <small>แก้แล้วจะเป็นฉบับที่ ${next} อัตโนมัติ — ลูกค้าที่สมัครหลังจากนี้ยอมรับฉบับใหม่ ส่วนลูกค้าเก่ายังบันทึกเป็นฉบับเดิม (ตามที่ PDPA ต้องการ) · ว่าง = ใช้ข้อความตั้งต้นของร้าน</small></label>
+          ${r.policyAccepted
+            // ระบบใหม่ (PDPA ขั้นที่ 2): ลูกค้าเดิมต้องกดยอมรับฉบับใหม่ก่อนใช้บัตร + บอกว่ายอมรับแล้วกี่คน
+            ? `<small>แก้แล้วจะเป็นฉบับที่ ${next} อัตโนมัติ — ลูกค้าเดิมจะถูกขอให้กดยอมรับฉบับใหม่ตอนเปิดบัตรครั้งถัดไป (แลกของรางวัลไม่ได้จนกว่าจะยอมรับ / พนักงานยังบันทึกยอดให้ได้) · ว่าง = ใช้ข้อความตั้งต้นของร้าน</small>
+               <small class="policy-count">ยอมรับฉบับที่ ${esc(r.consentVersion)} แล้ว <b>${fmtNum(r.policyAccepted.accepted)}</b> จาก ${fmtNum(r.policyAccepted.total)} คน</small>`
+            : `<small>แก้แล้วจะเป็นฉบับที่ ${next} อัตโนมัติ — ลูกค้าที่สมัครหลังจากนี้ยอมรับฉบับใหม่ ส่วนลูกค้าเก่ายังบันทึกเป็นฉบับเดิม (ตามที่ PDPA ต้องการ) · ว่าง = ใช้ข้อความตั้งต้นของร้าน</small>`}</label>
         ${owner ? '<div class="form-actions"><button class="btn btn-primary" type="submit">บันทึกหน้าตาร้าน</button></div>' : ''}
       </form>
       <aside class="brand-side">
