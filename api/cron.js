@@ -36,7 +36,10 @@ function createCronHandler(deps) {
     }
     try {
       const r = await alerts.runDaily({ db: deps.db(), features: deps.features, oa: deps.oa, now: deps.now ? deps.now() : new Date() });
-      return send(res, 200, { ok: true, problems: r.problems.length, summary: r.summary, sent: r.sent });
+      // alert = ตั้งค่าแจ้งเตือนครบไหม + ทำไมไม่ได้ส่ง (ไม่มีรหัส/LINE ID จริง) → ตั้งค่าแล้วเช็กด้วย curl ได้เลย ไม่ต้องค้นหน้า Logs
+      const alert = Object.assign(alerts.diagnose(), { error: r.error || null });
+      if (!r.sent && !r.error) alert.why = 'ไม่มีปัญหาและไม่ใช่วันสรุป จึงไม่ส่ง (ปกติ)';
+      return send(res, 200, { ok: true, problems: r.problems.length, summary: r.summary, sent: r.sent, alert });
     } catch (e) {
       // งานตรวจเองล้ม (เช่น ต่อฐานข้อมูลไม่ได้) → แจ้งตรงๆ ไม่งั้นเงียบ แล้วเข้าใจผิดว่าระบบปกติ
       console.error('งานตรวจประจำวันล้ม: ' + (e && e.stack ? e.stack : e));

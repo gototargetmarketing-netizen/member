@@ -61,26 +61,39 @@ function settings() {
 }
 const enabled = () => { const s = settings(); return !!(s.token && s.to.length); };
 
+// สถานะการตั้งค่า (ไม่มีรหัสหรือ LINE ID จริง) — งานตรวจตอบค่านี้ให้คนที่ใส่ CRON_SECRET ถูก
+// ไว้เช็กหลังตั้งค่าใน Vercel ด้วย curl บรรทัดเดียว (หน้า Logs ของ Vercel ค้นภาษาไทยไม่ได้ — 18 พ.ย. 2569)
+function diagnose() {
+  const env = state.env || {};
+  const s = settings();
+  const raw = String(env.ALERT_LINE_TO || '').split(/[\s,]+/).filter(Boolean);
+  return { token: !!s.token, recipients: s.to.length, ignored: raw.length - s.to.length, summary: s.summary };
+}
+
 const withTimeout = (p, ms) => Promise.race([p, new Promise((resolve) => setTimeout(() => resolve('timeout'), ms))]);
 
 // ส่ง 1 ข้อความหาผู้รับทุกคน — key เดิมภายใน 24 ชม. LINE ไม่ส่งซ้ำ (กัน Vercel เรียกงานตรวจซ้ำ) / ผิดพลาดแค่จด log ไม่โยนต่อ
-async function sendText(text, key) {
+// คืน { ok, error } — error = สาเหตุที่ส่งไม่ได้ (ไม่มีรหัส/LINE ID) ให้งานตรวจบอกกลับใน curl
+async function deliver(text, key) {
   const s = settings();
-  if (!s.token || !s.to.length) return false;
+  if (!s.token) return { ok: false, error: 'ยังไม่ได้ตั้ง ALERT_LINE_TOKEN' };
+  if (!s.to.length) return { ok: false, error: 'ALERT_LINE_TO ไม่มี LINE ID ที่ใช้ได้ (ต้องขึ้นต้น U ตามด้วย 0-9 a-f รวม 33 ตัว)' };
   const body = (s.label + text).slice(0, 4900); // LINE รับข้อความละไม่เกิน 5,000 ตัว
   try {
     const oa = createOa({ token: s.token, fetch: state.fetch });
     const r = await withTimeout(oa.multicast(s.to, [{ type: 'text', text: body }],
       key || retryUuid('alert:' + body + ':' + state.now())), SEND_TIMEOUT_MS);
-    if (r === 'timeout') { console.error('ส่งแจ้งเตือน LINE ไม่ทันเวลา'); return false; }
+    if (r === 'timeout') { console.error('ส่งแจ้งเตือน LINE ไม่ทันเวลา'); return { ok: false, error: 'LINE ตอบไม่ทันใน 5 วินาที' }; }
     state.sent.push(body);
-    return true;
+    return { ok: true, error: null };
   } catch (e) {
-    if (e && e.status === 409) return true; // ส่งด้วย key นี้ไปแล้ว (งานตรวจถูกเรียกซ้ำ)
-    console.error('ส่งแจ้งเตือน LINE ไม่ได้: ' + (e && e.message ? e.message : e));
-    return false;
+    if (e && e.status === 409) return { ok: true, error: null }; // ส่งด้วย key นี้ไปแล้ว (งานตรวจถูกเรียกซ้ำ)
+    const msg = String(e && e.message ? e.message : e).slice(0, 300);
+    console.error('ส่งแจ้งเตือน LINE ไม่ได้: ' + msg);
+    return { ok: false, error: msg }; // ข้อความจาก LINE บอกแค่ช่องที่ผิด ไม่มีรหัส
   }
 }
+const sendText = async (text, key) => (await deliver(text, key)).ok;
 
 function retryUuid(seed) {
   const h = crypto.createHash('sha256').update(String(seed)).digest('hex');
@@ -140,7 +153,7 @@ const mbText = (bytes) => (bytes == null ? '-' : (bytes / 1048576).toFixed(bytes
 const pct = (bytes, limitMb) => (bytes == null ? null : bytes / (limitMb * 1048576));
 
 // deps: { db, now: Date, features(shopId) → Promise<แพ็กเกจ>, oa(shopId) → LINE OA ของร้าน | null }
-// คืน { problems: [ข้อความ], summary: bool, sent: bool } — ไม่มีข้อมูลส่วนตัวลูกค้า
+// คืน { problems: [ข้อความ], summary: bool, sent: bool, error: สาเหตุที่ส่งไม่ได้ | null } — ไม่มีข้อมูลส่วนตัวลูกค้า
 async function runDaily(deps) {
   const s = settings();
   const now = deps.now || new Date(state.now());
@@ -207,7 +220,7 @@ async function runDaily(deps) {
 
   // ส่ง: มีปัญหา = ส่งทุกวัน / ไม่มี = ส่งเฉพาะวันสรุป (จันทร์ หรือทุกวันถ้าตั้ง daily) → รวมเป็นข้อความเดียว ประหยัดโควตา
   const summaryDay = s.summary === 'daily' || monday;
-  if (!problems.length && !summaryDay) return { problems, summary: false, sent: false };
+  if (!problems.length && !summaryDay) return { problems, summary: false, sent: false, error: null };
   const lines = [];
   lines.push(problems.length ? `⚠️ ตรวจประจำวัน ${today}: พบ ${problems.length} เรื่อง` : `✅ ระบบปกติ (ตรวจ ${today})`);
   problems.forEach((p, i) => lines.push(`${i + 1}) ${p}`));
@@ -220,8 +233,8 @@ async function runDaily(deps) {
     if (caDays != null) lines.push(`• ใบรับรอง SSL เหลือ ${U.fmtNum(caDays)} วัน`);
   }
   // key ต่อวัน: Vercel เรียกงานตรวจซ้ำในวันเดียวกัน → LINE ไม่ส่งซ้ำ
-  const sent = await sendText(lines.join('\n'), retryUuid('alert-daily:' + today));
-  return { problems, summary: summaryDay, sent };
+  const d = await deliver(lines.join('\n'), retryUuid('alert-daily:' + today));
+  return { problems, summary: summaryDay, sent: d.ok, error: d.error };
 }
 
-module.exports = { configure, enabled, sendText, noteError, noteConfig, runDaily, describe, CONFIG_CODES, CHECK_POINTS_SQL, ERR_THRESHOLD, _state: state };
+module.exports = { configure, enabled, diagnose, sendText, noteError, noteConfig, runDaily, describe, CONFIG_CODES, CHECK_POINTS_SQL, ERR_THRESHOLD, _state: state };

@@ -1293,6 +1293,23 @@ function fakeLine() {
       ok(res.statusCode === 401 && sent.length === 0, 'รหัสผิด → ไม่รับ ไม่ตรวจ ไม่ส่ง');
       res = await runCron('ลับมาก', 'Bearer ลับมาก');
       ok(res.statusCode === 200 && res.body.ok && res.body.problems === 0 && !('rows' in res.body), 'รหัสถูก → ตรวจ (คำตอบมีแค่จำนวน ไม่มีข้อมูลร้าน)', res.body);
+      // คำตอบบอกสถานะการตั้งค่าแจ้งเตือน — ไม่มีรหัส OA หรือ LINE ID จริง
+      const al = res.body.alert || {};
+      const bodyText = JSON.stringify(res.body);
+      ok(al.token === true && al.recipients === 2 && al.ignored === 1 && al.summary === 'weekly' && al.error === null && /ไม่ใช่วันสรุป/.test(al.why || '') &&
+        !bodyText.includes('tok-test') && !TO.some((id) => bodyText.includes(id)), 'คำตอบบอก: มีรหัส OA / ผู้รับ 2 คน / ID ผิดรูปแบบ 1 / วันนี้เงียบเพราะไม่ใช่วันสรุป (ไม่มีรหัสหรือ LINE ID จริง)', res.body);
+      A.configure({ env: Object.assign({}, ENV, { ALERT_SUMMARY: 'daily' }), fetch: fakeFetch, now: () => clock });
+      failFetch = 400;
+      res = await runCron('ลับมาก', 'Bearer ลับมาก');
+      ok(res.body.ok && res.body.sent === false && /LINE OA ตอบ 400/.test(res.body.alert.error || ''), 'LINE ไม่ยอมส่ง → คำตอบบอกรหัสที่ LINE ตอบ (เช็กได้โดยไม่ต้องค้นหน้า Logs)', res.body.alert);
+      failFetch = null;
+      A.configure({ env: { ALERT_LINE_TO: TO[0], ALERT_SUMMARY: 'daily' }, fetch: fakeFetch, now: () => clock });
+      res = await runCron('ลับมาก', 'Bearer ลับมาก');
+      ok(res.body.sent === false && res.body.alert.token === false && /ALERT_LINE_TOKEN/.test(res.body.alert.error || ''), 'ยังไม่ตั้งรหัส OA → คำตอบบอกว่าขาดตัวไหน', res.body.alert);
+      A.configure({ env: { ALERT_LINE_TOKEN: 'tok-test', ALERT_LINE_TO: 'U' + 'a'.repeat(20), ALERT_SUMMARY: 'daily' }, fetch: fakeFetch, now: () => clock });
+      res = await runCron('ลับมาก', 'Bearer ลับมาก');
+      ok(res.body.sent === false && res.body.alert.recipients === 0 && res.body.alert.ignored === 1 && /33 ตัว/.test(res.body.alert.error || ''), 'LINE ID คัดลอกมาไม่ครบ → คำตอบบอกว่าไม่มี ID ที่ใช้ได้', res.body.alert);
+      A.configure({ env: ENV, fetch: fakeFetch, now: () => clock }); sent.length = 0;
       res = await runCron('ลับมาก', 'Bearer ลับมาก', { query: async () => { throw dbDown(); } });
       ok(res.statusCode === 500 && /งานตรวจประจำวันทำไม่สำเร็จ/.test(texts().pop() || '') && /ต่อฐานข้อมูลไม่ได้/.test(texts().pop() || ''), 'งานตรวจเองล้ม → แจ้ง "งานตรวจประจำวันทำไม่สำเร็จ" (ไม่เงียบ)');
       const vj = JSON.parse(fs.readFileSync(path.join(ROOT, 'vercel.json'), 'utf8'));
