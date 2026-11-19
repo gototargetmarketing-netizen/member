@@ -85,6 +85,20 @@ const cfgOf = (dir, id) => NS.loadModule(path.join(dir, 'shops', id, 'config.js'
   ok(pol.startsWith("ร้าน บ้านสวน 'คาเฟ่' \"เชียงใหม่\" (") && /ลบบัญชีสมาชิก/.test(pol) && /สิงคโปร์/.test(pol) && /รหัสที่แปลงจากบัญชี LINE/.test(pol) &&
     !/Go To Target|Supabase|Vercel|Google|ชีต|\{ชื่อร้าน\}/i.test(pol) && pol.length <= 3000,
     'นโยบายตั้งต้น: ใส่ชื่อร้าน + สิทธิ์ลบบัญชี + เก็บที่สิงคโปร์ + รหัสแปลง LINE / ไม่เอ่ยชื่อผู้ให้บริการ / ≤ 3,000 ตัว (เพดานหลังบ้าน)', pol.slice(0, 120));
+  // ฉบับภาษาอังกฤษ (สองภาษา รอบ 2): ชื่อร้านมีอักษรไทย → "This shop" / ไม่มีอักษรไทยเลย / ข้อเท่าฉบับไทย / ชื่อเมนูตรงกับคำแปลในหน้าลูกค้า
+  const polEn = (c.legal && c.legal.privacyTextEn) || '';
+  const enDict = (await import('file://' + path.join(ROOT, 'app', 'i18n-en.js'))).default;
+  const heads = (s) => s.split('\n').filter((x) => /^\d\) /.test(x)).map((x) => x.slice(0, 2));
+  ok(polEn.startsWith('This shop ("the Shop")') && !/[\u0E00-\u0E7F]/.test(polEn) && polEn.length <= 3000 &&
+    JSON.stringify(heads(polEn)) === JSON.stringify(heads(pol)) && heads(pol).length === 8 &&
+    polEn.includes('"' + enDict['แก้ไขข้อมูล'] + '"') && polEn.includes('"' + enDict['ลบบัญชีสมาชิก'] + '"') &&
+    !/Go To Target|Supabase|Vercel|Google|\{shop\}/i.test(polEn),
+  'นโยบายอังกฤษตั้งต้น: ชื่อร้านไทย → "This shop" / ไม่มีอักษรไทย / 8 ข้อเท่าฉบับไทย / ชื่อเมนูตรงกับหน้าลูกค้า / ไม่เอ่ยชื่อผู้ให้บริการ', polEn.slice(0, 120));
+  const ns = require(path.join(ROOT, 'tools', 'new-shop.js'));
+  ok(ns.privacyTemplateEn('Sky Bar').startsWith('Sky Bar ("the Shop")'), 'ชื่อร้านภาษาอังกฤษ → ใส่ชื่อร้านในฉบับอังกฤษ');
+  const demo = await cfgOf(ROOT, 'demo');
+  ok(demo.legal.privacyText === ns.privacyTemplate('Demo Café') && demo.legal.privacyTextEn === ns.privacyTemplateEn('Demo Café'),
+    'ร้าน demo ใช้นโยบายตั้งต้นทั้งสองภาษา ตรงกับสคริปต์ทุกตัวอักษร');
   const list = await shopsList(S);
   ok(list.length === 3 && list[2].id === 'baansuan' && list[2].domains[0] === 'member.baansuan.com', 'เพิ่มใน shops.js (โดเมนตัด https:// และ / ท้าย)', list);
   ok(/Endpoint URL = https:\/\/member\.baansuan\.com/.test(r.out) && /baansuan-owner\.sql/.test(r.out), 'บอกขั้นตอนต่อ (Endpoint ใช้โดเมนร้าน + ไฟล์อนุมัติเจ้าของ)');

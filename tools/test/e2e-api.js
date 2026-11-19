@@ -647,6 +647,76 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     await b.click('.modal [data-act=close]');
     await b.eval(`localStorage.removeItem('crm_lang')`);
 
+    console.log('\n[12] สองภาษา รอบ 2: เจ้าของร้านกรอกภาษาอังกฤษในหลังบ้าน → ลูกค้าเห็น');
+    await b.eval(asUser('U_DEMO_OWNER', 'เจ้าของร้าน'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo/admin#overview`);
+    await b.waitFor(`document.querySelector('.en-card')`, 10000, 'การ์ดภาษาอังกฤษในหน้าภาพรวม');
+    const enCount = async () => (await b.text('.en-card .en-count')).match(/กรอกแล้ว ([\d,]+) จาก ([\d,]+)/).slice(1).map(num);
+    const [done0, total0] = await enCount();
+    ok(total0 > 0 && done0 < total0, `การ์ด "ข้อความภาษาอังกฤษของร้าน": กรอกแล้ว ${done0} จาก ${total0}`);
+    await b.eval(`document.querySelector('.en-card details').open = true`);
+    ok(/ของรางวัล: เครื่องดื่ม 1 แก้ว/.test(await b.text('.en-card')) && /ยังไม่มี ชื่อ, รายละเอียด/.test(await b.text('.en-card')), 'รายการที่ยังขาดบอกชื่อรายการ + ช่องที่ยังไม่มี');
+    await b.shot(path.join(OUT, 'n25-english-card.png'));
+    await b.click('.en-card [data-act=en-go][data-kind=reward][data-id=R001]');
+    await b.waitFor(`document.querySelector('.modal form[data-form=reward][data-id=R001] [name=nameEn]')`, 10000, 'เปิดฟอร์มของรางวัล R001 ให้เอง');
+    ok(await b.eval(`location.hash === '#rewards'`), 'กดรายการที่ยังขาด → ไปหน้าของรางวัล + เปิดฟอร์มของรายการนั้นให้เลย');
+    ok(await b.eval(`(() => { const f = document.querySelector('.modal form[data-form=reward]'); const n = f.querySelector('[name=name]').closest('label'); return n.nextElementSibling === f.nameEn.closest('label') && /EN/.test(f.nameEn.closest('label').innerText); })()`),
+      'ช่องภาษาอังกฤษอยู่ใต้ช่องไทยของเรื่องเดียวกัน มีป้าย EN');
+    await b.eval(`(() => { const f = document.querySelector('.modal form[data-form=reward]'); f.nameEn.value = 'One free drink'; f.descriptionEn.value = 'Any drink on the menu'; return true; })()`);
+    await b.eval(`document.querySelector('.modal form[data-form=reward]').requestSubmit()`);
+    await b.waitFor(`!document.querySelector('.modal form[data-form=reward]') && document.querySelector('[data-act=reward-edit][data-id=R002]')`, 10000, 'บันทึกแล้ว');
+    const [r12] = await sql(`select name, name_en, description_en from rewards where shop_id='demo' and id='R001'`);
+    ok(r12.name === 'เครื่องดื่ม 1 แก้ว' && r12.name_en === 'One free drink' && r12.description_en === 'Any drink on the menu', 'ฐานข้อมูล: ชื่อไทยเหมือนเดิม + ภาษาอังกฤษใหม่', r12);
+    const chipOf = (id) => b.eval(`!!document.querySelector('[data-act=reward-edit][data-id=${id}]').closest('tr').querySelector('.chip-en')`);
+    ok(!(await chipOf('R001')) && (await chipOf('R002')), 'ตาราง: R001 ไม่มีป้าย "ยังไม่มี EN" แล้ว / R002 ยังมี');
+
+    await b.nav(`${WEB}/demo/admin#brand`);
+    await b.waitFor(`document.querySelector('[name=SHOP_NAME_EN]')`, 10000, 'ช่องภาษาอังกฤษในหน้าตาร้าน');
+    ok((await b.eval(`document.querySelectorAll('.brand-form .field-en').length`)) === 6, 'หน้าตาร้านมีช่องภาษาอังกฤษ 6 ช่อง (ชื่อร้าน ข้อความ 4 จุด นโยบาย)');
+    await b.eval(`(() => { const f = document.querySelector('form[data-form=brand]');
+      [['SHOP_NAME_EN', 'Go To Cafe'], ['TEXT_GREETING_EN', 'Hi there'], ['PRIVACY_TEXT_EN', 'English policy of Go To Cafe']].forEach(([k, v]) => {
+        f.elements[k].value = v; f.elements[k].dispatchEvent(new Event('input', { bubbles: true })); });
+      return true; })()`);
+    await b.click('.pv-lang [data-id=en]');
+    await b.waitFor(`/Hi there/.test(document.getElementById('brand-preview').innerText)`, 3000, 'ตัวอย่างภาษาอังกฤษ');
+    const pv12 = await b.text('#brand-preview');
+    ok(/Go To Cafe/.test(pv12) && /Redeem/.test(pv12) && /Membership card/.test(pv12), 'ตัวอย่างหน้าจอ: กด EN → เห็นข้อความที่พิมพ์ + ข้อความระบบภาษาอังกฤษ', pv12);
+    await b.shot(path.join(OUT, 'n26-brand-english.png'), { full: true });
+    await b.click('.pv-lang [data-id=th]');
+    ok(!/Hi there/.test(await b.text('#brand-preview')), 'กด TH → ตัวอย่างกลับเป็นภาษาไทย');
+    const [v12] = await sql(`select consent_version from shops where id='demo'`);
+    await b.eval(`document.querySelector('form[data-form=brand]').requestSubmit()`);
+    await b.waitFor(`/บันทึกแล้ว/.test((document.querySelector('.toast.show') || {}).innerText || '')`, 10000, 'บันทึกหน้าตาร้าน');
+    ok(!(await b.eval(`!!document.querySelector('.modal [data-act=brand-confirm]')`)), 'แก้แค่นโยบายฉบับอังกฤษ → ไม่ต้องยืนยันฉบับใหม่');
+    const [s12] = await sql(`select consent_version, brand->>'nameEn' as n, brand->'textsEn'->>'greeting' as g, brand->>'privacyTextEn' as p from shops where id='demo'`);
+    ok(s12.n === 'Go To Cafe' && s12.g === 'Hi there' && s12.p === 'English policy of Go To Cafe' && s12.consent_version === v12.consent_version,
+      'ฐานข้อมูล: บันทึกภาษาอังกฤษ + นโยบายยังเป็นฉบับเดิม (ลูกค้าไม่ต้องกดยอมรับใหม่)', s12);
+
+    await b.nav(`${WEB}/demo/admin#overview`);
+    await b.waitFor(`document.querySelector('.en-card')`, 10000, 'การ์ดภาษาอังกฤษ');
+    const [done1, total1] = await enCount();
+    ok(total1 === total0 && done1 >= done0 + 2, `ตัวนับขยับ: กรอกแล้ว ${done0} → ${done1} จาก ${total1}`);
+
+    // ลูกค้าภาษาอังกฤษเห็นสิ่งที่ร้านกรอก / ช่องที่ยังว่างเห็นภาษาไทย
+    await b.eval(asUser('U_E2E_EN', 'Tom'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo?lang=en#home`);
+    await b.waitFor(`document.querySelector('.member-card') && /Hi there/.test(document.getElementById('app').innerText)`, 10000, 'บัตรภาษาอังกฤษ');
+    ok(/Go To Cafe/.test(await b.text('.member-card')), 'บัตรสมาชิก: ชื่อร้านภาษาอังกฤษ + ข้อความทักทายที่ร้านตั้ง');
+    await b.nav(`${WEB}/demo#rewards`);
+    await b.waitFor(`document.querySelector('.reward-card, .reward')`, 10000, 'หน้าของรางวัล');
+    const rw12 = await b.text('#app');
+    ok(/One free drink/.test(rw12) && /Any drink on the menu/.test(rw12) && /ของหวาน 1 ที่/.test(rw12), 'ของรางวัล: ที่แปลแล้วเป็นภาษาอังกฤษ / ที่ยังไม่แปลเห็นภาษาไทยของร้าน');
+    await b.shot(path.join(OUT, 'n27-english-rewards.png'));
+    await b.nav(`${WEB}/demo#profile`);
+    await b.waitFor(`document.querySelector('[data-act=privacy]')`, 8000, 'ลิงก์นโยบาย');
+    await b.click('[data-act=privacy]');
+    await b.waitFor(`document.querySelector('.modal .prose')`, 5000, 'นโยบาย');
+    ok(/English policy of Go To Cafe/.test(await b.text('.modal')) && /Thai version applies/.test(await b.text('.modal')), 'นโยบาย: ฉบับอังกฤษของร้าน + บอกว่าฉบับไทยใช้บังคับ');
+    await b.click('.modal [data-act=close]');
+    await b.eval(`localStorage.removeItem('crm_lang')`);
+
     const errs = b.logs.filter((l) => /EXCEPTION|console\.error/.test(l));
     ok(errs.length === 0, 'ไม่มีข้อผิดพลาดในหน้าเว็บ', errs);
   } catch (e) {

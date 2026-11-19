@@ -19,9 +19,20 @@ const MEMBER_COLS = `id, line_user_id, name, first_name, last_name, phone,
 const memberNameSql = (a) => `case when ${a}.status = 'DELETED' then 'สมาชิกที่ลบแล้ว' else coalesce(${a}.name, '') end`;
 
 const REWARD_COLS = `id, name, description, type, points, image, valid_days, quota, issued, limit_per_member,
-  to_char(start_date, 'YYYY-MM-DD') as start_date, to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status, min_tier_id`;
+  to_char(start_date, 'YYYY-MM-DD') as start_date, to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status, min_tier_id,
+  name_en, description_en`;
 
 const COUPON_COLS = 'code, member_id, reward_id, name, points_used, issued_at, expires_at, used_at, used_by, used_branch, status, tx_id, birthday_year';
+// ชื่อคูปองภาษาอังกฤษ = ชื่ออังกฤษ "ปัจจุบัน" ของของรางวัล (คูปองจดชื่อไทยตอนแลกไว้ คูปองเก่าจึงไม่มีชื่ออังกฤษของตัวเอง)
+// ใช้ต่อท้าย COUPON_COLS ใน select ... from coupons (ไม่ตั้งชื่อย่อตาราง)
+const COUPON_NAME_EN = '(select r.name_en from rewards r where r.shop_id = coupons.shop_id and r.id = coupons.reward_id) as name_en';
+
+// สองภาษา รอบ 2: ข้อความภาษาอังกฤษของร้านส่งให้หน้าลูกค้าเฉพาะช่องที่ร้านกรอกไว้
+// (ว่าง = ไม่มีช่องนั้นเลย → หน้าเว็บแสดงภาษาไทย / ร้านที่ไม่ใช้ภาษาอังกฤษได้คำตอบเหมือนเดิมทุกตัวอักษร)
+function en(o, pairs) {
+  Object.keys(pairs).forEach((k) => { const v = String(pairs[k] == null ? '' : pairs[k]); if (v) o[k] = v; });
+  return o;
+}
 
 // tiers = ระดับของร้าน (ส่งมาเมื่อร้านเปิดใช้ระดับ) → ใส่ชื่อระดับในช่อง tier
 function publicMember(m, tiers) {
@@ -102,7 +113,7 @@ function couponState(cp, now) {
 }
 
 function publicCoupon(cp, now) {
-  return {
+  return en({
     code: String(cp.code || ''),
     rewardId: String(cp.reward_id || ''),
     name: String(cp.name || ''),
@@ -111,7 +122,7 @@ function publicCoupon(cp, now) {
     expiresAt: U.iso(cp.expires_at),
     usedAt: U.iso(cp.used_at),
     status: couponState(cp, now)
-  };
+  }, { nameEn: cp.name_en });
 }
 
 // ของรางวัลที่ลูกค้าแลกด้วยแต้มได้ตอนนี้ (ไม่รวมของขวัญวันเกิด)
@@ -121,7 +132,7 @@ function listRewards(rows, now, tc) {
       U.inWindow(r.start_date, r.end_date, now))
     .map((r) => {
       const quota = U.toInt(r.quota);
-      return tierLock({
+      return tierLock(en({
         id: String(r.id),
         name: String(r.name || ''),
         description: String(r.description || ''),
@@ -131,7 +142,7 @@ function listRewards(rows, now, tc) {
         limitPerMember: U.toInt(r.limit_per_member) || null,
         endDate: U.iso(r.end_date),
         sort: U.toInt(r.sort)
-      }, r, tc);
+      }, { nameEn: r.name_en, descriptionEn: r.description_en }), r, tc);
     })
     .sort((a, b) => (a.sort - b.sort) || (a.points - b.points));
 }
@@ -139,7 +150,7 @@ function listRewards(rows, now, tc) {
 function listPromos(rows, now, tc) {
   return (rows || [])
     .filter((r) => r.id && U.upper(r.status) === 'ACTIVE' && U.inWindow(r.start_date, r.end_date, now))
-    .map((r) => tierLock({
+    .map((r) => tierLock(en({
       id: String(r.id),
       title: String(r.title || ''),
       subtitle: String(r.subtitle || ''),
@@ -147,7 +158,7 @@ function listPromos(rows, now, tc) {
       image: U.safeUrl(U.driveImage(r.image)),
       link: U.safeUrl(r.link),
       sort: U.toInt(r.sort)
-    }, r, tc))
+    }, { titleEn: r.title_en, subtitleEn: r.subtitle_en, tagEn: r.tag_en }), r, tc))
     .sort((a, b) => a.sort - b.sort);
 }
 
@@ -166,7 +177,8 @@ function ruleFromRow(r) {
     minAmount: U.toNum(r.min_amount),
     showBadge: r.show_badge === true,
     status: U.upper(r.status) === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
-    minTierId: r.min_tier_id || ''
+    minTierId: r.min_tier_id || '',
+    nameEn: String(r.name_en || '')
   };
 }
 
@@ -184,9 +196,18 @@ function branchNames(branches) {
   return names;
 }
 
+// ชื่อสาขาภาษาอังกฤษที่ร้านกรอก (ลูกค้าเห็นในเงื่อนไขแต้มพิเศษ "เฉพาะสาขา…")
+function branchNamesEn(branches) {
+  const names = {};
+  (branches || []).forEach((b) => { if (b.name_en) names[U.upper(b.id)] = String(b.name_en); });
+  return names;
+}
+
 // tiers (เมื่อร้านเปิดใช้ระดับ) → บอกระดับขั้นต่ำของกติกาด้วย (หน้าพนักงานคิดตัวอย่างแต้มตามระดับลูกค้า)
-function publicRule(r, names, tiers) {
+// namesEn (หน้าลูกค้า) → ใส่ชื่อกติกา/ชื่อสาขาภาษาอังกฤษที่ร้านกรอกไว้
+function publicRule(r, names, tiers, namesEn) {
   const o = { id: r.id, name: r.name, multiplier: r.multiplier, branch: r.branch, branchName: r.branch ? names[r.branch] || '' : '', minAmount: r.minAmount };
+  if (namesEn) en(o, { nameEn: r.nameEn, branchNameEn: r.branch ? namesEn[r.branch] : '' });
   if (T.tiersOn(tiers)) {
     const t = T.tierById(tiers, r.minTierId);
     o.minTierId = t ? t.id : '';
@@ -195,7 +216,7 @@ function publicRule(r, names, tiers) {
   return o;
 }
 
-module.exports = { memberNameSql,
-  REWARD_BIRTHDAY, BIRTH_SELF_EDITS, RULE_MULTIPLIERS, BRANCH_ONLINE, BRANCH_ADMIN, MEMBER_COLS, REWARD_COLS, COUPON_COLS,
-  publicMember, staffMember, publicTx, couponState, publicCoupon, listRewards, listPromos, ruleFromRow, rulesOn, branchNames, publicRule, tierName
+module.exports = { memberNameSql, en,
+  REWARD_BIRTHDAY, BIRTH_SELF_EDITS, RULE_MULTIPLIERS, BRANCH_ONLINE, BRANCH_ADMIN, MEMBER_COLS, REWARD_COLS, COUPON_COLS, COUPON_NAME_EN,
+  publicMember, staffMember, publicTx, couponState, publicCoupon, listRewards, listPromos, ruleFromRow, rulesOn, branchNames, branchNamesEn, publicRule, tierName
 };

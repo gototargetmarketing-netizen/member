@@ -186,6 +186,25 @@ async function rejects(db, sql, params, msg) {
     values ('khamwan', 'TX-DELETE01', now(), $1, 'DELETE', 0, 0, 0, 'ลบบัญชีสมาชิก', 'ลูกค้า')`, [d1]);
   ok(true, 'รายการแต้มชนิดใหม่ DELETE (ลบบัญชี) บันทึกได้');
 
+  console.log('\n[13] ไฟล์ปรับตาราง 009 ข้อความภาษาอังกฤษของร้าน (สองภาษา รอบ 2) + รันซ้ำได้');
+  const m009 = fs.readFileSync(require('path').join(dir, '009_english.sql'), 'utf8');
+  const before9 = (await db.query(`select count(*)::int as n, string_agg(name, '|' order by id) as names from rewards`)).rows[0];
+  await db.exec(m009);
+  await db.exec(m009);
+  const after9 = (await db.query(`select count(*)::int as n, string_agg(name, '|' order by id) as names,
+      count(*) filter (where name_en = '' and description_en = '')::int as blank from rewards`)).rows[0];
+  ok(after9.n === before9.n && after9.names === before9.names && after9.blank === after9.n,
+    'วาง 009 (สองรอบ ไม่ error) → ของรางวัลเดิม ' + after9.n + ' รายการ ชื่อไทยเหมือนเดิม ช่องอังกฤษว่างทุกแถว');
+  const cols9 = (await db.query(`select count(*)::int as n from information_schema.columns where table_schema = 'public'
+      and column_name in ('name_en', 'description_en', 'title_en', 'subtitle_en', 'tag_en', 'benefits_en', 'tier_intro_en')`)).rows[0].n;
+  ok(cols9 === 10, 'ช่องภาษาอังกฤษครบ 10 ช่อง (ได้ ' + cols9 + ')');
+  const rid9 = (await db.query(`select id from rewards where shop_id = 'khamwan' order by id limit 1`)).rows[0].id;
+  await db.query(`update rewards set name_en = $2 where shop_id = 'khamwan' and id = $1`, [rid9, 'x'.repeat(80)]);
+  ok(true, 'ชื่ออังกฤษยาว 80 ตัว (เท่าชื่อไทย) บันทึกได้');
+  await rejects(db, `update rewards set name_en = '${'x'.repeat(81)}' where shop_id = 'khamwan' and id = '${rid9}'`, [], 'ชื่ออังกฤษยาวเกิน 80 → ปฏิเสธ');
+  await rejects(db, `update rewards set name_en = null where shop_id = 'khamwan' and id = '${rid9}'`, [], 'ช่องอังกฤษเป็น null ไม่ได้ (ว่าง = \'\')');
+  await rejects(db, `update shops set tier_intro_en = '${'x'.repeat(201)}' where id = 'khamwan'`, [], 'ข้อความหัวหน้าสิทธิ์ (อังกฤษ) เกิน 200 → ปฏิเสธ');
+
   console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error('ERROR', e); process.exit(1); });

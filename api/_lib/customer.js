@@ -22,20 +22,20 @@ select json_build_object(
       from transactions where shop_id = $1 and member_id = (select id from m)
       order by created_at desc limit $3) t), '[]'::json),
   'coupons', coalesce((select json_agg(c) from (
-      select ${V.COUPON_COLS} from coupons where shop_id = $1 and member_id = (select id from m)
+      select ${V.COUPON_COLS}, ${V.COUPON_NAME_EN} from coupons where shop_id = $1 and member_id = (select id from m)
       order by issued_at desc limit 200) c), '[]'::json),
   'rewards', coalesce((select json_agg(r) from (
       select ${V.REWARD_COLS} from rewards where shop_id = $1 and status = 'ACTIVE' and deleted_at is null order by sort, id) r), '[]'::json),
   'promos', coalesce((select json_agg(p) from (
       select id, title, subtitle, tag, image, link, to_char(start_date, 'YYYY-MM-DD') as start_date,
-             to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status, min_tier_id
+             to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status, min_tier_id, title_en, subtitle_en, tag_en
       from promotions where shop_id = $1 and status = 'ACTIVE' and deleted_at is null order by sort, id) p), '[]'::json),
   'rules', coalesce((select json_agg(x) from (
       select id, name, multiplier, days, to_char(start_date, 'YYYY-MM-DD') as start_date,
-             to_char(end_date, 'YYYY-MM-DD') as end_date, branch, min_amount, show_badge, status, min_tier_id
+             to_char(end_date, 'YYYY-MM-DD') as end_date, branch, min_amount, show_badge, status, min_tier_id, name_en
       from point_rules where shop_id = $1 and status = 'ACTIVE' and deleted_at is null) x), '[]'::json),
   'branches', coalesce((select json_agg(b) from (
-      select id, name, status, sort from branches where shop_id = $1 order by sort, id) b), '[]'::json),
+      select id, name, status, sort, name_en from branches where shop_id = $1 order by sort, id) b), '[]'::json),
   'birthLog', coalesce((select json_agg(l) from (
       select created_at, changed from profile_log where shop_id = $1 and member_id = (select id from m)
       order by created_at desc limit 20) l), '[]'::json),
@@ -107,10 +107,10 @@ function birthdayOffer(m, now, coupons, rewards, birthLog, tc) {
   if (got) return V.couponState(got, now) === 'ACTIVE' ? { claimed: true, coupon: V.publicCoupon(got, now) } : null;
   const r = birthdayReward(rewards, now, tc);
   if (!r) return null;
-  return {
+  return V.en({
     claimed: false, rewardId: String(r.id), name: String(r.name || ''), description: String(r.description || ''),
     image: U.safeUrl(U.driveImage(r.image)), points: U.toInt(r.points), until: U.iso(U.endOfMonth(now))
-  };
+  }, { nameEn: r.name_en, descriptionEn: r.description_en });
 }
 
 // ---------- คำสั่ง ----------
@@ -163,12 +163,13 @@ async function bootstrap(p, ctx) {
     promos: V.listPromos(d.promos, now, tc),
     // ป้าย "แต้ม x2 วันนี้" (เฉพาะกติกาที่เจ้าของร้านติ๊กให้แสดง)
     badges: V.rulesOn(d.rules.map(V.ruleFromRow), now).filter((x) => x.showBadge && (!on || T.meets(tiers, tc.tierId, x.minTierId)))
-      .map((x) => V.publicRule(x, names)),
+      .map((x) => V.publicRule(x, names, null, V.branchNamesEn(d.branches))),
     birthday: null
   };
   if (on) {
     out.tiers = T.publicTiers(tiers);
     out.tierIntro = String(ctx.shop.tier_intro || ''); // ข้อความหัวหน้าสิทธิ์สมาชิก (ว่าง = หน้าเว็บใช้ข้อความตั้งต้น)
+    if (ctx.shop.tier_intro_en) out.tierIntroEn = String(ctx.shop.tier_intro_en); // ภาษาอังกฤษ (ส่งเฉพาะเมื่อร้านกรอก)
   }
   const extra = d.extra || null;
   // ช่องยินยอมรับข่าวสาร: ติ๊กไว้ให้ไหม + แต้มที่จะได้ (ยังไม่เคยได้เท่านั้น)
@@ -192,7 +193,10 @@ async function bootstrap(p, ctx) {
   }
   out.member = V.publicMember(m, on ? tiers : null);
   if (on) out.member.tierInfo = T.tierInfo(tiers, m, d.points12m);
-  out.history = d.tx.map(V.publicTx);
+  // ประวัติการแลก: detail จดชื่อไทยไว้ ("แลก X") → บอกชื่ออังกฤษของของรางวัลจากคูปองของรายการนั้น (หน้าเว็บเขียน "Redeemed …")
+  const nameEnByTx = {};
+  d.coupons.forEach((cp) => { if (cp.tx_id && cp.name_en) nameEnByTx[cp.tx_id] = String(cp.name_en); });
+  out.history = d.tx.map((t) => V.en(V.publicTx(t), { rewardNameEn: t.type === 'REDEEM' ? nameEnByTx[t.id] : '' }));
   out.coupons = d.coupons.slice(0, 100).map((cp) => V.publicCoupon(cp, now));
   return out;
 }
@@ -326,7 +330,7 @@ async function redeem(p, ctx) {
 
     const days = U.toInt(reward.valid_days) > 0 ? U.toInt(reward.valid_days) : c.couponDays;
     const r = await issueCoupon(q, ctx, m, reward, cost, U.endOfDayAfter(now, days), reqId, null);
-    return { points: r.balance, coupon: V.publicCoupon(r.coupon, now) };
+    return { points: r.balance, coupon: V.publicCoupon(Object.assign({}, r.coupon, { name_en: reward.name_en }), now) };
   });
 }
 
@@ -346,7 +350,7 @@ async function claimBirthday(p, ctx) {
 
     // อ่านสดภายในรายการเสมอ (แถวสมาชิกจองไว้แล้ว → คำขออื่นของคนนี้รอ) กันรับซ้ำ / ฐานข้อมูลกันซ้ำอีกชั้นด้วย unique (ร้าน, สมาชิก, ปี)
     const year = thaiYear(now);
-    const got = (await q.query(`select ${V.COUPON_COLS} from coupons where shop_id = $1 and member_id = $2 and birthday_year = $3 and status <> 'CANCELLED'
+    const got = (await q.query(`select ${V.COUPON_COLS}, ${V.COUPON_NAME_EN} from coupons where shop_id = $1 and member_id = $2 and birthday_year = $3 and status <> 'CANCELLED'
                                 order by issued_at desc limit 1`, [shopId, m.id, year])).rows[0];
     if (got) return { already: true, coupon: V.publicCoupon(got, now) };
 
@@ -363,7 +367,7 @@ async function claimBirthday(p, ctx) {
     if (cost > points) throw notEnough(cost, points);
     const days = U.toInt(reward.valid_days);
     const r = await issueCoupon(q, ctx, m, reward, cost, days > 0 ? U.endOfDayAfter(now, days) : U.endOfMonth(now), reqId, year);
-    return { coupon: V.publicCoupon(r.coupon, now), points: r.balance };
+    return { coupon: V.publicCoupon(Object.assign({}, r.coupon, { name_en: reward.name_en }), now), points: r.balance };
   });
 }
 

@@ -7,6 +7,7 @@ import { initLine, IS_LOCAL } from './line.js';
 import { createApi, createRetryKeeper } from './api.js';
 import { applyDevParams, mountDevBar } from './devbar.js';
 import { tierBanner } from './tier.js';
+import EN_TEXT from './i18n-en.js';
 import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, setBusy, showLoading, hideLoading, creditHtml, bootHtml, qrSvg, loadScript } from './ui.js';
 
 const ROLE_LABEL = { OWNER: 'เจ้าของร้าน', ADMIN: 'ผู้จัดการ', CASHIER: 'แคชเชียร์' };
@@ -88,6 +89,47 @@ const exportFeature = () => !!(cfg().features && cfg().features.export === true)
 /* แพ็กเกจส่งข้อความตามกลุ่ม (12 พ.ย. 2569): config features.broadcast / เมนูนี้เจ้าของร้านเท่านั้น (ตัวกลางตรวจซ้ำ)
  * ส่งจริงต้องเชื่อม LINE OA ของร้านก่อน (รอบ 2) — ตอนนี้คัดกลุ่ม + ดูจำนวนคนได้ */
 const broadcastFeature = () => !!(cfg().features && cfg().features.broadcast === true);
+/* สองภาษา (features.english — สวิตช์อยู่ที่ผู้ดูแลระบบ ไม่คิดราคา): รอบ 2 = ช่องภาษาอังกฤษของเนื้อหาร้าน + ตัวนับที่ยังขาด
+ * ช่องภาษาอังกฤษอยู่ใต้ช่องไทยของเรื่องเดียวกัน (ผู้ใช้เลือกแบบ ก 19 พ.ย. 2569) / ร้านที่ไม่เปิด = ไม่มีช่อง → บันทึกแล้วไม่ส่ง = ไม่แก้คำแปลเดิม
+ * ตัวหน้าหลังบ้านเองยังเป็นภาษาไทย (รอบ 4) */
+const englishFeature = () => !!(cfg().features && cfg().features.english === true);
+const HAS_THAI = /[\u0E00-\u0E7F]/;
+// ช่องภาษาอังกฤษ: placeholder บอกว่าเว้นว่างแล้วลูกค้าเห็นอะไร
+function enField(label, name, value, max, opts = {}) {
+  if (!englishFeature()) return '';
+  const ph = opts.placeholder || 'ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นภาษาไทย';
+  const attrs = `name="${name}" maxlength="${max}" placeholder="${esc(ph)}" lang="en"${opts.disabled ? ' disabled' : ''}`;
+  return `<label class="field field-en"><span><b class="en-tag">EN</b> ${esc(label)}${opts.hint ? ` <small>${opts.hint}</small>` : ''}</span>
+    ${opts.rows ? `<textarea ${attrs} rows="${opts.rows}">${esc(value || '')}</textarea>` : `<input ${attrs} value="${esc(value || '')}">`}</label>`;
+}
+// ค่าช่องภาษาอังกฤษในฟอร์ม (เฉพาะช่องที่มีอยู่จริง)
+function enValues(form, names) {
+  const o = {};
+  names.forEach(n => { if (form.elements[n]) o[n] = form.elements[n].value.trim(); });
+  return o;
+}
+// ข้อความไทยนี้ยังไม่มีคำแปล (ข้อความที่ไม่มีอักษรไทย เช่น "Gold" ไม่ต้องแปล — ตรงกับ englishStatus ในตัวกลาง)
+const needsEn = (x, pairs) => pairs.some(([th, en]) => HAS_THAI.test(String(x[th] || '')) && !String(x[en] || '').trim());
+// ป้ายในตาราง: รายการที่ลูกค้าเห็น/กำลังจะเห็น แต่ยังไม่มีภาษาอังกฤษ
+const enChip = (x, pairs) => (englishFeature() && ['ACTIVE', 'SCHEDULED', 'SOLD_OUT'].includes(x.state) && needsEn(x, pairs)
+  ? ' <span class="chip chip-en">ยังไม่มี EN</span>' : '');
+const REWARD_EN = [['name', 'nameEn'], ['description', 'descriptionEn']];
+const PROMO_EN = [['title', 'titleEn'], ['subtitle', 'subtitleEn'], ['tag', 'tagEn']];
+// การ์ดในหน้าภาพรวม → กดรายการที่ยังขาด แล้วเปิดฟอร์มของรายการนั้นให้เลย (หน้าโหลดเสร็จแล้วค่อยเปิด — ดู openPending)
+const EN_PAGE = { reward: 'rewards', promo: 'promos', rule: 'rules', branch: 'branches', tier: 'tiers', tierIntro: 'tiers', shopName: 'brand', policy: 'brand' };
+const EN_KIND = { reward: 'ของรางวัล', promo: 'โปรโมชัน', rule: 'แต้มพิเศษ', branch: 'สาขา', tier: 'ระดับ', tierIntro: 'หน้าสิทธิ์สมาชิก', shopName: 'หน้าตาร้าน', policy: 'หน้าตาร้าน' };
+function openPending(kind, fn) {
+  const p = S.openAfter;
+  if (!p || (Array.isArray(kind) ? !kind.includes(p.kind) : p.kind !== kind)) return;
+  S.openAfter = null;
+  fn(p.id, p.kind);
+}
+function focusField(sel) {
+  const el = document.querySelector(sel);
+  if (!el) return;
+  el.scrollIntoView({ block: 'center' });
+  el.focus({ preventScroll: true });
+}
 const tierDot = c => (/^#[0-9A-Fa-f]{6}$/.test(c || '') ? `<i class="tier-dot" style="background:${c}"></i>` : '');
 const tierChip = (name, color) => (name ? `<span class="chip chip-tier">${tierDot(color)}${esc(name)}</span>` : '');
 const TIER_REASON = { START: 'เริ่มระดับ', UP: 'ขึ้นระดับ', DOWN: 'ลดระดับ (ครบ 12 เดือน ยอดไม่ถึง)', ADMIN: 'เปลี่ยนโดยร้าน' };
@@ -96,7 +138,7 @@ const tierDefaults = rate => [
   { name: 'Member', minPoints: 0, multiplier: 1, color: '#9CA3AF' },
   { name: 'Silver', minPoints: Math.round(5000 / rate), multiplier: 1.5, color: '#A8A9AD' },
   { name: 'Gold', minPoints: Math.round(20000 / rate), multiplier: 2, color: '#D4AF37' }
-].map(t => ({ ...t, id: '', image: '', benefits: '', members: 0 }));
+].map(t => ({ ...t, id: '', image: '', benefits: '', members: 0, nameEn: '', benefitsEn: '' }));
 // ส่งข้อความ: ยังไม่รู้ว่าใครเข้า (เปิดลิงก์ครั้งแรก) ให้ผ่านไปก่อน แล้ว loadBroadcast ถามสิทธิ์เอง
 const visiblePages = () => PAGES.filter(p => (p.id !== 'branches' || branchFeature()) && (p.id !== 'tiers' || tierFeature()) &&
   (p.id !== 'broadcast' || (broadcastFeature() && (!S.me || isOwner()))));
@@ -150,6 +192,8 @@ function onClick(e) {
     case 'export-confirm': doExport(id, el); break;
     case 'adjust-confirm': doAdjust(el); break;
     case 'reward-edit': openRewardEdit(id); break;
+    case 'en-go': S.openAfter = { kind: el.dataset.kind, id }; location.hash = '#' + (EN_PAGE[el.dataset.kind] || 'overview'); break;
+    case 'brand-lang': S.previewLang = id; updateBrandPreview(); break;
     case 'promo-edit': openPromoEdit(id); break;
     case 'rule-edit': openRuleEdit(id); break;
     case 'item-delete': confirmDelete(el.dataset.kind, id); break;
@@ -556,6 +600,37 @@ function delta(cur, prev) {
   return `<span class="kpi-delta">${pct > 0 ? '▲' : '▼'} ${fmtNum(Math.abs(pct))}% จากช่วงก่อนหน้า</span>`;
 }
 
+// การ์ด "ข้อความภาษาอังกฤษของร้าน" (สองภาษา รอบ 2) — ตัวกลางนับของรางวัล/โปรโมชัน/แต้มพิเศษ/สาขา/ระดับ (englishStatus)
+// หน้านี้นับชื่อร้าน + นโยบายเพิ่มจากค่าร้าน (นโยบายตั้งต้นอยู่ในไฟล์ร้าน ตัวกลางไม่เห็น) — กฎเดียวกับ mergeBrand ใน app/shop.js
+function englishCard(d) {
+  if (!englishFeature() || !d.english) return '';
+  const c = cfg();
+  const legal = c.legal || {};
+  const e = { total: d.english.total, done: d.english.done, missing: (d.english.missing || []).slice() };
+  const brand = [];
+  [['shopName', 'ชื่อร้าน', c.name, c.nameEn], ['policy', 'นโยบายความเป็นส่วนตัว', legal.privacyText, legal.privacyTextEn]].forEach(([kind, name, th, en]) => {
+    if (!HAS_THAI.test(String(th || ''))) return;
+    e.total += 1;
+    if (String(en || '').trim()) e.done += 1; else brand.push({ kind, id: '', name, fields: [] });
+  });
+  e.missing = brand.concat(e.missing);
+  const pct = e.total ? Math.round(e.done / e.total * 100) : 100;
+  const SHOW = 12;
+  return `
+    <section class="card adm-card en-card">
+      <div class="card-head"><h2><b class="en-tag">EN</b> ข้อความภาษาอังกฤษ</h2></div>
+      <p class="en-count">กรอกแล้ว <b>${fmtNum(e.done)}</b> จาก ${fmtNum(e.total)} รายการ</p>
+      <div class="tier-bar"><i style="width:${pct}%"></i></div>
+      ${e.missing.length ? `
+      <details class="en-missing"${e.missing.length <= 5 ? ' open' : ''}>
+        <summary>ดูที่ยังขาด (${fmtNum(e.missing.length)})</summary>
+        <ul>${e.missing.slice(0, SHOW).map(m => `<li><button type="button" class="link" data-act="en-go" data-kind="${esc(m.kind)}" data-id="${esc(m.id)}">${esc(EN_KIND[m.kind] || '')}: ${esc(m.name)}</button>${m.fields.length ? ` <span class="muted small">ยังไม่มี ${esc(m.fields.join(', '))}</span>` : ''}</li>`).join('')}
+          ${e.missing.length > SHOW ? `<li class="muted small">และอีก ${fmtNum(e.missing.length - SHOW)} รายการ</li>` : ''}</ul>
+      </details>` : `<p class="small">${icon('check', 14)} ${e.total ? 'ครบแล้ว ลูกค้าที่เลือกภาษาอังกฤษเห็นข้อความของร้านเป็นภาษาอังกฤษทั้งหมด' : 'ยังไม่มีข้อความภาษาไทยที่ต้องแปล'}</p>`}
+      <p class="muted small">นับเฉพาะรายการที่ลูกค้าเห็นอยู่ และข้อความที่มีภาษาไทย (ชื่อที่เป็นภาษาอังกฤษอยู่แล้วไม่ต้องแปล) · ช่องที่ยังว่าง ลูกค้าที่เลือกภาษาอังกฤษเห็นภาษาไทยแทน</p>
+    </section>`;
+}
+
 function renderOverview(d) {
   const c = d.current;
   const p = d.previous;
@@ -578,6 +653,7 @@ function renderOverview(d) {
     <div class="kpis">${tiles.map(t => `
       <div class="kpi"><div class="kpi-label">${esc(t.label)}</div><div class="kpi-value">${t.value}</div><div class="kpi-sub">${t.sub || ''}</div></div>`).join('')}
     </div>
+    ${englishCard(d)}
     ${tierFeature() && (d.tiers || []).length ? `
     <section class="card adm-card">
       <div class="card-head"><h2>สมาชิกแต่ละระดับ</h2><a class="link" href="#tiers">ตั้งค่าระดับ ${icon('right', 14)}</a></div>
@@ -1511,7 +1587,7 @@ function renderRewards(r) {
         <tbody>${r.items.length ? r.items.map(x => `
           <tr>
             <td class="thumb-cell">${thumb(x.imageUrl)}</td>
-            <td><b>${esc(x.name)}</b>${x.type === 'BIRTHDAY' ? ' <span class="chip chip-bday">🎂 ของขวัญวันเกิด</span>' : ''}${minTierChip(x)}${x.description ? `<div class="m-sub">${esc(x.description)}</div>` : ''}<div class="m-sub mono">${esc(x.id)}</div></td>
+            <td><b>${esc(x.name)}</b>${x.type === 'BIRTHDAY' ? ' <span class="chip chip-bday">🎂 ของขวัญวันเกิด</span>' : ''}${minTierChip(x)}${enChip(x, REWARD_EN)}${x.description ? `<div class="m-sub">${esc(x.description)}</div>` : ''}<div class="m-sub mono">${esc(x.id)}</div></td>
             <td class="num">${x.points ? fmtNum(x.points) : 'ฟรี'}</td>
             <td class="num">${fmtNum(x.issued)} / ${x.quota ? fmtNum(x.quota) : 'ไม่จำกัด'}</td>
             <td class="num">${x.limitPerMember ? fmtNum(x.limitPerMember) : '-'}</td>
@@ -1524,6 +1600,7 @@ function renderRewards(r) {
     <p class="muted small">${S.canDelete.reward
       ? 'ของรางวัลที่ไม่ใช้แล้ว กดแก้ไข → ลบ (คูปองที่ลูกค้าแลกไปแล้วยังใช้ที่ร้านได้ตามปกติ) · ถ้าแค่พักไว้ชั่วคราว เลือก "ปิด" แทน'
       : 'ของรางวัลที่ไม่ใช้แล้วให้กดแก้ไขแล้วเลือก "ปิด" (ไม่ลบ เพราะคูปองที่ลูกค้าแลกไปแล้วยังอ้างถึงอยู่)'}</p>`;
+  openPending('reward', openRewardEdit);
 }
 
 function openRewardEdit(id) {
@@ -1535,7 +1612,9 @@ function openRewardEdit(id) {
     <div class="modal-head"><h2>${x ? 'แก้ไขของรางวัล' : 'เพิ่มของรางวัล'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
     <form class="form" data-form="reward" data-id="${esc(x ? x.id : '')}" autocomplete="off">
       <label class="field"><span>ชื่อของรางวัล <em>*</em></span><input name="name" value="${esc(v.name)}" maxlength="80" placeholder="เช่น เครื่องดื่มฟรี 1 แก้ว"></label>
+      ${enField('ชื่อของรางวัล', 'nameEn', v.nameEn, 80)}
       <label class="field"><span>รายละเอียด <small>(ไม่บังคับ)</small></span><textarea name="description" maxlength="300" rows="2" placeholder="เช่น เลือกเครื่องดื่มเย็นที่ร่วมรายการ">${esc(v.description)}</textarea></label>
+      ${enField('รายละเอียด', 'descriptionEn', v.descriptionEn, 300, { rows: 2 })}
       <div class="field"><span>ประเภท</span>
         <div class="pick-row">
           <label class="pick"><input type="radio" name="type" value="" ${bday ? '' : 'checked'}><span>แลกด้วย${esc(unit())}</span></label>
@@ -1779,6 +1858,7 @@ async function saveReward(form) {
   const reward = formValues(form, ['name', 'description', 'points', 'image', 'validDays', 'quota', 'limitPerMember', 'startDate', 'endDate', 'sort', 'status']);
   reward.id = form.dataset.id;
   reward.type = form.elements.type.value;
+  Object.assign(reward, enValues(form, ['nameEn', 'descriptionEn']));
   if (form.elements.minTierId) reward.minTierId = form.elements.minTierId.value;
   if (reward.type === 'BIRTHDAY') reward.limitPerMember = ''; // ช่องถูกซ่อน ไม่ส่งค่าเก่าที่ค้างอยู่
   if (!reward.name) return toast('กรุณากรอกชื่อของรางวัล', 'err');
@@ -1813,7 +1893,7 @@ function renderPromos(r) {
         <tbody>${r.items.length ? r.items.map(x => `
           <tr>
             <td class="thumb-cell">${thumb(x.imageUrl, true)}</td>
-            <td><b>${esc(x.title)}</b>${minTierChip(x)}${x.subtitle ? `<div class="m-sub">${esc(x.subtitle)}</div>` : ''}</td>
+            <td><b>${esc(x.title)}</b>${minTierChip(x)}${enChip(x, PROMO_EN)}${x.subtitle ? `<div class="m-sub">${esc(x.subtitle)}</div>` : ''}</td>
             <td>${x.tag ? `<span class="chip">${esc(x.tag)}</span>` : '-'}</td>
             <td class="link-cell">${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.link.replace(/^https:\/\//, ''))}</a>` : '-'}</td>
             <td class="nowrap">${esc(periodText(x.startDate, x.endDate))}</td>
@@ -1822,6 +1902,7 @@ function renderPromos(r) {
           </tr>`).join('') : emptyRow(7, 'ยังไม่มีโปรโมชัน')}
         </tbody></table></div>
     </section>`;
+  openPending('promo', openPromoEdit);
 }
 
 function openPromoEdit(id) {
@@ -1832,9 +1913,12 @@ function openPromoEdit(id) {
     <div class="modal-head"><h2>${x ? 'แก้ไขโปรโมชัน' : 'เพิ่มโปรโมชัน'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
     <form class="form" data-form="promo" data-id="${esc(x ? x.id : '')}" autocomplete="off">
       <label class="field"><span>หัวข้อ <em>*</em></span><input name="title" value="${esc(v.title)}" maxlength="80" placeholder="เช่น แต้ม x2 ทุกวันพุธ"></label>
+      ${enField('หัวข้อ', 'titleEn', v.titleEn, 80)}
       <label class="field"><span>ข้อความรอง <small>(ไม่บังคับ)</small></span><input name="subtitle" value="${esc(v.subtitle)}" maxlength="150"></label>
+      ${enField('ข้อความรอง', 'subtitleEn', v.subtitleEn, 150)}
+      <label class="field"><span>ป้ายเล็ก <small>(ไม่บังคับ)</small></span><input name="tag" value="${esc(v.tag)}" maxlength="30" placeholder="เช่น โปรประจำเดือน"></label>
+      ${enField('ป้ายเล็ก', 'tagEn', v.tagEn, 30)}
       <div class="form-grid">
-        <label class="field"><span>ป้ายเล็ก <small>(ไม่บังคับ)</small></span><input name="tag" value="${esc(v.tag)}" maxlength="30" placeholder="เช่น โปรประจำเดือน"></label>
         <label class="field"><span>ลิงก์เมื่อกด <small>(ไม่บังคับ)</small></span><input name="link" value="${esc(v.link)}" placeholder="https://..."></label>
         <label class="field"><span>วันเริ่ม</span><input type="date" name="startDate" value="${esc(v.startDate)}"></label>
         <label class="field"><span>วันสิ้นสุด</span><input type="date" name="endDate" value="${esc(v.endDate)}"></label>
@@ -1856,6 +1940,7 @@ function openPromoEdit(id) {
 async function savePromo(form) {
   const promo = formValues(form, ['title', 'subtitle', 'tag', 'image', 'link', 'startDate', 'endDate', 'sort', 'status']);
   promo.id = form.dataset.id;
+  Object.assign(promo, enValues(form, ['titleEn', 'subtitleEn', 'tagEn']));
   if (form.elements.minTierId) promo.minTierId = form.elements.minTierId.value;
   if (!promo.title) return toast('กรุณากรอกหัวข้อ', 'err');
   const btn = form.querySelector('button[type="submit"]');
@@ -1907,6 +1992,7 @@ function renderRules(r) {
         </tr>`).join('') : emptyRow(8, owner ? 'ยังไม่มีกติกา กด "เพิ่มกติกา" เช่น แต้ม x2 ทุกวันพุธ' : 'ยังไม่มีกติกา')}
       </tbody></table></div></section>
     <p class="muted small">ตัวอย่าง: บิลที่ปกติได้ 20 ${esc(unit())} วันที่มีกติกา ×2 จะได้ 40 (คูณจาก${esc(unit())}ปกติแล้วปัดเศษลง) · กติกาที่ไม่ใช้แล้ว กดแก้ไข${S.canDelete.rule ? ' → ลบ (แต้มที่ลูกค้าได้ไปแล้วไม่เปลี่ยน)' : 'แล้วเลือก "ปิด"'}${owner ? '' : ' · เจ้าของร้านเป็นคนตั้งกติกา'}</p>`;
+  openPending('rule', openRuleEdit);
 }
 
 function openRuleEdit(id) {
@@ -1919,6 +2005,7 @@ function openRuleEdit(id) {
     <div class="modal-head"><h2>${x ? 'แก้ไขกติกาแต้มพิเศษ' : 'เพิ่มกติกาแต้มพิเศษ'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
     <form class="form" data-form="rule" data-id="${esc(x ? x.id : '')}" autocomplete="off">
       <label class="field"><span>ชื่อกติกา <em>*</em> <small>(ลูกค้าเห็นในประวัติ${esc(unit())})</small></span><input name="name" value="${esc(v.name)}" maxlength="60" placeholder="เช่น แต้ม x2 ทุกวันพุธ"></label>
+      ${enField('ชื่อกติกา', 'nameEn', v.nameEn, 60, { hint: '(ลูกค้าเห็นในป้ายแต้มพิเศษ)' })}
       <div class="field"><span>ได้${esc(unit())}กี่เท่า</span>
         <div class="pick-row">${MULTS.map(m => `<label class="pick"><input type="radio" name="multiplier" value="${m}" ${Number(v.multiplier) === m ? 'checked' : ''}><span>×${m}</span></label>`).join('')}</div></div>
       <div class="field"><span>วันที่มีผล</span>
@@ -1946,7 +2033,8 @@ async function saveRule(form) {
     id: form.dataset.id, name: f.name.value.trim(), multiplier: Number(f.multiplier.value),
     days: [...form.querySelectorAll('input[name="days"]:checked')].map(x => x.value),
     startDate: f.startDate.value, endDate: f.endDate.value, minAmount: f.minAmount.value.trim(),
-    branch: f.branch ? f.branch.value : '', showBadge: f.showBadge.checked, status: f.status.value
+    branch: f.branch ? f.branch.value : '', showBadge: f.showBadge.checked, status: f.status.value,
+    ...enValues(form, ['nameEn'])
   };
   if (f.minTierId) rule.minTierId = f.minTierId.value;
   if (!rule.name) return toast('กรุณากรอกชื่อกติกา', 'err');
@@ -2048,8 +2136,9 @@ const autoBanner = t => (t.image ? '' : `<small class="muted">ไม่ใส่
 
 function renderTierPage(r) {
   S.tierPage = r;
-  S.tierDraft = r.enabled ? r.items.map(t => ({ ...t, benefits: (t.benefits || []).join('\n') })) : null;
+  S.tierDraft = r.enabled ? r.items.map(t => ({ ...t, benefits: (t.benefits || []).join('\n'), benefitsEn: (t.benefitsEn || []).join('\n') })) : null;
   S.tierIntroDraft = r.intro || '';
+  S.tierIntroEnDraft = r.introEn || '';
   const owner = isOwner();
   const u = esc(unit());
   document.getElementById('view').innerHTML = `
@@ -2068,6 +2157,8 @@ function renderTierPage(r) {
         <li>เพิ่มเกณฑ์: สมาชิกเดิมไม่ลดทันที คงระดับจนครบกำหนด · ลดเกณฑ์: คนที่ถึงแล้วขึ้นทันที</li>
       </ul>
     </section>`;
+  // มาจากการ์ดภาษาอังกฤษในหน้าภาพรวม → ไปที่ช่องภาษาอังกฤษของระดับนั้น
+  openPending(['tier', 'tierIntro'], (id, kind) => focusField(kind === 'tierIntro' ? '[name="introEn"]' : `.tier-edit[data-tid="${id}"] [name="nameEn"]`));
 }
 
 // ส่วนตั้งระดับ: ยังไม่เปิดใช้ → ปุ่มเริ่ม / เจ้าของร้าน → ฟอร์มแก้ / ผู้จัดการ → ตาราง
@@ -2087,7 +2178,7 @@ function tierEditHtml() {
     return `<section class="card adm-card flush"><div class="tbl-wrap"><table class="tbl">
       <thead><tr><th>ระดับ</th><th class="num">${u}จากการซื้อ ${fmtNum(r.keepMonths)} เดือน ตั้งแต่</th><th>ได้${u}</th><th>สิทธิพิเศษเพิ่มเติม</th><th class="num">สมาชิก</th></tr></thead>
       <tbody>${d.map(t => `<tr>
-        <td><b>${tierDot(t.color)}${esc(t.name)}</b></td>
+        <td><b>${tierDot(t.color)}${esc(t.name)}</b>${englishFeature() && t.nameEn ? `<div class="m-sub">${esc(t.nameEn)}</div>` : ''}</td>
         <td class="num">${fmtNum(t.minPoints)} ${u}${t.minPoints ? `<div class="m-sub">${esc(bahtFor(t.minPoints))}</div>` : ''}</td>
         <td>${t.multiplier > 1 ? `<span class="mult">×${t.multiplier}</span>` : 'ปกติ'}</td>
         <td class="small">${t.benefits ? esc(t.benefits).replace(/\n/g, '<br>') : '-'}</td>
@@ -2099,6 +2190,7 @@ function tierEditHtml() {
     <form class="form" data-form="tiers" autocomplete="off">
       <label class="field"><span>ข้อความหัวหน้าสิทธิ์สมาชิก <small>(ใช้ทั้งร้าน · ว่าง = ใช้ข้อความตั้งต้น)</small></span>
         <textarea name="intro" rows="2" maxlength="200" placeholder="สมัครสมาชิกฟรี สะสม${u}ทุกบิล&#10;ยิ่งสะสมมาก ยิ่งได้สิทธิ์มาก">${esc(S.tierIntroDraft)}</textarea></label>
+      ${enField('ข้อความหัวหน้าสิทธิ์สมาชิก', 'introEn', S.tierIntroEnDraft, 200, { rows: 2, placeholder: 'ว่าง = ใช้ข้อความภาษาไทยของร้าน (ถ้าไม่ได้เขียน = ข้อความตั้งต้นภาษาอังกฤษ)' })}
       <div class="tier-edit-list">${d.map((t, i) => `
         <div class="tier-edit" data-row="${i}" data-tid="${esc(t.id || '')}">
           <div class="tier-edit-main">
@@ -2114,14 +2206,18 @@ function tierEditHtml() {
             </div>
           </div>
           <details class="tier-more" open>
-            <summary>รูปบัตร และสิทธิพิเศษ (หน้าสิทธิ์สมาชิกของลูกค้า)</summary>
+            <summary>รูปบัตร${englishFeature() ? ' สิทธิพิเศษ และภาษาอังกฤษ' : ' และสิทธิพิเศษ'} (หน้าสิทธิ์สมาชิกของลูกค้า)</summary>
             <div class="tier-more-grid">
               <div class="tier-card-col">
                 <div class="tier-auto">${autoBanner(t)}</div>
                 ${imageField(t.image || '', 'tier-img-' + i, 'image-' + i, 'รูปบัตร', false, 'tier')}
               </div>
+              <div class="tier-text-col">
+              ${enField('ชื่อระดับ', 'nameEn', t.nameEn, 30, { placeholder: 'ว่าง = ใช้ชื่อไทย (ชื่อที่เป็นภาษาอังกฤษอยู่แล้ว ไม่ต้องกรอก)' })}
               <label class="field"><span>สิทธิพิเศษเพิ่มเติม <small>(บรรทัดละ 1 ข้อ ไม่เกิน ${fmtNum(r.maxBenefits || 8)} ข้อ — ตัวคูณ${u} ของรางวัล และโปรโมชันเฉพาะระดับ ระบบใส่ให้เอง)</small></span>
                 <textarea name="benefits" rows="5" placeholder="เช่น คูปองส่วนลดวันเกิด 15%&#10;สิทธิ์ทดลองเมนูใหม่ก่อนใคร">${esc(t.benefits || '')}</textarea></label>
+              ${enField('สิทธิพิเศษเพิ่มเติม', 'benefitsEn', t.benefitsEn, 1000, { rows: 5, hint: '(บรรทัดละ 1 ข้อ)', placeholder: 'ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นสิทธิพิเศษภาษาไทย' })}
+              </div>
             </div>
           </details>
         </div>`).join('')}
@@ -2138,14 +2234,18 @@ function tierEditHtml() {
 // อ่านค่าที่พิมพ์ไว้ก่อนเพิ่ม/ลบแถว (ไม่งั้นที่พิมพ์ไว้หาย)
 function readTierRow(row) {
   const val = sel => { const el = row.querySelector(sel); return el ? el.value : ''; };
-  return { name: val('[name="name"]').trim(), minPoints: val('[name="minPoints"]').replace(/[,\s]/g, ''), multiplier: Number(val('[name="multiplier"]')),
+  const o = { name: val('[name="name"]').trim(), minPoints: val('[name="minPoints"]').replace(/[,\s]/g, ''), multiplier: Number(val('[name="multiplier"]')),
     color: val('[name="color"]').toUpperCase(), image: val('[name^="image-"]').trim(), benefits: val('[name="benefits"]') };
+  // ช่องภาษาอังกฤษมีเฉพาะร้านที่เปิดภาษาอังกฤษ (ไม่มีช่อง = ไม่แตะค่าเดิมใน draft)
+  if (row.querySelector('[name="nameEn"]')) Object.assign(o, { nameEn: val('[name="nameEn"]').trim(), benefitsEn: val('[name="benefitsEn"]') });
+  return o;
 }
 
 function readTierForm() {
   const form = document.querySelector('[data-form="tiers"]');
   if (!form || !S.tierDraft) return;
   S.tierIntroDraft = form.elements.intro ? form.elements.intro.value : S.tierIntroDraft;
+  if (form.elements.introEn) S.tierIntroEnDraft = form.elements.introEn.value;
   form.querySelectorAll('.tier-edit').forEach(row => {
     const t = S.tierDraft[Number(row.dataset.row)];
     if (t) Object.assign(t, readTierRow(row));
@@ -2158,7 +2258,7 @@ function onTierInput(el) {
   if (!row) return;
   const t = readTierRow(row);
   const auto = row.querySelector('.tier-auto');
-  if (auto && !el.matches('[name="benefits"]')) auto.innerHTML = autoBanner(t);
+  if (auto && !el.matches('[name="benefits"], [name="benefitsEn"], [name="nameEn"]')) auto.innerHTML = autoBanner(t);
   const baht = row.querySelector('.tier-baht');
   if (baht && el.matches('[name="minPoints"]')) baht.textContent = bahtFor(t.minPoints);
 }
@@ -2178,7 +2278,7 @@ function tierAdd() {
   readTierForm();
   if (S.tierDraft.length >= S.tierPage.maxTiers) return;
   const last = S.tierDraft[S.tierDraft.length - 1];
-  S.tierDraft.push({ id: '', name: '', minPoints: '', multiplier: Math.min(3, Number(last.multiplier) || 1), color: '#6B7280', image: '', benefits: '', members: 0 });
+  S.tierDraft.push({ id: '', name: '', minPoints: '', multiplier: Math.min(3, Number(last.multiplier) || 1), color: '#6B7280', image: '', benefits: '', members: 0, nameEn: '', benefitsEn: '' });
   redrawTierEdit();
 }
 
@@ -2199,9 +2299,11 @@ function confirmTiers(form) {
     if (!t.name) return toast('กรุณาใส่ชื่อทุกระดับ', 'err');
     if (!/^\d+$/.test(String(t.minPoints))) return toast(`ใส่${unit()}ของระดับ "${t.name}" เป็นจำนวนเต็ม`, 'err');
     if (String(t.benefits || '').split('\n').filter(x => x.trim()).length > (r.maxBenefits || 8)) return toast(`สิทธิพิเศษของระดับ "${t.name}" ใส่ได้ไม่เกิน ${r.maxBenefits || 8} ข้อ`, 'err');
+    if (String(t.benefitsEn || '').split('\n').filter(x => x.trim()).length > (r.maxBenefits || 8)) return toast(`สิทธิพิเศษภาษาอังกฤษของระดับ "${t.name}" ใส่ได้ไม่เกิน ${r.maxBenefits || 8} ข้อ`, 'err');
   }
+  const en = englishFeature();
   const rows = d.map(t => ({ id: t.id || '', name: t.name, minPoints: Number(t.minPoints), multiplier: Number(t.multiplier), color: t.color,
-    image: t.image || '', benefits: t.benefits || '' })).sort((a, b) => a.minPoints - b.minPoints);
+    image: t.image || '', benefits: t.benefits || '', ...(en ? { nameEn: t.nameEn || '', benefitsEn: t.benefitsEn || '' } : {}) })).sort((a, b) => a.minPoints - b.minPoints);
   if (rows[0].minPoints !== 0) return toast(`ระดับแรกต้องเริ่มที่ 0 ${unit()}`, 'err');
   for (let i = 1; i < rows.length; i++) {
     if (rows[i].minPoints === rows[i - 1].minPoints) return toast(`แต่ละระดับต้องใช้${unit()}ไม่ซ้ำกัน`, 'err');
@@ -2209,6 +2311,7 @@ function confirmTiers(form) {
   if (new Set(rows.map(t => t.name.toLowerCase())).size !== rows.length) return toast('ชื่อระดับซ้ำกัน', 'err');
   S.pendingTiers = rows;
   S.pendingIntro = S.tierIntroDraft;
+  S.pendingIntroEn = en ? S.tierIntroEnDraft : null;
   const removed = r.enabled ? r.items.filter(t => !rows.some(x => x.id === t.id)) : [];
   openModal(`
     <div class="modal-head"><h2>${r.enabled ? 'บันทึกระดับสมาชิก' : 'เปิดใช้ระดับสมาชิก'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
@@ -2244,7 +2347,9 @@ async function doSaveTiers(btn, off) {
   if (!tiers) return;
   setBusy(btn, true);
   try {
-    const r = await S.api.call('adminTiersSave', off ? { tiers } : { tiers, intro: S.pendingIntro || '' });
+    const body = { tiers, intro: S.pendingIntro || '' };
+    if (S.pendingIntroEn != null) body.introEn = S.pendingIntroEn; // ไม่ส่ง = ไม่แก้ (ร้านที่ไม่เปิดภาษาอังกฤษ)
+    const r = await S.api.call('adminTiersSave', off ? { tiers } : body);
     closeModal();
     S.pendingTiers = null;
     toast(off ? 'ปิดใช้ระดับสมาชิกแล้ว' : 'บันทึกระดับสมาชิกแล้ว', 'ok');
@@ -2330,6 +2435,9 @@ async function saveMemberTier(form) {
  * ===================================================== */
 const BRAND_KEYS = ['SHOP_NAME', 'LOGO_URL', 'THEME', 'COLOR_PRIMARY', 'COLOR_BUTTON', 'COLOR_ACCENT', 'COLOR_CARD',
   'TEXT_POINT_UNIT', 'TEXT_GREETING', 'TEXT_REGISTER_TITLE', 'TEXT_REGISTER_SUBTITLE', 'PRIVACY_TEXT'];
+// ภาษาอังกฤษ (ร้านที่เปิดภาษาอังกฤษเท่านั้น — ร้านอื่นไม่มีช่อง ไม่ส่ง = ไม่แก้)
+const BRAND_EN_KEYS = ['SHOP_NAME_EN', 'TEXT_POINT_UNIT_EN', 'TEXT_GREETING_EN', 'TEXT_REGISTER_TITLE_EN', 'TEXT_REGISTER_SUBTITLE_EN', 'PRIVACY_TEXT_EN'];
+const brandKeys = () => BRAND_KEYS.concat(englishFeature() ? BRAND_EN_KEYS : []);
 const BRAND_COLORS = [
   ['COLOR_PRIMARY', 'สีหลัก', 'แถบหัวหน้าเว็บ', 'primary'],
   ['COLOR_BUTTON', 'สีปุ่ม', 'ปุ่มกดต่างๆ', 'button'],
@@ -2362,12 +2470,19 @@ function renderBrand(r) {
   const next = (parseInt(r.consentVersion, 10) || 1) + 1;
   const text = (name, label, placeholder, max) => `
     <label class="field"><span>${esc(label)}</span><input name="${name}" value="${esc(v[name])}" maxlength="${max}" placeholder="${esc(placeholder)}" ${dis}></label>`;
+  // ข้อความหน้าจอ: ว่าง = ลูกค้าเห็นข้อความตั้งต้นภาษาอังกฤษของระบบ (ไม่ใช่ภาษาไทย) → placeholder บอกข้อความนั้น
+  const enName = (base.nameEn || (HAS_THAI.test(base.name || '') ? '' : base.name)) || 'ชื่อร้าน';
+  const textEn = (name, label, sysDefault, max) => enField(label, name, v[name], max, { placeholder: 'ว่าง = ' + sysDefault, disabled: !owner });
+  const policyEnHint = v.PRIVACY_TEXT && !v.PRIVACY_TEXT_EN
+    ? '<small class="warn-text">ร้านแก้ฉบับไทยเองแล้ว แต่ยังไม่มีฉบับภาษาอังกฤษ — ลูกค้าที่เลือกภาษาอังกฤษจะเห็นฉบับไทย</small>'
+    : '';
   document.getElementById('view').innerHTML = `
     ${pageHead('หน้าตาร้าน', owner ? 'แก้แล้วลูกค้าเห็นทันที · ช่องที่เว้นว่างใช้ค่าตั้งต้นของร้าน' : 'ผู้จัดการดูได้อย่างเดียว เจ้าของร้านเป็นคนแก้')}
     <div class="brand-layout">
       <form class="card adm-card form brand-form" data-form="brand" autocomplete="off">
         <h2 class="form-section">ชื่อและโลโก้</h2>
         ${text('SHOP_NAME', 'ชื่อร้าน', base.name || '', 60)}
+        ${enField('ชื่อร้าน', 'SHOP_NAME_EN', v.SHOP_NAME_EN, 60, { placeholder: base.nameEn || 'ว่าง = ใช้ชื่อร้านภาษาไทย (ชื่อที่เป็นภาษาอังกฤษอยู่แล้ว ไม่ต้องกรอก)', disabled: !owner })}
         ${imageField(v.LOGO_URL, 'logo-preview', 'LOGO_URL', 'โลโก้ (รูปสี่เหลี่ยมจัตุรัส)', !owner, 'logo')}
         <h2 class="form-section">สไตล์และสี</h2>
         <label class="field"><span>สไตล์</span>
@@ -2389,9 +2504,13 @@ function renderBrand(r) {
         <div class="form-grid">
           ${text('TEXT_POINT_UNIT', 'คำเรียกแต้ม', (base.texts && base.texts.pointUnit) || 'แต้ม', 20)}
           ${text('TEXT_GREETING', 'ข้อความทักทายหน้าแรก', (base.texts && base.texts.greeting) || 'สวัสดี', 60)}
+          ${textEn('TEXT_POINT_UNIT_EN', 'คำเรียกแต้ม', 'points (ใส่แบบพหูพจน์ เช่น stars)', 20)}
+          ${textEn('TEXT_GREETING_EN', 'ข้อความทักทายหน้าแรก', EN_TEXT['สวัสดี'], 60)}
         </div>
         ${text('TEXT_REGISTER_TITLE', 'หัวข้อหน้าสมัครสมาชิก', (base.texts && base.texts.registerTitle) || 'สมัครสมาชิก ' + (base.name || ''), 80)}
+        ${textEn('TEXT_REGISTER_TITLE_EN', 'หัวข้อหน้าสมัครสมาชิก', EN_TEXT['สมัครสมาชิก {shop}'].replace('{shop}', enName), 80)}
         ${text('TEXT_REGISTER_SUBTITLE', 'คำอธิบายหน้าสมัครสมาชิก', (base.texts && base.texts.registerSubtitle) || 'สะสมแต้มทุกครั้งที่ซื้อ แลกของรางวัลและสิทธิพิเศษ', 150)}
+        ${textEn('TEXT_REGISTER_SUBTITLE_EN', 'คำอธิบายหน้าสมัครสมาชิก', EN_TEXT['สะสม{u}ทุกครั้งที่ซื้อ แลกของรางวัลและสิทธิพิเศษ'].replace('{u}', 'points'), 150)}
         <h2 class="form-section">นโยบายความเป็นส่วนตัว</h2>
         <label class="field"><span>ข้อความที่ลูกค้าอ่านตอนสมัคร <small>ตอนนี้เป็นฉบับที่ ${esc(r.consentVersion)}</small></span>
           <textarea name="PRIVACY_TEXT" rows="9" maxlength="3000" placeholder="${esc((base.legal && base.legal.privacyText) || '')}" ${dis}>${esc(v.PRIVACY_TEXT)}</textarea>
@@ -2400,14 +2519,21 @@ function renderBrand(r) {
             ? `<small>แก้แล้วจะเป็นฉบับที่ ${next} อัตโนมัติ — ลูกค้าเดิมจะถูกขอให้กดยอมรับฉบับใหม่ตอนเปิดบัตรครั้งถัดไป (แลกของรางวัลไม่ได้จนกว่าจะยอมรับ / พนักงานยังบันทึกยอดให้ได้) · ว่าง = ใช้ข้อความตั้งต้นของร้าน</small>
                <small class="policy-count">ยอมรับฉบับที่ ${esc(r.consentVersion)} แล้ว <b>${fmtNum(r.policyAccepted.accepted)}</b> จาก ${fmtNum(r.policyAccepted.total)} คน</small>`
             : `<small>แก้แล้วจะเป็นฉบับที่ ${next} อัตโนมัติ — ลูกค้าที่สมัครหลังจากนี้ยอมรับฉบับใหม่ ส่วนลูกค้าเก่ายังบันทึกเป็นฉบับเดิม (ตามที่ PDPA ต้องการ) · ว่าง = ใช้ข้อความตั้งต้นของร้าน</small>`}</label>
+        ${enField('นโยบายความเป็นส่วนตัว (ฉบับแปล)', 'PRIVACY_TEXT_EN', v.PRIVACY_TEXT_EN, 3000, {
+          rows: 9, disabled: !owner,
+          placeholder: v.PRIVACY_TEXT ? 'ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นฉบับไทย' : ((base.legal && base.legal.privacyTextEn) || 'ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นฉบับไทย'),
+          hint: '— แก้ฉบับอังกฤษไม่ขึ้นฉบับใหม่ ลูกค้าไม่ต้องกดยอมรับใหม่ (ลูกค้าเห็นหมายเหตุว่าฉบับไทยใช้บังคับ)'
+        }).replace('</label>', policyEnHint + '</label>')}
         ${owner ? '<div class="form-actions"><button class="btn btn-primary" type="submit">บันทึกหน้าตาร้าน</button></div>' : ''}
       </form>
       <aside class="brand-side">
         <div class="muted small">ตัวอย่างหน้าจอลูกค้า (เปลี่ยนตามที่แก้ทันที)</div>
+        ${englishFeature() ? `<div class="lang-switch pv-lang" role="group" aria-label="ภาษาของตัวอย่าง">${['th', 'en'].map(l => `<button type="button" data-act="brand-lang" data-id="${l}" aria-pressed="${(S.previewLang || 'th') === l}">${l.toUpperCase()}</button>`).join('')}</div>` : ''}
         <div id="brand-preview"></div>
       </aside>
     </div>`;
   updateBrandPreview();
+  openPending(['shopName', 'policy'], (id, kind) => focusField(kind === 'policy' ? '[name="PRIVACY_TEXT_EN"]' : '[name="SHOP_NAME_EN"]'));
 }
 
 // ค่าที่กรอกในฟอร์ม → รูปแบบเดียวกับที่ Apps Script ส่งให้หน้าลูกค้า (ใช้วาดตัวอย่าง)
@@ -2421,7 +2547,13 @@ function formBrand(form) {
     theme: val('THEME'),
     colors: { primary: color('COLOR_PRIMARY'), button: color('COLOR_BUTTON'), accent: color('COLOR_ACCENT'), card: color('COLOR_CARD') },
     texts: { pointUnit: val('TEXT_POINT_UNIT'), greeting: val('TEXT_GREETING'), registerTitle: val('TEXT_REGISTER_TITLE'), registerSubtitle: val('TEXT_REGISTER_SUBTITLE') },
-    privacyText: val('PRIVACY_TEXT')
+    privacyText: val('PRIVACY_TEXT'),
+    // ภาษาอังกฤษ (มีช่องเฉพาะร้านที่เปิด) — ใช้วาดตัวอย่างแบบ EN
+    ...(f.SHOP_NAME_EN ? {
+      nameEn: val('SHOP_NAME_EN'),
+      textsEn: { pointUnit: val('TEXT_POINT_UNIT_EN'), greeting: val('TEXT_GREETING_EN'), registerTitle: val('TEXT_REGISTER_TITLE_EN'), registerSubtitle: val('TEXT_REGISTER_SUBTITLE_EN') },
+      privacyTextEn: val('PRIVACY_TEXT_EN')
+    } : {})
   };
 }
 
@@ -2469,22 +2601,28 @@ function updateBrandPreview() {
     '--pv-card': card, '--pv-card-to': k.cardTo || shade(card, -0.45), '--pv-on-card': textOn(card),
     '--pv-highlight': k.highlight || (contrast(accent, card) >= 3 ? accent : textOn(card))
   };
-  const unitText = (c.texts && c.texts.pointUnit) || 'แต้ม';
+  // ตัวอย่างแบบ EN: ใช้ข้อความภาษาอังกฤษของร้าน ไม่มี = ข้อความตั้งต้นของระบบ (เหมือนหน้าลูกค้าจริง — app/customer.js)
+  const en = englishFeature() && S.previewLang === 'en';
+  document.querySelectorAll('.pv-lang button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.id === (en ? 'en' : 'th'))));
+  const tx = k => (en ? c.textsEn && c.textsEn[k] : c.texts && c.texts[k]);
+  const L = (th, key) => (en ? EN_TEXT[key] || th : th);
+  const unitText = tx('pointUnit') || (en ? 'points' : 'แต้ม');
+  const name = (en && c.nameEn) || c.name || '';
   const logo = c.logo ? S.shop.asset(c.logo) : '';
   box.innerHTML = `
-    <div class="pv" style="${Object.entries(vars).map(([n, x]) => `${n}:${esc(x)}`).join(';')}">
+    <div class="pv" style="${Object.entries(vars).map(([n, x]) => `${n}:${esc(x)}`).join(';')}" lang="${en ? 'en' : 'th'}">
       <div class="pv-head">
         ${logo ? `<img class="pv-logo" src="${esc(logo)}" alt="" referrerpolicy="no-referrer">` : `<div class="pv-logo pv-logo-text">${esc(c.logoText || (c.name || '?').slice(0, 1))}</div>`}
-        <div><div class="pv-hello">${esc((c.texts && c.texts.greeting) || 'สวัสดี')}</div><div class="pv-name">ลูกค้าตัวอย่าง</div></div>
+        <div><div class="pv-hello">${esc(tx('greeting') || L('สวัสดี', 'สวัสดี'))}</div><div class="pv-name">${en ? 'Sample Customer' : 'ลูกค้าตัวอย่าง'}</div></div>
       </div>
       <div class="pv-card">
-        <div class="pv-card-top"><span>บัตรสมาชิก</span><b>${esc(c.name || '')}</b></div>
+        <div class="pv-card-top"><span>${esc(L('บัตรสมาชิก', 'บัตรสมาชิก'))}</span><b>${esc(name)}</b></div>
         <div class="pv-points">1,250 <small>${esc(unitText)}</small></div>
       </div>
       <div class="pv-body">
-        <span class="pv-chip">โปรใหม่</span>
-        <div class="pv-btn">แลกของรางวัล</div>
-        <div class="pv-reg"><b>${esc((c.texts && c.texts.registerTitle) || 'สมัครสมาชิก ' + (c.name || ''))}</b><span>${esc((c.texts && c.texts.registerSubtitle) || 'สะสม' + unitText + 'ทุกครั้งที่ซื้อ')}</span></div>
+        <span class="pv-chip">${en ? 'New' : 'โปรใหม่'}</span>
+        <div class="pv-btn">${esc(L('แลกของรางวัล', 'แลกของรางวัล@@ปุ่ม'))}</div>
+        <div class="pv-reg"><b>${esc(tx('registerTitle') || (en ? EN_TEXT['สมัครสมาชิก {shop}'].replace('{shop}', name) : 'สมัครสมาชิก ' + name))}</b><span>${esc(tx('registerSubtitle') || (en ? EN_TEXT['สะสม{u}ทุกครั้งที่ซื้อ แลกของรางวัลและสิทธิพิเศษ'].replace('{u}', unitText) : 'สะสม' + unitText + 'ทุกครั้งที่ซื้อ'))}</span></div>
       </div>
     </div>`;
 }
@@ -2492,10 +2630,10 @@ function updateBrandPreview() {
 function saveBrand(form) {
   if (!isOwner()) return;
   const values = {};
-  BRAND_KEYS.forEach(k => { values[k] = form.elements[k].value.trim(); });
+  brandKeys().forEach(k => { if (form.elements[k]) values[k] = form.elements[k].value.trim(); });
   const badColor = BRAND_COLORS.find(([k]) => values[k] && !HEX.test(values[k]));
   if (badColor) return toast(`${badColor[1]} ต้องเป็นรหัสสีแบบ #RRGGBB หรือเว้นว่าง`, 'err');
-  const changed = BRAND_KEYS.filter(k => values[k] !== String(S.brandValues[k] || '').trim());
+  const changed = Object.keys(values).filter(k => values[k] !== String(S.brandValues[k] || '').trim());
   if (!changed.length) return toast('ยังไม่ได้เปลี่ยนค่าใด', '');
   S.pendingBrand = values;
   if (!changed.includes('PRIVACY_TEXT')) return doSaveBrand(values, form.querySelector('button[type="submit"]'));
@@ -2503,6 +2641,9 @@ function saveBrand(form) {
   openModal(`
     <div class="modal-head"><h2>ยืนยันแก้นโยบายความเป็นส่วนตัว</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
     <p class="notice">${icon('shield', 18)}<span>นโยบายจะเปลี่ยนเป็น <b>ฉบับที่ ${next}</b> ลูกค้าที่สมัครหลังจากนี้ยอมรับฉบับใหม่ ส่วนลูกค้าเก่ายังบันทึกเป็นฉบับเดิม ถ้าเป็นการเปลี่ยนสาระสำคัญ ควรแจ้งลูกค้าเก่าด้วย</span></p>
+    ${englishFeature() && !changed.includes('PRIVACY_TEXT_EN') ? `<p class="notice notice-warn">${icon('alert', 18)}<span>${values.PRIVACY_TEXT_EN
+      ? 'ฉบับภาษาอังกฤษยังเป็นข้อความเดิม — แก้ให้ตรงกับฉบับไทยด้วย (ลูกค้าที่เลือกภาษาอังกฤษอ่านฉบับนี้)'
+      : 'ยังไม่มีฉบับภาษาอังกฤษที่ตรงกับฉบับไทยนี้ — ลูกค้าที่เลือกภาษาอังกฤษจะเห็นฉบับไทย'}</span></p>` : ''}
     <div class="modal-actions">
       <button class="btn" data-act="close">ยกเลิก</button>
       <button class="btn btn-primary" data-act="brand-confirm">บันทึก</button>
@@ -2893,6 +3034,7 @@ function renderBranches(r) {
         <dt>${esc(unit())}</dt><dd>ใช้ร่วมกันทุกสาขา สะสมที่สาขาหนึ่ง แลกที่อีกสาขาได้</dd>
       </dl>
     </section>`;
+  openPending('branch', openBranchEdit);
 }
 
 // เพดานตามแพ็กเกจนับเฉพาะสาขาที่เปิดอยู่ (ปิดสาขาเก่าแล้วเปิดสาขาใหม่แทนได้)
@@ -2916,6 +3058,7 @@ function openBranchEdit(id) {
     <div class="modal-head"><h2>${b ? 'แก้ไขสาขา' : 'เพิ่มสาขา'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
     <form class="form" data-form="branch" data-id="${esc(b ? b.id : '')}" autocomplete="off">
       <label class="field"><span>ชื่อสาขา <em>*</em></span><input name="name" value="${esc(b ? b.name : '')}" maxlength="40" placeholder="เช่น สาขาสยาม"></label>
+      ${enField('ชื่อสาขา', 'nameEn', b ? b.nameEn : '', 40, { hint: '(ลูกค้าเห็นในเงื่อนไขแต้มพิเศษ "เฉพาะสาขา…")' })}
       <div class="form-grid">
         <label class="field"><span>ลำดับที่แสดง</span><input name="sort" value="${esc(b ? b.sort : '')}" inputmode="numeric" placeholder="เลขน้อยขึ้นก่อน"></label>
         <label class="field"><span>สถานะ</span>
@@ -2935,6 +3078,7 @@ function openBranchEdit(id) {
 async function saveBranch(form) {
   const branch = formValues(form, ['name', 'sort', 'status']);
   branch.id = form.dataset.id;
+  Object.assign(branch, enValues(form, ['nameEn']));
   if (!branch.name) return toast('กรุณากรอกชื่อสาขา', 'err');
   // เปิดสาขาที่ปิดไปแล้วกลับมา ก็นับเป็นสาขาที่เปิดเพิ่ม
   const before = branch.id ? (S.branchItems || []).find(x => x.id === branch.id) : null;

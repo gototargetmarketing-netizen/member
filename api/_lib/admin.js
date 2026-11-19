@@ -185,7 +185,15 @@ const BRAND_SETTINGS = {
   TEXT_GREETING: { type: 'text', max: 60, label: 'ข้อความทักทาย', path: ['texts', 'greeting'] },
   TEXT_REGISTER_TITLE: { type: 'text', max: 80, label: 'หัวข้อหน้าสมัคร', path: ['texts', 'registerTitle'] },
   TEXT_REGISTER_SUBTITLE: { type: 'text', max: 150, label: 'คำอธิบายหน้าสมัคร', path: ['texts', 'registerSubtitle'] },
-  PRIVACY_TEXT: { type: 'longtext', max: 3000, label: 'นโยบายความเป็นส่วนตัว', path: ['privacyText'] }
+  PRIVACY_TEXT: { type: 'longtext', max: 3000, label: 'นโยบายความเป็นส่วนตัว', path: ['privacyText'] },
+  // สองภาษา รอบ 2: ภาษาอังกฤษของช่องข้างบน (ว่าง = ข้อความหน้าจอใช้ภาษาอังกฤษตั้งต้นของระบบ / ชื่อร้านและนโยบายใช้ภาษาไทย)
+  // แก้นโยบายฉบับอังกฤษไม่ขึ้นฉบับใหม่ (ผู้ใช้เลือก 19 พ.ย. 2569: เป็นคำแปล ฉบับไทยใช้บังคับ ลูกค้าไม่ต้องกดยอมรับใหม่)
+  SHOP_NAME_EN: { type: 'text', max: 60, label: 'ชื่อร้าน (อังกฤษ)', path: ['nameEn'] },
+  TEXT_POINT_UNIT_EN: { type: 'text', max: 20, label: 'คำเรียกแต้ม (อังกฤษ)', path: ['textsEn', 'pointUnit'] },
+  TEXT_GREETING_EN: { type: 'text', max: 60, label: 'ข้อความทักทาย (อังกฤษ)', path: ['textsEn', 'greeting'] },
+  TEXT_REGISTER_TITLE_EN: { type: 'text', max: 80, label: 'หัวข้อหน้าสมัคร (อังกฤษ)', path: ['textsEn', 'registerTitle'] },
+  TEXT_REGISTER_SUBTITLE_EN: { type: 'text', max: 150, label: 'คำอธิบายหน้าสมัคร (อังกฤษ)', path: ['textsEn', 'registerSubtitle'] },
+  PRIVACY_TEXT_EN: { type: 'longtext', max: 3000, label: 'นโยบายความเป็นส่วนตัว (อังกฤษ)', path: ['privacyTextEn'] }
 };
 
 const numStr = (v) => (v == null || v === '' ? '' : String(Number(v)));
@@ -352,7 +360,7 @@ async function adminDashboard(p, ctx) {
     if (!T.tiersOn(tiers)) return o;
     return tierCounts(db, shopId, tiers).then((tc) => Object.assign(o, { tiers: tc }));
   };
-  return withTiers({
+  const out = await withTiers({
     period: { from: p.from, to: p.to, days: per.days, bucket },
     totals: { members: totals.members, activeMembers: totals.active, pointsOutstanding: totals.outstanding, branchMembers: totals.branch_members },
     branch,
@@ -365,6 +373,52 @@ async function adminDashboard(p, ctx) {
     byStaff,
     topRewards
   });
+  // ร้านที่เปิดภาษาอังกฤษ: การ์ด "ภาษาอังกฤษ กรอกแล้ว X จาก Y" (ไม่ขึ้นกับช่วงวันที่/สาขาที่เลือก)
+  if (F.has(ctx, 'english')) out.english = await englishStatus(ctx, F.has(ctx, 'tiers') && T.tiersOn(tiers) ? tiers : null);
+  return out;
+}
+
+// ---------- ภาษาอังกฤษที่ยังขาด (สองภาษา รอบ 2 — ผู้ใช้ตกลง 19 พ.ย. 2569) ----------
+// นับเฉพาะสิ่งที่ลูกค้าเห็นอยู่หรือกำลังจะเห็น (เปิดใช้ ไม่ลบ ยังไม่หมดเขต) และเฉพาะข้อความที่มีอักษรไทย
+// (ชื่อที่เป็นภาษาอังกฤษอยู่แล้ว เช่น ระดับ "Gold" ไม่ต้องแปล) / รายการหนึ่งนับ 1 = ทุกช่องที่มีอักษรไทยต้องมีภาษาอังกฤษ
+// ชื่อร้าน + นโยบาย หน้าเว็บนับเพิ่มเอง (นโยบายตั้งต้นอยู่ในไฟล์ร้าน ตัวกลางไม่เห็น)
+const HAS_THAI = /[\u0E00-\u0E7F]/;
+const ENGLISH_SQL = `select json_build_object(
+  'rewards', coalesce((select json_agg(x order by x.sort, x.id) from (select id, name, description, name_en, description_en, sort from rewards
+      where shop_id = $1 and status = 'ACTIVE' and deleted_at is null and (end_date is null or end_date >= $2::date)) x), '[]'::json),
+  'promos', coalesce((select json_agg(x order by x.sort, x.id) from (select id, title, subtitle, tag, title_en, subtitle_en, tag_en, sort from promotions
+      where shop_id = $1 and status = 'ACTIVE' and deleted_at is null and (end_date is null or end_date >= $2::date)) x), '[]'::json),
+  'rules', coalesce((select json_agg(x order by x.id) from (select id, name, name_en, branch from point_rules
+      where shop_id = $1 and status = 'ACTIVE' and show_badge and deleted_at is null and (end_date is null or end_date >= $2::date)) x), '[]'::json),
+  'branches', coalesce((select json_agg(x) from (select id, name, name_en from branches where shop_id = $1 and status = 'ACTIVE') x), '[]'::json),
+  'shop', (select json_build_object('intro', tier_intro, 'introEn', tier_intro_en) from shops where id = $1)
+) as data`;
+
+async function englishStatus(ctx, tiers) {
+  let d = (await ctx.db.query(ENGLISH_SQL, [ctx.shop.id, U.thaiDay(ctx.now)])).rows[0].data;
+  if (typeof d === 'string') d = JSON.parse(d);
+  const out = { total: 0, done: 0, missing: [] };
+  // fields = [[ชื่อช่องที่บอกเจ้าของร้าน, ข้อความไทย, ข้อความอังกฤษ], ...]
+  const check = (kind, id, name, fields) => {
+    const need = fields.filter(([, th]) => HAS_THAI.test(String(th || '')));
+    if (!need.length) return;
+    out.total += 1;
+    const miss = need.filter(([, , en]) => !String(en || '').trim()).map(([label]) => label);
+    if (miss.length) out.missing.push({ kind, id: String(id || ''), name: String(name || ''), fields: miss });
+    else out.done += 1;
+  };
+  d.rewards.forEach((r) => check('reward', r.id, r.name, [['ชื่อ', r.name, r.name_en], ['รายละเอียด', r.description, r.description_en]]));
+  d.promos.forEach((r) => check('promo', r.id, r.title, [['หัวข้อ', r.title, r.title_en], ['ข้อความรอง', r.subtitle, r.subtitle_en], ['ป้าย', r.tag, r.tag_en]]));
+  // แต้มพิเศษ: ลูกค้าเห็นเฉพาะกติกาที่ติ๊กแสดงป้าย / ชื่อสาขาเห็นเฉพาะสาขาที่กติกาเหล่านั้นจำกัดไว้ ("เฉพาะสาขา…")
+  d.rules.forEach((r) => check('rule', r.id, r.name, [['ชื่อ', r.name, r.name_en]]));
+  const used = d.rules.map((r) => U.upper(r.branch)).filter(Boolean);
+  d.branches.filter((b) => used.indexOf(U.upper(b.id)) >= 0).forEach((b) => check('branch', U.upper(b.id), b.name, [['ชื่อ', b.name, b.name_en]]));
+  if (tiers) {
+    tiers.forEach((t) => check('tier', t.id, t.name, [['ชื่อ', t.name, t.nameEn], ['สิทธิพิเศษ', t.benefits.join('\n'), t.benefitsEn.join('\n')]]));
+    const s = d.shop || {};
+    check('tierIntro', '', 'ข้อความหัวหน้า', [['ข้อความ', s.intro, s.introEn]]);
+  }
+  return out;
 }
 
 // ตารางเทียบสาขา (ตอนดูทุกสาขา) — รายการที่ไม่มีสาขา/สาขาไม่รู้จัก รวมเป็นแถว OTHER / ร้านไม่มีสาขา = []
@@ -680,6 +734,17 @@ function minTierField(r, tiers, f) {
   f.min_tier_id = id;
 }
 
+// สองภาษา รอบ 2: ช่องภาษาอังกฤษ — ส่งมา = ตั้ง ('' = ลบคำแปล) / ไม่ส่ง = ไม่แก้
+// (หน้าเว็บของร้านที่ไม่เปิดภาษาอังกฤษไม่มีช่องเหล่านี้ บันทึกแล้วต้องไม่ลบคำแปลเดิมทิ้ง — แบบเดียวกับ minTierId)
+// spec = { ชื่อช่องที่หน้าเว็บส่ง: [คอลัมน์, ความยาวสูงสุด, ชื่อช่องในข้อความเตือน] }
+function enFields(r, f, spec) {
+  Object.keys(spec).forEach((k) => {
+    if (!Object.prototype.hasOwnProperty.call(r, k)) return;
+    const [col, max, label] = spec[k];
+    f[col] = U.cleanText(r[k], max, label);
+  });
+}
+
 // ร้านเปิดใช้ระดับ → บอกระดับขั้นต่ำของรายการ (ไว้แสดงในตาราง/ฟอร์ม)
 function withMinTier(o, row, tiers) {
   if (!T.tiersOn(tiers)) return o;
@@ -696,6 +761,7 @@ function adminReward(r, now) {
   const birthday = U.upper(r.type) === V.REWARD_BIRTHDAY;
   return {
     id: String(r.id), name: String(r.name || ''), description: String(r.description || ''), points: U.toInt(r.points),
+    nameEn: String(r.name_en || ''), descriptionEn: String(r.description_en || ''),
     image: String(r.image || ''), imageUrl: U.safeUrl(U.driveImage(r.image)),
     validDays: U.toInt(r.valid_days) || '', quota: quota || '', issued, limitPerMember: U.toInt(r.limit_per_member) || '',
     startDate: r.start_date || '', endDate: r.end_date || '', sort: U.toInt(r.sort), status,
@@ -708,12 +774,13 @@ function adminReward(r, now) {
 }
 
 const PROMO_COLS = `id, title, subtitle, tag, image, link, to_char(start_date, 'YYYY-MM-DD') as start_date,
-  to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status, min_tier_id`;
+  to_char(end_date, 'YYYY-MM-DD') as end_date, sort, status, min_tier_id, title_en, subtitle_en, tag_en`;
 
 function adminPromo(r, now) {
   const status = U.upper(r.status) === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE';
   return {
     id: String(r.id), title: String(r.title || ''), subtitle: String(r.subtitle || ''), tag: String(r.tag || ''),
+    titleEn: String(r.title_en || ''), subtitleEn: String(r.subtitle_en || ''), tagEn: String(r.tag_en || ''),
     image: String(r.image || ''), imageUrl: U.safeUrl(U.driveImage(r.image)), link: String(r.link || ''),
     startDate: r.start_date || '', endDate: r.end_date || '', sort: U.toInt(r.sort), status,
     state: status !== 'ACTIVE' ? 'INACTIVE' : (windowState(r.start_date, r.end_date, now) || 'ACTIVE')
@@ -750,6 +817,7 @@ async function adminRewardSave(p, ctx) {
   };
   Object.assign(f, cleanWindow(r.startDate, r.endDate));
   if (f.sort == null) f.sort = 0;
+  enFields(r, f, { nameEn: ['name_en', 80, 'ชื่อของรางวัล (อังกฤษ)'], descriptionEn: ['description_en', 300, 'รายละเอียด (อังกฤษ)'] });
   const shopId = ctx.shop.id;
   const tiers = await T.loadTiers(ctx.db, shopId);
   minTierField(r, tiers, f);
@@ -796,6 +864,7 @@ async function adminPromoSave(p, ctx) {
   };
   Object.assign(f, cleanWindow(r.startDate, r.endDate));
   if (f.sort == null) f.sort = 0;
+  enFields(r, f, { titleEn: ['title_en', 80, 'หัวข้อ (อังกฤษ)'], subtitleEn: ['subtitle_en', 150, 'ข้อความรอง (อังกฤษ)'], tagEn: ['tag_en', 30, 'ป้าย (อังกฤษ)'] });
   const shopId = ctx.shop.id;
   const tiers = await T.loadTiers(ctx.db, shopId);
   minTierField(r, tiers, f);
@@ -996,6 +1065,8 @@ async function adminBranchSave(p, ctx) {
   const b = p.branch || {};
   const id = b.id ? branchFilter(b.id) : '';
   const name = U.cleanText(b.name, 40, 'ชื่อสาขา', true);
+  // ชื่อสาขาภาษาอังกฤษ: ไม่ส่ง = ไม่แก้ (null) / '' = ลบคำแปล
+  const nameEn = Object.prototype.hasOwnProperty.call(b, 'nameEn') ? U.cleanText(b.nameEn, 40, 'ชื่อสาขา (อังกฤษ)') : null;
   const sort = optInt(b.sort, 0, 9999, 'ลำดับ');
   const status = cleanStatus(b.status || 'ACTIVE');
   const shopId = ctx.shop.id;
@@ -1016,12 +1087,13 @@ async function adminBranchSave(p, ctx) {
         throw userError('แพ็กเกจของร้านเปิดได้ ' + limit + ' สาขา ปิดสาขาอื่นก่อน หรือติดต่อผู้ดูแลระบบเพื่ออัปเกรด', 'TOO_MANY');
       }
       if (id) {
-        await q.query('update branches set name = $3, sort = $4, status = $5 where shop_id = $1 and id = $2', [shopId, id, name, sort == null ? 0 : sort, status]);
+        await q.query('update branches set name = $3, sort = $4, status = $5, name_en = coalesce($6, name_en) where shop_id = $1 and id = $2',
+          [shopId, id, name, sort == null ? 0 : sort, status, nameEn]);
       } else {
         if (rows.length >= MAX_BRANCHES) throw userError('เพิ่มสาขาได้ไม่เกิน ' + MAX_BRANCHES + ' สาขา', 'TOO_MANY');
         savedId = await nextId(q, 'branches', shopId, 'B');
-        await q.query('insert into branches (shop_id, id, name, status, sort, created_at) values ($1, $2, $3, $4, $5, $6)',
-          [shopId, savedId, name, status, sort == null ? rows.length + 1 : sort, ctx.now]);
+        await q.query('insert into branches (shop_id, id, name, status, sort, created_at, name_en) values ($1, $2, $3, $4, $5, $6, $7)',
+          [shopId, savedId, name, status, sort == null ? rows.length + 1 : sort, ctx.now, nameEn || '']);
       }
       console.log((id ? 'แก้สาขา ' : 'เพิ่มสาขา ') + savedId + ' ' + name + ' (' + status + ') ร้าน ' + shopId + ' โดย ' + ctx.staff.name);
       return { branch: { id: savedId, name, status }, created: !id, items: await S.branchList(q, shopId) };
@@ -1035,7 +1107,7 @@ async function adminBranchSave(p, ctx) {
 // ---------- แต้มพิเศษ ----------
 function adminRule(r, now, names, tiers) {
   const o = V.publicRule(r, names, T.tiersOn(tiers) ? tiers : null);
-  Object.assign(o, { days: r.days, startDate: r.startDate, endDate: r.endDate, showBadge: r.showBadge, status: r.status });
+  Object.assign(o, { days: r.days, startDate: r.startDate, endDate: r.endDate, showBadge: r.showBadge, status: r.status, nameEn: r.nameEn });
   const win = windowState(r.startDate, r.endDate, now);
   o.state = r.status !== 'ACTIVE' ? 'INACTIVE' : win || (r.days.indexOf(U.dayCode(now)) >= 0 ? 'TODAY' : 'ACTIVE');
   return o;
@@ -1073,6 +1145,7 @@ async function adminRuleSave(p, ctx) {
     status: cleanStatus(r.status || 'ACTIVE')
   };
   Object.assign(f, cleanWindow(r.startDate, r.endDate));
+  enFields(r, f, { nameEn: ['name_en', 60, 'ชื่อกติกา (อังกฤษ)'] });
   const tiers = await T.loadTiers(ctx.db, shopId);
   minTierField(r, tiers, f);
   const cols = Object.keys(f);
@@ -1111,12 +1184,14 @@ async function adminTiers(p, ctx) {
   if (on) await T.syncDue(ctx.db, ctx.shop.id, tiers, ctx.now);
   const counts = on ? await tierCounts(ctx.db, ctx.shop.id, tiers) : [];
   // อ่านข้อความหัวหน้าสิทธิ์ใหม่ (หลังบันทึก ค่าร้านที่โหลดไว้ตอนเริ่มคำขอยังเป็นค่าเก่า)
-  const intro = (await ctx.db.query('select tier_intro from shops where id = $1', [ctx.shop.id])).rows[0];
+  const intro = (await ctx.db.query('select tier_intro, tier_intro_en from shops where id = $1', [ctx.shop.id])).rows[0];
   return {
     enabled: on,
     items: tiers.map((t) => ({ id: t.id, name: t.name, minPoints: t.minPoints, multiplier: t.multiplier, color: t.color,
-      image: t.image, benefits: t.benefits, members: ((counts.find((c) => c.id === t.id) || {}).count) || 0 })),
+      image: t.image, benefits: t.benefits, members: ((counts.find((c) => c.id === t.id) || {}).count) || 0,
+      nameEn: t.nameEn, benefitsEn: t.benefitsEn })),
     intro: String((intro && intro.tier_intro) || ''),
+    introEn: String((intro && intro.tier_intro_en) || ''),
     pointRate: cfg(ctx.shop).pointRate, // ไว้บอกเจ้าของร้านว่าเกณฑ์แต้มเท่ากับยอดซื้อประมาณเท่าไร
     minTiers: T.MIN_TIERS, maxTiers: T.MAX_TIERS, multipliers: T.TIER_MULTS, keepMonths: T.KEEP_MONTHS,
     maxBenefits: MAX_BENEFITS
@@ -1125,10 +1200,11 @@ async function adminTiers(p, ctx) {
 
 // สิทธิพิเศษที่ร้านเขียนเอง: รับเป็นรายการหรือข้อความหลายบรรทัด → เก็บบรรทัดละข้อ
 const MAX_BENEFITS = 8;
-function cleanBenefits(v, tierName) {
+function cleanBenefits(v, tierName, en) {
+  const label = 'สิทธิพิเศษ' + (en ? 'ภาษาอังกฤษ' : '') + 'ของระดับ "' + tierName + '"';
   const lines = (Array.isArray(v) ? v : String(v == null ? '' : v).split(/\r?\n/))
-    .map((x) => U.cleanText(x, 80, 'สิทธิพิเศษของระดับ "' + tierName + '" แต่ละข้อ')).filter(Boolean);
-  if (lines.length > MAX_BENEFITS) throw userError('สิทธิพิเศษของระดับ "' + tierName + '" ใส่ได้ไม่เกิน ' + MAX_BENEFITS + ' ข้อ', 'BAD_INPUT');
+    .map((x) => U.cleanText(x, 80, label + ' แต่ละข้อ')).filter(Boolean);
+  if (lines.length > MAX_BENEFITS) throw userError(label + ' ใส่ได้ไม่เกิน ' + MAX_BENEFITS + ' ข้อ', 'BAD_INPUT');
   return lines.join('\n');
 }
 
@@ -1154,10 +1230,16 @@ async function adminTiersSave(p, ctx) {
     if (color && !/^#[0-9A-Fa-f]{6}$/.test(color)) throw userError('สีของระดับ "' + name + '" ต้องเป็นรหัสสีแบบ #RRGGBB', 'BAD_INPUT');
     const id = String(t.id || '').trim();
     if (id && !/^T\d{1,3}$/.test(id)) throw userError('รหัสระดับไม่ถูกต้อง', 'BAD_INPUT');
-    return { id, name, minPoints: min, multiplier: mult, color: color.toUpperCase(), image: cleanImage(t.image), benefits: cleanBenefits(t.benefits, name) };
+    const has = (k) => Object.prototype.hasOwnProperty.call(t, k);
+    return { id, name, minPoints: min, multiplier: mult, color: color.toUpperCase(), image: cleanImage(t.image), benefits: cleanBenefits(t.benefits, name),
+      // ภาษาอังกฤษ: ไม่ส่ง = ไม่แก้ (undefined) — แบบเดียวกับ intro
+      nameEn: has('nameEn') ? U.cleanText(t.nameEn, 30, 'ชื่อระดับ (อังกฤษ)') : undefined,
+      benefitsEn: has('benefitsEn') ? cleanBenefits(t.benefitsEn, name, true) : undefined };
   }).sort((a, b) => a.minPoints - b.minPoints);
   const hasIntro = Object.prototype.hasOwnProperty.call(p, 'intro');
   const intro = hasIntro ? U.cleanLongText(p.intro, 200) : '';
+  const hasIntroEn = Object.prototype.hasOwnProperty.call(p, 'introEn');
+  const introEn = hasIntroEn ? U.cleanLongText(p.introEn, 200) : '';
   if (rows.length) {
     if (rows[0].minPoints !== 0) throw userError('ระดับแรกต้องเริ่มที่ 0 แต้ม (สมาชิกทุกคนอย่างน้อยอยู่ระดับแรก)', 'BAD_INPUT');
     rows.forEach((r, i) => {
@@ -1173,6 +1255,7 @@ async function adminTiersSave(p, ctx) {
   await ctx.db.tx(async (q) => {
     await q.query('select id from shops where id = $1 for update', [shopId]); // แก้ระดับทีละคน
     if (hasIntro) await q.query('update shops set tier_intro = $2 where id = $1', [shopId, intro]);
+    if (hasIntroEn) await q.query('update shops set tier_intro_en = $2 where id = $1', [shopId, introEn]);
     const cur = await T.loadTiers(q, shopId);
     rows.forEach((r) => { if (r.id && !T.tierById(cur, r.id)) throw userError('ไม่พบระดับนี้ (อาจถูกแก้จากอีกเครื่อง) กรุณาเปิดหน้าใหม่', 'NOT_FOUND'); });
     const keep = rows.filter((r) => r.id).map((r) => r.id);
@@ -1214,12 +1297,14 @@ async function adminTiersSave(p, ctx) {
     for (const r of rows) {
       if (r.id) {
         // min_spend = เกณฑ์ยอดเงินเดิม (ก่อน 7 พ.ย. 2569) ไม่ใช้แล้ว ล้างทิ้ง
+        // ช่องภาษาอังกฤษที่ไม่ได้ส่งมา (undefined) → coalesce คงค่าเดิม
         await q.query(`update tiers set name = $3, min_points = $4, point_multiplier = $5, color = $6, image = $7, benefits = $8, min_spend = null,
-          status = 'ACTIVE' where shop_id = $1 and id = $2`, [shopId, r.id, r.name, r.minPoints, r.multiplier, r.color, r.image, r.benefits]);
+          status = 'ACTIVE', name_en = coalesce($9, name_en), benefits_en = coalesce($10, benefits_en) where shop_id = $1 and id = $2`,
+        [shopId, r.id, r.name, r.minPoints, r.multiplier, r.color, r.image, r.benefits, r.nameEn == null ? null : r.nameEn, r.benefitsEn == null ? null : r.benefitsEn]);
       } else {
         r.id = 'T' + (++maxNo);
-        await q.query(`insert into tiers (shop_id, id, name, min_points, min_spend, point_multiplier, color, image, benefits)
-          values ($1, $2, $3, $4, null, $5, $6, $7, $8)`, [shopId, r.id, r.name, r.minPoints, r.multiplier, r.color, r.image, r.benefits]);
+        await q.query(`insert into tiers (shop_id, id, name, min_points, min_spend, point_multiplier, color, image, benefits, name_en, benefits_en)
+          values ($1, $2, $3, $4, null, $5, $6, $7, $8, $9, $10)`, [shopId, r.id, r.name, r.minPoints, r.multiplier, r.color, r.image, r.benefits, r.nameEn || '', r.benefitsEn || '']);
       }
     }
     // สมาชิกที่อยู่ระดับที่เอาออก → ย้ายไประดับใหม่ที่ใกล้ที่สุดซึ่งไม่สูงกว่าเดิม

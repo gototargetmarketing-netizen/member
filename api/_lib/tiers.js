@@ -18,7 +18,7 @@ const MIN_TIERS = 2;
 const MAX_TIERS = 5;
 const KEEP_MONTHS = 12;
 
-const TIER_SQL = `select id, name, min_points, point_multiplier::float8 as multiplier, color, image, benefits
+const TIER_SQL = `select id, name, min_points, point_multiplier::float8 as multiplier, color, image, benefits, name_en, benefits_en
   from tiers where shop_id = $1 and status = 'ACTIVE' order by min_points, id`;
 
 // สิทธิพิเศษที่ร้านเขียนเก็บเป็นข้อความบรรทัดละข้อ
@@ -27,7 +27,9 @@ const benefitLines = (s) => String(s || '').split('\n').map((x) => x.trim()).fil
 async function loadTiers(q, shopId) {
   return (await q.query(TIER_SQL, [shopId])).rows.map((t, i) => ({
     id: t.id, name: String(t.name || ''), minPoints: U.toInt(t.min_points), multiplier: U.toNum(t.multiplier) || 1, color: t.color || '',
-    image: U.safeUrl(t.image), benefits: benefitLines(t.benefits), rank: i
+    image: U.safeUrl(t.image), benefits: benefitLines(t.benefits), rank: i,
+    // ภาษาอังกฤษที่ร้านกรอก (สองภาษา รอบ 2) — ว่าง = ลูกค้าเห็นภาษาไทย
+    nameEn: String(t.name_en || ''), benefitsEn: benefitLines(t.benefits_en)
   }));
 }
 
@@ -150,15 +152,22 @@ function tierInfo(tiers, m, pts) {
   const t = tierById(tiers, m.tier_id) || tiers[0];
   const next = tiers[t.rank + 1] || null;
   pts = U.toInt(pts);
-  return {
+  return withEn({
     id: t.id, name: t.name, color: t.color, multiplier: t.multiplier, until: m.tier_until || '', points12m: pts,
-    next: next ? { id: next.id, name: next.name, minPoints: next.minPoints, remaining: Math.max(0, next.minPoints - pts) } : null
-  };
+    next: next ? withEn({ id: next.id, name: next.name, minPoints: next.minPoints, remaining: Math.max(0, next.minPoints - pts) }, next) : null
+  }, t);
 }
 
-const publicTiers = (tiers) => tiers.map((t) => ({ id: t.id, name: t.name, minPoints: t.minPoints, multiplier: t.multiplier, color: t.color,
-  image: t.image, benefits: t.benefits }));
-const tierBrief = (tiers, id) => { const t = tierById(tiers, id); return t ? { id: t.id, name: t.name, color: t.color } : null; };
+// ส่งชื่อ/สิทธิ์ภาษาอังกฤษให้หน้าลูกค้าเฉพาะเมื่อร้านกรอกไว้ (ร้านส่วนใหญ่ไม่มี → คำตอบเหมือนเดิม)
+function withEn(o, t, benefits) {
+  if (t.nameEn) o.nameEn = t.nameEn;
+  if (benefits && t.benefitsEn.length) o.benefitsEn = t.benefitsEn;
+  return o;
+}
+
+const publicTiers = (tiers) => tiers.map((t) => withEn({ id: t.id, name: t.name, minPoints: t.minPoints, multiplier: t.multiplier, color: t.color,
+  image: t.image, benefits: t.benefits }, t, true));
+const tierBrief = (tiers, id) => { const t = tierById(tiers, id); return t ? withEn({ id: t.id, name: t.name, color: t.color }, t) : null; };
 
 module.exports = {
   TIER_MULTS, MIN_TIERS, MAX_TIERS, KEEP_MONTHS, BASE_POINTS_SQL, loadTiers, tiersOn, tierById, qualify, rankOf, meets, addMonths, points12m, benefitLines,

@@ -6,7 +6,7 @@ const { toNum, safeUrl, driveImage, cleanLongText } = require('./util');
 const SHOP_SQL = `
 select id, name, liff_id, member_prefix, point_rate_baht::float8 as point_rate_baht, welcome_points,
        max_purchase::float8 as max_purchase, confirm_purchase_over::float8 as confirm_purchase_over,
-       coupon_days, history_limit, consent_version, brand, status, tier_intro,
+       coupon_days, history_limit, consent_version, brand, status, tier_intro, tier_intro_en,
        require_oa_friend, consent_preticked, consent_bonus_points
 from shops where id = $1`;
 
@@ -41,7 +41,7 @@ function publicBrand(shop) {
   const text = (v, max) => String(v == null ? '' : v).replace(/[\u0000-\u001f<>]/g, ' ').trim().slice(0, max);
   const name = text(shop.name, 60);
   const theme = String(b.theme || '').trim();
-  return {
+  const out = {
     name: name === LEGACY_SHOP_NAME ? '' : name,
     logo: safeUrl(driveImage(b.logo)),
     theme: THEMES.indexOf(theme) >= 0 ? theme : '',
@@ -55,6 +55,16 @@ function publicBrand(shop) {
     privacyText: cleanLongText(b.privacyText, 3000),
     consentVersion: String(shop.consent_version || '1')
   };
+  // สองภาษา รอบ 2: ภาษาอังกฤษที่เจ้าของร้านกรอก — ใส่เฉพาะช่องที่มีค่า (ร้านที่ไม่ใช้ภาษาอังกฤษได้คำตอบเหมือนเดิม)
+  const te = b.textsEn && typeof b.textsEn === 'object' ? b.textsEn : {};
+  const textsEn = {};
+  [['pointUnit', 20], ['greeting', 60], ['registerTitle', 80], ['registerSubtitle', 150]].forEach(([k, max]) => { const v = text(te[k], max); if (v) textsEn[k] = v; });
+  const nameEn = text(b.nameEn, 60);
+  const privacyTextEn = cleanLongText(b.privacyTextEn, 3000);
+  if (nameEn) out.nameEn = nameEn;
+  if (Object.keys(textsEn).length) out.textsEn = textsEn;
+  if (privacyTextEn) out.privacyTextEn = privacyTextEn;
+  return out;
 }
 
 module.exports = { SHOP_SQL, cfg, publicBrand, LEGACY_SHOP_NAME, THEMES };

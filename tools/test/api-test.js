@@ -1332,6 +1332,111 @@ function fakeLine() {
     }
   }
 
+  console.log('\n[5.13] สองภาษา รอบ 2: ข้อความภาษาอังกฤษของร้าน (หลังบ้านบันทึก → หน้าลูกค้าเห็น)');
+  {
+    const ea = createApp({ db: () => db, verifier: createVerifier({ fetch: fakeLine().fetch }), allowTestTokens: true, region: 'test' });
+    const OW = 'TEST:U_DEMO_OWNER:เจ้าของ';
+    const CU = 'TEST:U_EN_1:ลูกค้า อังกฤษ';
+    const call = (action, body, tok) => ea.handle(Object.assign({ action, shop: 'demo', idToken: tok || OW, requestId: crypto.randomUUID() }, body));
+    const log = console.log; console.log = (...a) => { if (/^  [✓✗]/.test(String(a[0]))) log(...a); };
+    try {
+      // ---- ของรางวัล: บันทึก / ไม่ส่ง = ไม่แก้ / '' = ลบคำแปล / ยาวเกิน
+      r = await call('adminRewardSave', { reward: { name: 'กาแฟเย็นฟรี', description: 'เลือกได้ทุกเมนู', points: 30, status: 'ACTIVE', nameEn: '  Free   iced coffee ', descriptionEn: 'Any <b>drink</b>' } });
+      ok(r.ok && r.reward.nameEn === 'Free iced coffee' && r.reward.descriptionEn && !/[<>]/.test(r.reward.descriptionEn), 'บันทึกชื่อ/รายละเอียดภาษาอังกฤษ (ตัดช่องว่างซ้ำ + ตัด < >)', r.reward);
+      const rid = r.reward.id;
+      r = await call('adminRewardSave', { reward: { id: rid, name: 'กาแฟเย็นฟรี', description: 'เลือกได้ทุกเมนู', points: 30, status: 'ACTIVE' } });
+      ok(r.ok && r.reward.nameEn === 'Free iced coffee', 'บันทึกจากหน้าเว็บที่ไม่มีช่องภาษาอังกฤษ (ไม่ส่ง nameEn) → คำแปลเดิมไม่หาย', r.reward);
+      r = await call('adminRewardSave', { reward: { id: rid, name: 'กาแฟเย็นฟรี', points: 30, status: 'ACTIVE', nameEn: 'x'.repeat(81) } });
+      ok(!r.ok && r.code === 'BAD_INPUT', 'ชื่อภาษาอังกฤษยาวเกิน 80 → BAD_INPUT', r);
+      r = await call('adminRewards');
+      ok(r.ok && r.items.every((x) => typeof x.nameEn === 'string' && typeof x.descriptionEn === 'string'), 'หลังบ้านได้ช่องภาษาอังกฤษทุกรายการ (ว่าง = "")');
+
+      // ---- โปรโมชัน + กติกาแต้มพิเศษ + ชื่อสาขา
+      r = await call('adminPromoSave', { promo: { title: 'ลด 20% ทั้งร้าน', subtitle: 'เฉพาะสมาชิก', tag: 'ใหม่', status: 'ACTIVE', titleEn: '20% off everything', subtitleEn: 'Members only', tagEn: 'New' } });
+      ok(r.ok && r.promo.titleEn === '20% off everything' && r.promo.tagEn === 'New', 'บันทึกโปรโมชันภาษาอังกฤษ', r.promo);
+      const pid = r.promo.id;
+      r = await call('adminPromoSave', { promo: { title: 'ลด', tag: 'x', status: 'ACTIVE', tagEn: 'y'.repeat(31) } });
+      ok(!r.ok && r.code === 'BAD_INPUT', 'ป้ายภาษาอังกฤษยาวเกิน 30 → BAD_INPUT', r);
+      r = await call('adminBranchSave', { branch: { id: 'B01', name: 'สาขา 1', status: 'ACTIVE', nameEn: 'Siam branch' } });
+      ok(r.ok && r.items.find((b) => b.id === 'B01').nameEn === 'Siam branch', 'บันทึกชื่อสาขาภาษาอังกฤษ', r);
+      r = await call('adminBranchSave', { branch: { id: 'B01', name: 'สาขา 1', status: 'ACTIVE' } });
+      ok(r.ok && r.items.find((b) => b.id === 'B01').nameEn === 'Siam branch', 'แก้สาขาโดยไม่ส่ง nameEn → ชื่ออังกฤษเดิมไม่หาย');
+      r = await call('adminRuleSave', { rule: { name: 'แต้มสองเท่าทุกวัน', nameEn: 'Double points every day', multiplier: 2, days: U.DAY_CODES, branch: 'B01', showBadge: true, status: 'ACTIVE' } });
+      ok(r.ok && r.rule.nameEn === 'Double points every day', 'บันทึกชื่อกติกาภาษาอังกฤษ', r.rule);
+      const ruleId = r.rule.id;
+
+      // ---- หน้าตาร้าน: ชื่อร้าน ข้อความ นโยบาย (แก้ฉบับอังกฤษไม่ขึ้นฉบับใหม่)
+      const v0 = (await call('adminBrand')).consentVersion;
+      r = await call('adminBrandSave', { values: { SHOP_NAME_EN: 'Demo Cafe EN', TEXT_GREETING_EN: 'Welcome back', TEXT_POINT_UNIT_EN: 'stars', PRIVACY_TEXT_EN: 'English policy\r\n\r\n\r\nline two' } });
+      ok(r.ok && r.changed === 4 && r.consentVersion === v0, 'แก้ชื่อร้าน/ข้อความ/นโยบายภาษาอังกฤษ → นโยบายยังเป็นฉบับเดิม (' + v0 + ') ลูกค้าไม่ต้องกดยอมรับใหม่', { changed: r.changed, v: r.consentVersion });
+      ok(r.brand.nameEn === 'Demo Cafe EN' && r.brand.textsEn.greeting === 'Welcome back' && r.brand.textsEn.pointUnit === 'stars' && !('registerTitle' in r.brand.textsEn) &&
+        r.brand.privacyTextEn === 'English policy\n\nline two', 'หน้าตาร้านที่ส่งให้หน้าเว็บมีภาษาอังกฤษ (เฉพาะช่องที่กรอก)', r.brand);
+      ok(r.values.SHOP_NAME_EN === 'Demo Cafe EN' && r.values.PRIVACY_TEXT_EN === 'English policy\n\nline two', 'ค่าในหน้าตาร้านของหลังบ้านมีช่อง _EN');
+      r = await call('adminBrandSave', { values: { TEXT_GREETING_EN: 'x'.repeat(61) } });
+      ok(!r.ok && r.code === 'BAD_INPUT', 'ข้อความทักทายภาษาอังกฤษยาวเกิน 60 → BAD_INPUT');
+
+      // ---- ระดับสมาชิก: ชื่อ/สิทธิ์/ข้อความหัวหน้า ภาษาอังกฤษ (ไม่ส่ง = ไม่แก้)
+      r = await call('adminTiersSave', { intro: 'สมัครฟรี', introEn: 'Join for free', tiers: [
+        { name: 'สมาชิก', nameEn: 'Member', minPoints: 0, multiplier: 1, benefits: 'ส่วนลดวันเกิด', benefitsEn: 'Birthday discount' },
+        { name: 'ทอง', nameEn: 'Gold', minPoints: 500, multiplier: 2, benefits: 'ที่จอดรถ\nเครื่องดื่มฟรี', benefitsEn: 'Free parking\nFree drink' }] });
+      ok(r.ok && r.introEn === 'Join for free' && r.items[1].nameEn === 'Gold' && r.items[1].benefitsEn.join('|') === 'Free parking|Free drink', 'บันทึกระดับภาษาอังกฤษ', r.items && r.items[1]);
+      const tiersNow = r.items.map((t) => ({ id: t.id, name: t.name, minPoints: t.minPoints, multiplier: t.multiplier, benefits: t.benefits.join('\n') }));
+      await db.query(`update rewards set min_tier_id = $1 where shop_id = 'demo' and id = 'R003'`, [r.items[1].id]); // ป้าย "Gold ขึ้นไป" 
+      r = await call('adminTiersSave', { intro: 'สมัครฟรี', tiers: tiersNow });
+      ok(r.ok && r.introEn === 'Join for free' && r.items[1].nameEn === 'Gold' && r.items[0].benefitsEn.join('') === 'Birthday discount', 'บันทึกระดับจากหน้าเว็บที่ไม่มีช่องภาษาอังกฤษ → คำแปลเดิมไม่หาย', r.items);
+      r = await call('adminTiersSave', { tiers: [{ ...tiersNow[0], benefitsEn: Array.from({ length: 9 }, (_, i) => 'Perk ' + i).join('\n') }, tiersNow[1]] });
+      ok(!r.ok && r.code === 'BAD_INPUT' && /ภาษาอังกฤษ/.test(r.error), 'สิทธิพิเศษภาษาอังกฤษเกิน 8 ข้อ → BAD_INPUT', r);
+
+      // ---- ลูกค้า: เห็นช่อง En เฉพาะที่ร้านกรอก
+      r = await call('register', { consentPrivacy: true, consentMarketing: false, firstName: 'เอ็น', lastName: 'ทดสอบ', birthDate: '1991-02-03', phone: '0861234599' }, CU);
+      ok(r.ok, 'ลูกค้าสมัครสมาชิก', r.code);
+      const mid = r.member.memberId;
+      await db.query(`update members set points = 500 where shop_id = 'demo' and id = $1`, [mid]);
+      r = await call('redeem', { rewardId: rid }, CU);
+      ok(r.ok && r.coupon.nameEn === 'Free iced coffee', 'แลกแล้วคูปองมีชื่อภาษาอังกฤษ', r.coupon);
+      r = await call('bootstrap', {}, CU);
+      const rw = r.rewards.find((x) => x.id === rid);
+      const plain = r.rewards.find((x) => x.id === 'R001');
+      ok(rw && rw.nameEn === 'Free iced coffee' && rw.descriptionEn && plain && !('nameEn' in plain) && !('descriptionEn' in plain),
+        'ของรางวัล: มีคำแปล → ส่งช่อง En / ไม่มีคำแปล → ไม่มีช่อง En เลย (คำตอบเหมือนเดิม)', { rw, plain });
+      const pr = r.promos.find((x) => x.id === pid);
+      ok(pr && pr.titleEn === '20% off everything' && pr.subtitleEn === 'Members only' && pr.tagEn === 'New', 'โปรโมชันภาษาอังกฤษ', pr);
+      const badge = r.badges.find((x) => x.id === ruleId);
+      ok(badge && badge.nameEn === 'Double points every day' && badge.branchNameEn === 'Siam branch', 'ป้ายแต้มพิเศษ: ชื่อกติกา + ชื่อสาขาภาษาอังกฤษ', badge);
+      ok(r.coupons[0].nameEn === 'Free iced coffee' && r.history.find((t) => t.type === 'REDEEM').rewardNameEn === 'Free iced coffee', 'คูปองในบัตร + ประวัติการแลก มีชื่อภาษาอังกฤษ', r.history[0]);
+      ok(r.tierIntroEn === 'Join for free' && r.tiers[1].nameEn === 'Gold' && r.tiers[1].benefitsEn.length === 2 && r.member.tierInfo.nameEn === 'Member' && r.member.tierInfo.next.nameEn === 'Gold',
+        'ระดับ: ชื่อ สิทธิ์ ข้อความหัวหน้า ระดับของลูกค้า และระดับถัดไป ภาษาอังกฤษ', { intro: r.tierIntroEn, t: r.tiers[1], ti: r.member.tierInfo });
+      const locked = r.rewards.find((x) => x.id === 'R003');
+      ok(locked && locked.locked === true && locked.minTier.name === 'ทอง' && locked.minTier.nameEn === 'Gold', 'ป้ายระดับขั้นต่ำของของรางวัลมีชื่อระดับภาษาอังกฤษ', locked && locked.minTier);
+
+      // ---- การ์ด "ภาษาอังกฤษ กรอกแล้ว X จาก Y" ในหน้าภาพรวม
+      r = await call('adminDashboard', { from: U.thaiDay(new Date()), to: U.thaiDay(new Date()) });
+      const e = r.english;
+      ok(r.ok && e && e.total >= 1 && e.done >= 1 && e.done < e.total, 'ภาพรวมมีตัวนับภาษาอังกฤษ (ร้านที่เปิดภาษาอังกฤษ)', e && { total: e.total, done: e.done });
+      const kinds = (e.missing || []).map((m) => m.kind + ':' + m.id);
+      ok(!kinds.includes('reward:' + rid) && !kinds.includes('promo:' + pid) && !kinds.includes('rule:' + ruleId) && !kinds.includes('branch:B01'),
+        'รายการที่กรอกครบแล้วไม่อยู่ในรายการที่ยังขาด', kinds);
+      ok(kinds.includes('reward:R001') && (e.missing.find((m) => m.id === 'R001').fields.join(',') === 'ชื่อ,รายละเอียด'), 'ของรางวัลที่ยังไม่แปล อยู่ในรายการที่ยังขาด พร้อมบอกช่อง', e.missing.find((m) => m.id === 'R001'));
+      ok(!kinds.some((k) => /^tier:/.test(k)) && !kinds.includes('tierIntro:'), 'ระดับที่แปลครบ + ข้อความหัวหน้า ไม่อยู่ในรายการที่ยังขาด');
+      ok(!kinds.includes('rule:PR002') && !kinds.includes('promo:P004'), 'ไม่นับกติกาที่ไม่แสดงป้าย และโปรที่หมดเขตแล้ว');
+      await call('adminRewardSave', { reward: { name: 'Free cake', points: 10, status: 'ACTIVE' } });
+      const e2 = (await call('adminDashboard', { from: U.thaiDay(new Date()), to: U.thaiDay(new Date()) })).english;
+      ok(e2.total === e.total, 'ชื่อที่เป็นภาษาอังกฤษอยู่แล้ว (ไม่มีอักษรไทย) ไม่นับว่าต้องแปล', { before: e.total, after: e2.total });
+      const plainApp = createApp({ db: () => db, verifier: createVerifier({ fetch: fakeLine().fetch }), allowTestTokens: true, region: 'test',
+        features: async () => require(path.join(ROOT, 'api', '_lib', 'features.js')).normalize({ tiers: true, branches: true }) });
+      r = await plainApp.handle({ action: 'adminDashboard', shop: 'demo', idToken: OW, from: U.thaiDay(new Date()), to: U.thaiDay(new Date()) });
+      ok(r.ok && !('english' in r), 'ร้านที่ไม่เปิดภาษาอังกฤษ → ภาพรวมไม่มีตัวนับ (ไม่เสียเวลาคำนวณ)');
+
+      // คืนค่าให้ส่วนอื่น: ปิดระดับ + ลบคำแปลหน้าตาร้าน
+      await call('adminTiersSave', { tiers: [] });
+      await call('adminBrandSave', { values: { SHOP_NAME_EN: '', TEXT_GREETING_EN: '', TEXT_POINT_UNIT_EN: '', PRIVACY_TEXT_EN: '' } });
+      r = await call('bootstrap', {}, CU);
+      ok(r.ok && !('tierIntroEn' in r), 'ปิดระดับแล้ว ไม่มีข้อความหัวหน้าภาษาอังกฤษ');
+    } finally {
+      console.log = log;
+    }
+  }
+
   console.log('\n[6] ข้อความถึงผู้ใช้');
   // ทุกไฟล์ใน api/ (ไฟล์ใหม่ถูกตรวจเองโดยไม่ต้องเพิ่มชื่อ)
   const apiFiles = ['index.js'].concat(fs.readdirSync(path.join(ROOT, 'api', '_lib')).filter(f => f.endsWith('.js')).map(f => '_lib/' + f));

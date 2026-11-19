@@ -16,7 +16,7 @@ const withRequestId = createRetryKeeper();
 // ยังโหลดไฟล์ร้านไม่สำเร็จ (เช่น ลิงก์ร้านผิด) → ค่าว่าง หน้าผิดพลาดยังแปลข้อความได้ ไม่พังซ้อน
 const cfg = () => (S.shop ? S.shop.config : {});
 // ข้อความหน้าจอที่ร้านตั้งเองได้ (greeting / registerTitle ฯลฯ): ภาษาอังกฤษใช้ textsEn ของร้าน ถ้าไม่มี → ข้อความตั้งต้นของระบบ (fallback ที่แปลแล้ว)
-// ต่างจากเนื้อหาของร้าน (นโยบาย / ขั้นตอนสะสมแต้ม / ข้อความหน้าสิทธิ์) ที่ไม่มีภาษาอังกฤษ → แสดงภาษาไทยของร้าน
+// ต่างจากเนื้อหาของร้าน (ชื่อร้าน / ของรางวัล / นโยบาย / ข้อความหน้าสิทธิ์ ฯลฯ — ดู L ข้างล่าง) ที่ไม่มีภาษาอังกฤษ → แสดงภาษาไทยของร้าน
 const T = (key, fallback) => { const src = isEn() ? cfg().textsEn : cfg().texts; return (src && src[key]) || fallback; };
 // คำเรียกแต้มอยู่กลางประโยคเสมอ → ภาษาอังกฤษใช้ points ถ้าร้านไม่ได้ตั้งคำอังกฤษไว้ (ไม่เอาคำไทยไปปนในประโยคอังกฤษ)
 const unit = () => T('pointUnit', isEn() ? 'points' : 'แต้ม');
@@ -26,6 +26,10 @@ const unitOne = () => (isEn() ? unit().replace(/s$/i, '') : unit()); // "1 point
 // ไฟล์นี้เรียกผ่าน tu / tt เท่านั้น (ไม่เรียก t ตรงๆ) เพราะหลายฟังก์ชันมีตัวแปรชื่อ t อยู่แล้ว (ข้อมูลระดับ / รายการแต้ม)
 const tu = (s, vars) => t(s, { u: esc(unit()), U: esc(cap(unit())), u1: esc(unitOne()), ...vars });
 const tt = (s, vars) => t(s, { u: unit(), U: cap(unit()), u1: unitOne(), ...vars });
+// เนื้อหาของร้าน (ชื่อของรางวัล โปรโมชัน ระดับ สาขา ฯลฯ — สองภาษา รอบ 2): ภาษาอังกฤษใช้ช่อง <ชื่อ>En ที่ร้านกรอกในหลังบ้าน
+// ตัวกลางส่งช่อง En มาเฉพาะเมื่อร้านกรอกไว้ ไม่มี = แสดงภาษาไทยของร้าน
+const L = (o, k = 'name') => (o ? (isEn() && o[k + 'En']) || o[k] || '' : '');
+const shopName = () => L(cfg());
 
 document.addEventListener('click', onClick);
 document.addEventListener('input', onPhoneInput);
@@ -229,7 +233,7 @@ function render() {
       <div class="state-page">
         <div class="state-icon">${icon('shield', 40)}</div>
         <h1>${tu('บัญชีสมาชิกถูกระงับ')}</h1>
-        <p>${tu('กรุณาติดต่อร้าน {shop}', { shop: esc(cfg().name) })}</p>
+        <p>${tu('กรุณาติดต่อร้าน {shop}', { shop: esc(shopName()) })}</p>
       </div>`;
     return;
   }
@@ -265,7 +269,7 @@ function logoHtml(cls = '') {
   const c = cfg();
   const src = c.logo ? S.shop.asset(c.logo) : '';
   return src
-    ? `<img class="logo ${cls}" src="${esc(src)}" alt="${esc(c.name)}">`
+    ? `<img class="logo ${cls}" src="${esc(src)}" alt="${esc(shopName())}">`
     : `<div class="logo logo-text ${cls}">${esc(c.logoText || (c.name || '?').slice(0, 1))}</div>`;
 }
 
@@ -319,7 +323,7 @@ function renderFriendGate() {
       <div class="reg-hero">
         ${logoHtml('logo-lg')}
         <h1>${tu('เพิ่มเพื่อน LINE ของร้านก่อนสมัครสมาชิก')}</h1>
-        <p>${tu('รับโปรโมชัน ส่วนลด และสิทธิพิเศษเฉพาะสมาชิก{shop} ทาง LINE', { shop: esc(cfg().name ? ' ' + cfg().name : '') })}</p>
+        <p>${tu('รับโปรโมชัน ส่วนลด และสิทธิพิเศษเฉพาะสมาชิก{shop} ทาง LINE', { shop: esc(shopName() ? ' ' + shopName() : '') })}</p>
         ${welcome > 0 ? `<div class="chip chip-accent">${icon('gift', 16)} ${tu('สมัครแล้วรับทันที {n} {u}', { n: fmtNum(welcome) })}</div>` : ''}
       </div>
       <section class="card gate-card">
@@ -471,7 +475,7 @@ function renderRegister() {
     <main class="screen register">${langSwitchHtml('lang-on-page')}
       <div class="reg-hero">
         ${logoHtml('logo-lg')}
-        <h1>${esc(T('registerTitle', tt('สมัครสมาชิก {shop}', { shop: cfg().name })))}</h1>
+        <h1>${esc(T('registerTitle', tt('สมัครสมาชิก {shop}', { shop: shopName() })))}</h1>
         <p>${esc(T('registerSubtitle', tt('สะสม{u}ทุกครั้งที่ซื้อ แลกของรางวัลและสิทธิพิเศษ')))}</p>
         ${welcome > 0 ? `<div class="chip chip-accent">${icon('gift', 16)} ${tu('รับทันที {n} {u} เมื่อสมัคร', { n: fmtNum(welcome) })}</div>` : ''}
       </div>
@@ -714,13 +718,13 @@ function badgesHtml() {
   if (!list.length) return '';
   return `<div class="bonus-cards">${list.map(b => {
     const mult = '×' + esc(String(b.multiplier));
-    const cond = [b.branchName ? tu('เฉพาะ{branch}', { branch: esc(b.branchName) }) : '', b.minAmount ? tu('ซื้อครบ ฿{n}', { n: fmtNum(b.minAmount) }) : ''].filter(Boolean).join(' · ');
+    const cond = [b.branchName ? tu('เฉพาะ{branch}', { branch: esc(L(b, 'branchName')) }) : '', b.minAmount ? tu('ซื้อครบ ฿{n}', { n: fmtNum(b.minAmount) }) : ''].filter(Boolean).join(' · ');
     return `
     <section class="bonus-card">
       <div class="bonus-mult" aria-hidden="true">${mult}</div>
       <div class="grow">
         <div class="bonus-title">${tu('วันนี้ได้{u} {mult}', { mult })} ${icon('bolt', 17)}</div>
-        <div class="bonus-name">${esc(b.name)}</div>
+        <div class="bonus-name">${esc(L(b))}</div>
         ${cond ? `<div class="bonus-cond">${cond}</div>` : ''}
       </div>
     </section>`;
@@ -753,7 +757,7 @@ function birthdayCard() {
         <div class="grow">
           <div class="bday-tag">${tu('เดือนเกิดของคุณ 🎉')}</div>
           <h3>${tu('รับของขวัญวันเกิดแล้ว')}</h3>
-          <p>${esc(b.coupon.name)} · ${tu('ใช้ที่ร้านได้ถึง {date}', { date: fmtDate(b.coupon.expiresAt) })}</p>
+          <p>${esc(L(b.coupon))} · ${tu('ใช้ที่ร้านได้ถึง {date}', { date: fmtDate(b.coupon.expiresAt) })}</p>
           <button class="btn btn-primary btn-sm" data-act="coupon-qr" data-id="${esc(b.coupon.code)}">${icon('qr', 16)} ${tu('แสดงคูปอง')}</button>
         </div>
       </section>`;
@@ -765,7 +769,7 @@ function birthdayCard() {
         <div class="bday-tag">${tu('เดือนเกิดของคุณ 🎉')}</div>
         <h3>${tu('สุขสันต์วันเกิด คุณ{name}', { name: esc(first) })}</h3>
         <p>${tu('ร้านมีของขวัญให้ รับได้ถึง {date}', { date: fmtDate(b.until) })}</p>
-        <div class="bday-gift">${icon('gift', 18)} ${esc(b.name)}${b.points ? ` <span class="muted small">${tu('(ใช้ {n} {u})', { n: fmtNum(b.points) })}</span>` : ''}</div>
+        <div class="bday-gift">${icon('gift', 18)} ${esc(L(b))}${b.points ? ` <span class="muted small">${tu('(ใช้ {n} {u})', { n: fmtNum(b.points) })}</span>` : ''}</div>
         <button class="btn btn-primary btn-sm" data-act="birthday-claim">${tu('รับของขวัญ')}</button>
       </div>
     </section>`;
@@ -927,13 +931,13 @@ function tierCard(m) {
   const pct = next && next.minPoints > 0 ? Math.max(2, Math.min(100, t.points12m / next.minPoints * 100)) : 100;
   const color = tierColor(t.color);
   return `
-    <button type="button" class="tier-card tier-ring" data-act="go" data-page="tiers" aria-label="${tu('ระดับของคุณ {tier} — ดูสิทธิ์สมาชิก', { tier: esc(t.name) })}">
+    <button type="button" class="tier-card tier-ring" data-act="go" data-page="tiers" aria-label="${tu('ระดับของคุณ {tier} — ดูสิทธิ์สมาชิก', { tier: esc(L(t)) })}">
       <span class="tr-ring">${ringSvg(pct, color)}<span class="tr-icon"${color ? ` style="color:${inkOn(color)}"` : ''}>${icon('crown', 22)}</span></span>
       <span class="tr-text">
         <span class="tr-label">${tu('ระดับสมาชิกของคุณ')}</span>
-        <span class="tr-name">${esc(t.name)}${t.multiplier > 1 ? ` <small>· ${u} ×${t.multiplier}</small>` : ''}</span>
+        <span class="tr-name">${esc(L(t))}${t.multiplier > 1 ? ` <small>· ${u} ×${t.multiplier}</small>` : ''}</span>
         <span class="tr-next">${next
-          ? tu('อีก <b>{n} {u}</b> ถึง <b>{tier}</b>', { n: fmtNum(next.remaining), tier: esc(next.name) })
+          ? tu('อีก <b>{n} {u}</b> ถึง <b>{tier}</b>', { n: fmtNum(next.remaining), tier: esc(L(next)) })
           : `<b>${tu('คุณอยู่ระดับสูงสุดแล้ว')}</b>`}</span>
         ${t.until ? `<span class="tr-sub">${tu('คงระดับถึง {date}', { date: fmtDate(t.until) })}</span>` : ''}
       </span>
@@ -964,8 +968,9 @@ function inkOn(c) {
 // ป้ายระดับบนบัตร: พื้นเป็นสีของระดับนั้นเอง (เดิมพื้นสีเน้นของร้าน + จุดสีระดับ ทำให้สับสนว่าระดับนี้สีอะไร)
 function mcTier(m) {
   const c = m.tierInfo && m.tierInfo.color;
-  if (!HEX6.test(c || '')) return `<span class="mc-tier">${esc(m.tier)}</span>`;
-  return `<span class="mc-tier" style="background:${c};color:${textOn(c)}">${icon('crown', 13)}${esc(m.tier)}</span>`;
+  const name = (isEn() && m.tierInfo && m.tierInfo.nameEn) || m.tier;
+  if (!HEX6.test(c || '')) return `<span class="mc-tier">${esc(name)}</span>`;
+  return `<span class="mc-tier" style="background:${c};color:${textOn(c)}">${icon('crown', 13)}${esc(name)}</span>`;
 }
 
 function memberCard(m) {
@@ -973,7 +978,7 @@ function memberCard(m) {
   return `
     <section class="member-card">
       <div class="mc-top">
-        <div><div class="mc-label">${esc(T('cardLabel', tt('บัตรสมาชิก')))}</div><div class="mc-shop">${esc(cfg().name)}</div></div>
+        <div><div class="mc-label">${esc(T('cardLabel', tt('บัตรสมาชิก')))}</div><div class="mc-shop">${esc(shopName())}</div></div>
         ${tiers && m.tier ? mcTier(m) : ''}
       </div>
       <div class="mc-mid">
@@ -1000,10 +1005,10 @@ function promos() {
         const inner = `
           ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : ''}
           <div class="promo-text">
-            ${p.tag ? `<span class="promo-tag">${esc(p.tag)}</span>` : ''}
-            ${p.minTier ? `<span class="promo-tag promo-tier">${p.locked ? icon('lock', 11) + ' ' : ''}${tu('สำหรับระดับ {tier} ขึ้นไป', { tier: esc(p.minTier.name) })}</span>` : ''}
-            <div class="promo-title">${esc(p.title)}</div>
-            ${p.subtitle ? `<div class="promo-sub">${esc(p.subtitle)}</div>` : ''}
+            ${p.tag ? `<span class="promo-tag">${esc(L(p, 'tag'))}</span>` : ''}
+            ${p.minTier ? `<span class="promo-tag promo-tier">${p.locked ? icon('lock', 11) + ' ' : ''}${tu('สำหรับระดับ {tier} ขึ้นไป', { tier: esc(L(p.minTier)) })}</span>` : ''}
+            <div class="promo-title">${esc(L(p, 'title'))}</div>
+            ${p.subtitle ? `<div class="promo-sub">${esc(L(p, 'subtitle'))}</div>` : ''}
           </div>`;
         return p.link
           ? `<a class="promo-card" href="${esc(p.link)}" target="_blank" rel="noopener">${inner}</a>`
@@ -1029,17 +1034,17 @@ function rewardCard(r) {
   // ระดับไม่ถึง: แสดงแต่ล็อก (ผู้ใช้เลือก 7 พ.ย. 2569 — ลูกค้ารู้ว่ามีอะไรรออยู่ เป็นแรงจูงใจ) / ระบบก็ไม่ยอมให้แลกอีกชั้น
   const locked = r.locked === true && r.minTier;
   const can = !soldOut && !locked && pts >= r.points;
-  const label = soldOut ? tu('หมดแล้ว') : locked ? `${icon('lock', 14)} ${tu('ระดับ {tier} ขึ้นไป', { tier: esc(r.minTier.name) })}` : can ? tu('แลกของรางวัล@@ปุ่ม') : tu('ขาดอีก {n}', { n: fmtNum(r.points - pts) });
+  const label = soldOut ? tu('หมดแล้ว') : locked ? `${icon('lock', 14)} ${tu('ระดับ {tier} ขึ้นไป', { tier: esc(L(r.minTier)) })}` : can ? tu('แลกของรางวัล@@ปุ่ม') : tu('ขาดอีก {n}', { n: fmtNum(r.points - pts) });
   return `
     <article class="reward ${locked ? 'is-locked' : ''}">
       <div class="reward-img">
         ${r.image ? `<img src="${esc(r.image)}" alt="" loading="lazy">` : `<div class="reward-ph">${icon('gift', 34)}</div>`}
         <span class="reward-cost">${fmtNum(r.points)} ${esc(unit())}</span>
-        ${r.minTier ? `<span class="reward-tier">${locked ? icon('lock', 12) : ''}${tu('{tier} ขึ้นไป', { tier: esc(r.minTier.name) })}</span>` : ''}
+        ${r.minTier ? `<span class="reward-tier">${locked ? icon('lock', 12) : ''}${tu('{tier} ขึ้นไป', { tier: esc(L(r.minTier)) })}</span>` : ''}
       </div>
       <div class="reward-body">
-        <h3>${esc(r.name)}</h3>
-        ${r.description ? `<p>${esc(r.description)}</p>` : ''}
+        <h3>${esc(L(r))}</h3>
+        ${r.description ? `<p>${esc(L(r, 'description'))}</p>` : ''}
         ${r.remaining != null && r.remaining > 0 && r.remaining <= 10 ? `<div class="reward-left">${tu('เหลือ {n} สิทธิ์', { n: fmtNum(r.remaining) })}</div>` : ''}
         <button class="btn btn-primary btn-sm btn-block" data-act="redeem" data-id="${esc(r.id)}" ${can ? '' : 'disabled'}>${label}</button>
       </div>
@@ -1062,7 +1067,7 @@ function confirmRedeem(id) {
   const pts = S.data.member.points;
   openModal(`
     <div class="modal-head"><h2>${tu('ยืนยันการแลก')}</h2><button class="icon-btn" data-act="close" aria-label="${tu('ปิด')}">${icon('x')}</button></div>
-    <div class="confirm-title">${esc(r.name)}</div>
+    <div class="confirm-title">${esc(L(r))}</div>
     <div class="confirm-cost"><b>${fmtNum(r.points)}</b><span>${tu('{u}ที่ใช้')}</span>
       <div class="muted">${tu('คงเหลือ {from} → {to} {u}', { from: fmtNum(pts), to: fmtNum(pts - r.points) })}</div></div>
     <p class="muted">${tu('หลังแลก คุณจะได้คูปองในหน้า "คูปอง" ให้แสดง QR คูปองกับพนักงานเพื่อรับของ')}</p>
@@ -1083,7 +1088,7 @@ async function doRedeem(id, btn) {
       <div class="modal-center">
         <div class="big-icon ok">${icon('check', 34)}</div>
         <h2>${tu('แลกสำเร็จ!')}</h2>
-        ${coupon ? `<p><b>${esc(coupon.name)}</b><br><span class="muted">${tu('ใช้ได้ถึง {date}', { date: fmtDate(coupon.expiresAt) })}</span></p>` : `<p>${tu('รายการนี้แลกไปแล้ว')}</p>`}
+        ${coupon ? `<p><b>${esc(L(coupon))}</b><br><span class="muted">${tu('ใช้ได้ถึง {date}', { date: fmtDate(coupon.expiresAt) })}</span></p>` : `<p>${tu('รายการนี้แลกไปแล้ว')}</p>`}
         <div class="stack">
           ${coupon ? `<button class="btn btn-primary btn-block" data-act="coupon-qr" data-id="${esc(coupon.code)}">${icon('qr', 18)} ${tu('แสดง QR คูปองเลย')}</button>` : ''}
           <button class="btn btn-block" data-act="go" data-page="coupons">${tu('ไปหน้าคูปอง')}</button>
@@ -1128,7 +1133,7 @@ function couponCard(c) {
     <article class="coupon ${c.status === 'ACTIVE' ? '' : 'is-past'}">
       <div class="coupon-side">${icon('ticket', 26)}<span>${esc(label)}</span></div>
       <div class="coupon-body">
-        <h3>${esc(c.name)}</h3>
+        <h3>${esc(L(c))}</h3>
         <div class="coupon-meta">${esc(meta)}</div>
         <div class="coupon-code">${esc(c.code)}</div>
         ${c.status === 'ACTIVE' ? `<button class="btn btn-primary btn-sm" data-act="coupon-qr" data-id="${esc(c.code)}">${icon('qr', 16)} ${tu('แสดง QR ให้พนักงาน')}</button>` : ''}
@@ -1140,7 +1145,7 @@ function showCouponQr(code) {
   const c = S.data.coupons.find(x => x.code === code);
   if (!c) return;
   openModal(`
-    <div class="modal-head"><h2>${esc(c.name)}</h2><button class="icon-btn" data-act="close" aria-label="${tu('ปิด')}">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${esc(L(c))}</h2><button class="icon-btn" data-act="close" aria-label="${tu('ปิด')}">${icon('x')}</button></div>
     <div class="qr-box">${qrSvg(c.code)}<div class="qr-code-text">${esc(c.code)}</div></div>
     <p class="muted center">${tu('ให้พนักงานสแกน QR นี้เพื่อใช้คูปอง')}<br>${tu('คูปองจะถูกใช้เมื่อพนักงานยืนยันเท่านั้น · ใช้ได้ถึง {date}', { date: fmtDate(c.expiresAt) })}</p>`,
   { onClose: () => { refresh().catch(() => {}); } }); // พนักงานอาจเพิ่งใช้คูปองไป → โหลดสถานะใหม่
@@ -1158,7 +1163,7 @@ function txDetail(tx) {
   if (!isEn() || !d) return d;
   if (d === 'แต้มต้อนรับสมาชิกใหม่' || d === 'แต้มรับข่าวสารจากร้าน') return tt(d);
   let m = tx.type === 'REDEEM' && d.match(/^แลก (.+)$/);
-  if (m) return tt('แลก {name}', { name: m[1] });
+  if (m) return tt('แลก {name}', { name: tx.rewardNameEn || m[1] }); // ชื่ออังกฤษของของรางวัล (ตัวกลางหาให้จากคูปองของรายการนี้)
   // แบบที่ staff.js เขียน: "ซื้อสินค้า 250 บาท" + " (ไม่ถึงเกณฑ์รับแต้ม)" + " · ชื่อกติกาแต้มพิเศษ"
   m = tx.type === 'EARN' && d.match(/^ซื้อสินค้า ([\d,.]+) บาท( \(ไม่ถึงเกณฑ์รับแต้ม\))?(.*)$/);
   if (m) return tt('ซื้อสินค้า ฿{amount}', { amount: m[1] }) + (m[2] ? tt(' (ไม่ถึงเกณฑ์รับแต้ม)') : '') + m[3];
@@ -1223,7 +1228,7 @@ function tierTable() {
       <p class="muted small">${tu('คิดจาก{u}ที่ได้จากการซื้อ 12 เดือนล่าสุด · ถึงเกณฑ์ขึ้นระดับทันที และคงระดับไว้ 12 เดือน · ครบแล้วไม่ถึง ลดลงทีละ 1 ระดับ')}</p>
       <div class="tier-list">${S.data.tiers.map(t => `
         <div class="tier-row ${t.id === mine ? 'current' : ''}">
-          <span class="tier-row-name">${tierDot(t.color)}${esc(t.name)}${t.id === mine ? ` <small>${tu('(ระดับของคุณ)')}</small>` : ''}</span>
+          <span class="tier-row-name">${tierDot(t.color)}${esc(L(t))}${t.id === mine ? ` <small>${tu('(ระดับของคุณ)')}</small>` : ''}</span>
           <span>${t.minPoints > 0 ? tu('{n} {u} ขึ้นไป', { n: fmtNum(t.minPoints) }) : tu('สมาชิกทุกคน')}</span>
           <span class="tier-row-mult">${t.multiplier > 1 ? esc(unit()) + ' ×' + t.multiplier : '-'}</span>
         </div>`).join('')}
@@ -1246,7 +1251,7 @@ function pageTiers() {
   if (!(S.tierTab >= 0 && S.tierTab < tiers.length)) S.tierTab = mine;
   // ข้อความหัวหน้าที่ร้านเขียน = เนื้อหาของร้าน → ภาษาอังกฤษใช้ tierIntroEn ถ้ามี ไม่งั้นแสดงของร้านภาษาไทย / ร้านไม่ได้เขียน → ข้อความตั้งต้นตามภาษา
   const intro = (isEn() && S.data.tierIntroEn) || S.data.tierIntro || tt('สมัครสมาชิกฟรี สะสม{u}ทุกบิล\nยิ่งสะสมมาก ยิ่งได้สิทธิ์มาก');
-  const opts = { logo: logoHtml('logo-xs'), shopName: cfg().name, unit: unit() };
+  const opts = { logo: logoHtml('logo-xs'), shopName: shopName(), unit: unit() };
   return `
     <header class="tp-top">
       <button class="back tp-back" data-act="go" data-page="home" aria-label="${tu('กลับหน้าแรก')}">${icon('left', 22)}</button>
@@ -1254,9 +1259,9 @@ function pageTiers() {
       <p class="tp-intro">${esc(intro).replace(/\n/g, '<br>')}</p>
     </header>
     <div class="tp-tabs" role="tablist" aria-label="${tu('ระดับสมาชิก')}">${tiers.map((t, i) => `
-      <button role="tab" data-act="tier-tab" data-id="${i}" aria-selected="${i === S.tierTab}">${esc(t.name)}<small>${i === mine ? tu('ระดับของคุณ') : '&nbsp;'}</small></button>`).join('')}
+      <button role="tab" data-act="tier-tab" data-id="${i}" aria-selected="${i === S.tierTab}">${esc(L(t))}<small>${i === mine ? tu('ระดับของคุณ') : '&nbsp;'}</small></button>`).join('')}
     </div>
-    <div class="tp-carousel" id="tier-carousel">${tiers.map(t => tierBanner(t, opts)).join('')}</div>
+    <div class="tp-carousel" id="tier-carousel">${tiers.map(t => tierBanner({ ...t, name: L(t) }, opts)).join('')}</div>
     <div class="tp-dots" aria-hidden="true">${tiers.map((t, i) => `<i class="${i === S.tierTab ? 'on' : ''}"></i>`).join('')}</div>
     <div class="tp-body" id="tier-detail">${tierDetail(S.tierTab)}</div>`;
 }
@@ -1271,9 +1276,9 @@ function autoPerks(i) {
   if (t.multiplier > 1) out.push(tt('ได้{u} ×{m} ทุกบิล', { m: t.multiplier }));
   const upTo = x => x.minTier && tierIndex(x.minTier.id) <= i && tierIndex(x.minTier.id) > 0;
   const list = names => (names.length > 3 ? names.slice(0, 3).join(', ') + tt(' และอีก {n} รายการ', { n: names.length - 3 }) : names.join(', '));
-  const rewards = (d.rewards || []).filter(upTo).map(r => r.name);
+  const rewards = (d.rewards || []).filter(upTo).map(r => L(r));
   if (i > 0 && rewards.length) out.push(tt('แลกของรางวัลเฉพาะสมาชิกระดับนี้: {list}', { list: list(rewards) }));
-  const promos = (d.promos || []).filter(upTo).map(p => p.title);
+  const promos = (d.promos || []).filter(upTo).map(p => L(p, 'title'));
   if (i > 0 && promos.length) out.push(tt('โปรโมชันเฉพาะสมาชิกระดับนี้: {list}', { list: list(promos) }));
   return out;
 }

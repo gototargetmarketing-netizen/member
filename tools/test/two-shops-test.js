@@ -40,7 +40,7 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
   const storage = { upload: async (p) => { uploads.push(p); return 'https://storage.test/storage/v1/object/public/images/' + p; } };
   const app = createApp({ db: () => db, verifier: {}, allowTestTokens: true, region: 'test', storage: () => storage, oa: (shop) => (oas[shop] ? oas[shop].oa : null),
     // ร้านทดสอบไม่มีไฟล์ใน shops/ → เปิดทุกแพ็กเกจให้ทั้ง 2 ร้าน (ชุดนี้ตรวจว่าข้อมูลไม่ข้ามร้าน ทุกคำสั่งต้องเรียกได้จริง)
-    features: async () => normalize({ tiers: true, branches: true, export: true, broadcast: true }) });
+    features: async () => normalize({ tiers: true, branches: true, export: true, broadcast: true, english: true }) });
   // รูปริชเมสเสจ 5 ขนาด (หัวไฟล์ JPG ที่บอกขนาด — ตัวกลางอ่านแค่ส่วนหัว)
   const jpg = (w, h) => Buffer.from([0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x11, 0x08, h >> 8, h & 255, w >> 8, w & 255, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1, 0xFF, 0xD9]).toString('base64');
   const richImages = Object.fromEntries([1040, 700, 460, 300, 240].map((w) => [w, jpg(w, w)]));
@@ -61,12 +61,12 @@ const SECRET = 'ลับร้านบี'; // ฝังในทุกชื�
 
   console.log('\n[1] ตั้งข้อมูล 2 ร้านผ่านคำสั่งจริง (รหัสซ้ำกันโดยตั้งใจ)');
   // ร้าน B: มีมากกว่าร้าน A ทุกอย่าง
-  for (const n of ['หนึ่ง', 'สอง']) await must('สาขา B', call(B, 'OB', 'adminBranchSave', { branch: { name: `สาขา${n} ${SECRET}` } }));
-  for (const n of ['หนึ่ง', 'สอง', 'สาม']) await must('รางวัล B', call(B, 'OB', 'adminRewardSave', { reward: { name: `ของ${n} ${SECRET}`, points: 10, status: 'ACTIVE' } }));
-  for (const n of ['หนึ่ง', 'สอง']) await must('โปร B', call(B, 'OB', 'adminPromoSave', { promo: { title: `โปร${n} ${SECRET}`, status: 'ACTIVE' } }));
-  for (const n of ['หนึ่ง', 'สอง']) await must('แต้มพิเศษ B', call(B, 'OB', 'adminRuleSave', { rule: { name: `แต้ม${n} ${SECRET}`, multiplier: 2, days: week, status: 'ACTIVE' } }));
+  for (const n of ['หนึ่ง', 'สอง']) await must('สาขา B', call(B, 'OB', 'adminBranchSave', { branch: { name: `สาขา${n} ${SECRET}`, nameEn: `Branch ${SECRET}` } }));
+  for (const n of ['หนึ่ง', 'สอง', 'สาม']) await must('รางวัล B', call(B, 'OB', 'adminRewardSave', { reward: { name: `ของ${n} ${SECRET}`, points: 10, status: 'ACTIVE', nameEn: `Gift ${SECRET}`, descriptionEn: `Desc ${SECRET}` } }));
+  for (const n of ['หนึ่ง', 'สอง']) await must('โปร B', call(B, 'OB', 'adminPromoSave', { promo: { title: `โปร${n} ${SECRET}`, status: 'ACTIVE', titleEn: `Promo ${SECRET}`, tagEn: 'B' } }));
+  for (const n of ['หนึ่ง', 'สอง']) await must('แต้มพิเศษ B', call(B, 'OB', 'adminRuleSave', { rule: { name: `แต้ม${n} ${SECRET}`, nameEn: `Rule ${SECRET}`, multiplier: 2, days: week, status: 'ACTIVE' } }));
   await must('ระดับ B', call(B, 'OB', 'adminTiersSave', { tiers: [
-    { name: `ระดับหนึ่ง ${SECRET}`, minPoints: 0, multiplier: 1 },
+    { name: `ระดับหนึ่ง ${SECRET}`, nameEn: `Tier ${SECRET}`, benefitsEn: `Perk ${SECRET}`, minPoints: 0, multiplier: 1 },
     { name: `ระดับสอง ${SECRET}`, minPoints: 50, multiplier: 1.5 },
     { name: `ระดับสาม ${SECRET}`, minPoints: 100, multiplier: 2 }] }));
   const idsB = [];

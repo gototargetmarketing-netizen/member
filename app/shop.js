@@ -130,8 +130,12 @@ export async function applyBrand(shop, brand) {
 }
 
 export function mergeBrand(base, b) {
-  const c = { ...base, texts: { ...(base.texts || {}) }, legal: { ...(base.legal || {}) }, colors: { ...(base.colors || {}) } };
+  const c = { ...base, texts: { ...(base.texts || {}) }, textsEn: { ...(base.textsEn || {}) }, legal: { ...(base.legal || {}) }, colors: { ...(base.colors || {}) } };
   if (b.name) c.name = b.name;
+  // สองภาษา รอบ 2: ภาษาอังกฤษที่เจ้าของร้านกรอกในหลังบ้าน (nameEn / textsEn / privacyTextEn)
+  // ร้านแก้ภาษาไทยในหลังบ้านแต่ไม่ได้กรอกอังกฤษ → ไม่ใช้คำแปลในไฟล์ร้าน (แปลมาจากข้อความเดิม เนื้อหาไม่ตรงกันแล้ว)
+  if (b.nameEn) c.nameEn = b.nameEn;
+  else if (b.name) delete c.nameEn;
   if (b.logo) c.logo = b.logo;
   // เปลี่ยนสไตล์ → ใช้สีของสไตล์ใหม่ ไม่เอาสีเดิมในไฟล์ตั้งค่ามาปน (เช่นสีน้ำตาลของธีมหรูบนธีมสว่าง)
   if (b.theme && b.theme !== base.theme) { c.theme = b.theme; c.colors = {}; }
@@ -148,8 +152,15 @@ export function mergeBrand(base, b) {
     c.colors.highlight = contrast(accent, card) >= 3 ? accent : textOn(card);
   }
   const t = b.texts || {};
-  ['pointUnit', 'greeting', 'registerTitle', 'registerSubtitle'].forEach(k => { if (t[k]) c.texts[k] = t[k]; });
-  if (b.privacyText) { c.legal.privacyText = b.privacyText; c.legal.privacyUrl = ''; }
+  const te = b.textsEn || {};
+  ['pointUnit', 'greeting', 'registerTitle', 'registerSubtitle'].forEach(k => {
+    if (t[k]) c.texts[k] = t[k];
+    if (te[k]) c.textsEn[k] = te[k];
+    else if (t[k]) delete c.textsEn[k]; // หน้าลูกค้าใช้ภาษาอังกฤษตั้งต้นของระบบแทน
+  });
+  // นโยบาย: ร้านเขียนฉบับไทยเอง → ฉบับอังกฤษต้องมาจากหลังบ้านเท่านั้น (ไม่มี = ลูกค้าเห็นฉบับไทย + "only available in Thai")
+  if (b.privacyText) { c.legal.privacyText = b.privacyText; c.legal.privacyUrl = ''; c.legal.privacyTextEn = b.privacyTextEn || ''; }
+  else if (b.privacyTextEn) c.legal.privacyTextEn = b.privacyTextEn;
   return c;
 }
 

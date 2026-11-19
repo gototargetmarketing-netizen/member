@@ -157,6 +157,49 @@ const POLICY_LINES = [
 ];
 const privacyTemplate = (shopName) => POLICY_LINES.join('\n').replace(/\{ชื่อร้าน\}/g, shopName);
 
+// ฉบับภาษาอังกฤษ (สองภาษา รอบ 2 — แปลจาก POLICY_LINES ข้อต่อข้อ / ยังไม่ผ่านนักกฎหมาย ตรวจพร้อมฉบับไทยในขั้น 7)
+// ลูกค้าเห็นหมายเหตุ "ฉบับภาษาไทยใช้บังคับ" เสมอ / ชื่อเมนูที่อ้างถึง ("Edit profile" "Delete membership") ต้องตรงกับ app/i18n-en.js
+// ชื่อร้านมีอักษรไทย → ใช้ "This shop" แทน (ไม่เอาอักษรไทยไปปนในฉบับอังกฤษ — เจ้าของร้านใส่ชื่ออังกฤษเองได้ในหลังบ้าน)
+// แก้ฉบับไทยเมื่อไร ต้องแก้ฉบับนี้ + shops/demo/config.js ด้วย (new-shop-test ตรวจหัวข้อให้ตรงกัน)
+const POLICY_LINES_EN = [
+  "{shop} (\"the Shop\") is responsible for members' personal data. The membership system provider processes the data on the Shop's behalf and only on the Shop's instructions.",
+  "",
+  "1) Data we collect",
+  "• First and last name, mobile number and date of birth",
+  "• LINE account details: user ID, display name and profile picture",
+  "• Purchase history, points, coupons and the branches you visit",
+  "• Whether you are a friend of the Shop's LINE account (if the Shop sends news via LINE)",
+  "",
+  "2) How we use your data",
+  "• To provide membership services, let you earn and redeem points, and let staff find your card",
+  "• To give you special benefits, such as birthday gifts and membership tiers",
+  "• To send news and promotions, only with your consent",
+  "• To summarize sales and improve the Shop's services",
+  "",
+  "3) News and promotions",
+  "Sent via the Shop's LINE account, only with your consent. The consent box may be ticked for you when you sign up. You can untick it before signing up and withdraw at any time in \"Edit profile\". Points for receiving news are given only once per person.",
+  "",
+  "4) Who can access your data",
+  "The shop owner and staff, only as needed for their work (staff see only part of your phone number), and the system provider. The Shop does not sell or share your data with others for marketing.",
+  "",
+  "5) Where your data is stored",
+  "On cloud servers in Singapore, encrypted in transit.",
+  "",
+  "6) How long we keep your data",
+  "For as long as you are a member. When you delete your account, the Shop deletes your name, phone number, date of birth, picture and LINE account. Only anonymous purchase history remains, together with a code derived from your LINE account that cannot be turned back into your account. This code is used only to prevent the points for receiving news from being given twice.",
+  "",
+  "7) Your rights",
+  "• View and edit your data yourself in \"Edit profile\"",
+  "• Delete your account yourself in \"Edit profile\" → \"Delete membership\" (remaining points and coupons will be lost and cannot be restored)",
+  "• Withdraw your consent to receive news at any time",
+  "• To request a copy of your data, object, or ask questions, contact the Shop in store or via the Shop's LINE account",
+  "• File a complaint with Thailand's Personal Data Protection Committee",
+  "",
+  "8) Changes to this policy",
+  "When the Shop updates this policy, you will be notified and asked to accept the new version before you continue using your membership card."
+];
+const privacyTemplateEn = (shopName) => POLICY_LINES_EN.join('\n').replace(/\{shop\}/g, /[\u0E00-\u0E7F]/.test(shopName) ? 'This shop' : shopName);
+
 function configText(a, today) {
   return `// ค่าตั้งค่าของร้าน ${js(a.name)} — สร้างด้วย tools/new-shop.js เมื่อ ${today}
 // ชื่อ โลโก้ สี ข้อความ: เจ้าของร้านแก้เองได้ในหลังบ้าน (เมนูหน้าตาร้าน) — ค่าในไฟล์นี้คือค่าตั้งต้น
@@ -185,7 +228,9 @@ ${featuresBlock(a.features)}  // นโยบายความเป็นส�
   // (แก้หลังมีลูกค้าแล้ว = ทุกคนต้องกดยอมรับฉบับใหม่)
   legal: {
     privacyUrl: '',
-    privacyText: ${js(privacyTemplate(a.name))}
+    privacyText: ${js(privacyTemplate(a.name))},
+    // ฉบับภาษาอังกฤษ (ใช้เมื่อเปิดสวิตช์ english) — เจ้าของร้านแก้ฉบับไทยในหลังบ้านแล้ว ฉบับนี้จะไม่ถูกใช้ ต้องเขียนฉบับอังกฤษในหลังบ้านด้วย
+    privacyTextEn: ${js(privacyTemplateEn(a.name))}
   }
 };
 `;
@@ -479,4 +524,4 @@ if (require.main === module) {
   main().catch((e) => { console.log(`\n✗ ${e.message}`); process.exitCode = 1; });
 }
 
-module.exports = { main, check, privacyTemplate, PACKAGES, RESERVED, normFeatures, replaceFeatures, addToShopsJs, shopSql, ownerSql, configText, loadModule };
+module.exports = { main, check, privacyTemplate, privacyTemplateEn, POLICY_LINES, POLICY_LINES_EN, PACKAGES, RESERVED, normFeatures, replaceFeatures, addToShopsJs, shopSql, ownerSql, configText, loadModule };

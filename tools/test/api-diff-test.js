@@ -92,6 +92,10 @@ function diff(a, b, p, out) {
   // ส่งคำสั่งเดียวกันให้ทั้งสองระบบ แล้วเทียบ
   // body เป็นฟังก์ชัน (side) => {...} ได้ — ใช้เมื่อต้องอ้างรหัสสมาชิก/คูปองซึ่งแต่ละระบบสุ่มคนละค่า
   // tweak(คำตอบ, side) = ปรับก่อนเทียบ (เช่น ตัดช่องที่ระบบใหม่ตั้งใจไม่มี / เรียงแถวที่ลำดับไม่มีความหมาย)
+  const dropEn = (x) => {
+    if (Array.isArray(x)) x.forEach(dropEn);
+    else if (x && typeof x === 'object') Object.keys(x).forEach((k) => { if (/[a-z]En$|_EN$/.test(k)) delete x[k]; else dropEn(x[k]); });
+  };
   async function both(label, body, expect, tweak) {
     const mk = (side) => Object.assign({ shop: SHOP }, typeof body === 'function' ? body(side) : body);
     const a = call(W, mk('A'));
@@ -106,6 +110,8 @@ function diff(a, b, p, out) {
       // PDPA ขั้นที่ 2 (ระบบใหม่เท่านั้น): สถานะนโยบาย/ลบบัญชีในหน้าลูกค้า + ตัวนับคนยอมรับนโยบายในหน้าตาร้าน
       delete o.privacy;
       delete o.policyAccepted;
+      // สองภาษา รอบ 2 (ระบบใหม่เท่านั้น): ข้อความภาษาอังกฤษของร้าน = ช่องที่ลงท้าย En / _EN (ระบบเดิมไม่มี)
+      dropEn(o);
       if (Array.isArray(o.items)) o.items = o.items.filter((x) => !(x && NEW_SETTINGS.includes(x.key)));
       return tweak ? tweak(o, side) : o;
     };

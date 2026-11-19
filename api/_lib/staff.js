@@ -14,14 +14,15 @@ const ALL_STAFF = ROLES;
 const MANAGERS = ['OWNER', 'ADMIN'];
 
 const RULES_SQL = `select id, name, multiplier, days, to_char(start_date, 'YYYY-MM-DD') as start_date,
-  to_char(end_date, 'YYYY-MM-DD') as end_date, branch, min_amount::float8 as min_amount, show_badge, status, min_tier_id
+  to_char(end_date, 'YYYY-MM-DD') as end_date, branch, min_amount::float8 as min_amount, show_badge, status, min_tier_id, name_en
   from point_rules where shop_id = $1 and deleted_at is null order by created_at, id`;
 
 // ---------- สาขา ----------
 // ทุกสาขาของร้าน (รวมที่ปิดแล้ว) เรียงตามลำดับที่ร้านตั้ง
 async function branchList(q, shopId) {
-  const r = await q.query('select id, name, status, sort from branches where shop_id = $1', [shopId]);
-  return r.rows.map((b) => ({ id: U.upper(b.id), name: String(b.name || ''), status: U.upper(b.status) === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE', sort: U.toInt(b.sort) }))
+  const r = await q.query('select id, name, status, sort, name_en from branches where shop_id = $1', [shopId]);
+  return r.rows.map((b) => ({ id: U.upper(b.id), name: String(b.name || ''), status: U.upper(b.status) === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE', sort: U.toInt(b.sort),
+    nameEn: String(b.name_en || '') }))
     .sort((a, b) => (a.sort - b.sort) || (a.id < b.id ? -1 : 1));
 }
 

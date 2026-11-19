@@ -923,3 +923,19 @@ input.input-err { border-color: var(--danger); }
 .tp-links .link { font-weight: 700; font-size: 14.5px; }
 .tp-rules { padding-left: 20px; display: grid; gap: 6px; }
 @media (prefers-reduced-motion: reduce) { .tp-dots i { transition: none; } }
+
+/* สองภาษา รอบ 2: ช่องภาษาอังกฤษในหลังบ้าน (อยู่ใต้ช่องไทยของเรื่องเดียวกัน — ผู้ใช้เลือก 19 พ.ย. 2569)
+   เส้นซ้ายสีเน้นบอกว่าเป็นคู่ของช่องข้างบน / ป้าย EN สีเดียวกันทั้งฟอร์ม ตาราง และการ์ดภาพรวม */
+.field-en { margin-top: -4px; padding-left: 12px; border-left: 3px solid color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.en-tag { display: inline-block; padding: 1px 6px; margin-right: 2px; border-radius: 6px; font-size: 11px; font-weight: 800; letter-spacing: .04em;
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface)); color: var(--text); vertical-align: 1px; }
+.chip-en { font-size: 12px; padding: 2px 8px; vertical-align: middle; background: color-mix(in srgb, var(--warning) 14%, var(--surface)); color: var(--warning); }
+.warn-text { color: var(--warning) !important; font-weight: 600 !important; }
+.notice-warn { background: color-mix(in srgb, var(--warning) 12%, var(--surface)); color: var(--warning); }
+.en-count { font-size: 14px; margin: 0 0 6px; }
+.en-card .tier-bar { margin: 0 0 10px; }
+.en-missing summary { cursor: pointer; font-weight: 700; font-size: 14px; }
+.en-missing ul { margin: 8px 0 4px; padding-left: 20px; display: grid; gap: 6px; font-size: 14px; }
+.en-missing .link { font-weight: 600; font-size: 14px; text-align: left; }
+.pv-lang { align-self: flex-start; }
+.tier-text-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
