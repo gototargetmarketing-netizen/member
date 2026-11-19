@@ -502,7 +502,7 @@ function renderShell() {
         <div class="adm-brand">
           ${logoHtml()}
           <div class="grow"><div class="adm-shop">${esc(cfg().name)}</div><div class="adm-sub">${tr('หลังบ้าน')}</div></div>
-          ${langSwitchHtml('adm-lang')}
+          ${/* ปุ่มภาษาบนแถบบน แสดงเฉพาะมือถือ (คอมย้ายไปไว้ล่างเมนูข้าง — วางข้างชื่อร้านแล้วชื่อร้านโดนตัด ผู้ใช้ขอย้าย 19 พ.ย. 2569) */ langSwitchHtml('adm-lang adm-lang-top')}
         </div>
         <nav class="adm-nav">${visiblePages().map(p => `
           <a href="#${p.id}" data-page="${p.id}">${icon(p.icon, 18)}<span>${tr(p.label)}</span></a>`).join('')}
@@ -511,6 +511,7 @@ function renderShell() {
         <div class="adm-me">
           <div class="adm-me-name">${esc(S.me.name)} <span class="chip">${esc(tr(ROLE_LABEL[S.me.role] || S.me.role))}</span></div>
           <a class="adm-link" href="${esc(S.shop.pageUrl('staff'))}">${icon('scan', 16)} ${tr('ไปหน้าพนักงาน')}</a>
+          <div class="adm-lang-row"><span>${tr('ภาษา')}</span>${langSwitchHtml('adm-lang adm-lang-side')}</div>
         </div>
       </aside>
       <div class="adm-col">

@@ -68,6 +68,7 @@ export default {
   'บัญชี LINE นี้ยังไม่มีสิทธิ์เข้าหลังบ้าน': 'This LINE account does not have back-office access yet',
   'ถ้าคุณเป็นเจ้าของร้าน ติดต่อผู้ดูแลระบบเพื่อเปิดสิทธิ์': 'If you are the shop owner, contact the system administrator to get access',
   'ไปหน้าพนักงาน': 'Go to staff page',
+  'ภาษา': 'Language',
   'ส่งออก Excel (CSV)': 'Export to Excel (CSV)',
   'ก่อนหน้า': 'Previous',
   'หน้า {n} / {n2}': 'Page {n} / {n2}',
