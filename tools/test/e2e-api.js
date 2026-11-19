@@ -447,7 +447,7 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     ok(await b.eval(`!document.querySelector('.adm-nav a[data-page=broadcast]')`), 'แพ็กเกจไม่มีส่งข้อความ → เจ้าของร้านไม่เห็นเมนู');
 
     console.log('\n[9] ส่งข้อความ รอบ 3: เพิ่มเพื่อน LINE OA ก่อนสมัคร + ช่องยินยอมติ๊กไว้ให้ + แต้มรับข่าวสาร');
-    await b.setFeatures('demo', { tiers: true, branches: true, export: true, broadcast: true });
+    await b.setFeatures('demo', { tiers: true, branches: true, export: true, broadcast: true, english: true }); // คืนค่าตามไฟล์ร้านจริง
     const oaSet = (set) => fetch('http://localhost:8105/__oa', { method: 'POST', body: JSON.stringify(set) });
     await oaSet({ friends: ['U_DEMO_OWNER'], limit: null }); // ลูกค้าใหม่ยังไม่ได้เพิ่มเพื่อน
     await sql(`update shops set consent_bonus_points = 20 where id = 'demo'`);
@@ -584,6 +584,68 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     await b.waitFor(`document.querySelector('.policy-count')`, 10000, 'ตัวนับยอมรับนโยบาย');
     ok(/ยอมรับฉบับที่ \d+ แล้ว [\d,]+ จาก [\d,]+ คน/.test(await b.text('.policy-count')), 'หน้าตาร้าน: "ยอมรับฉบับที่ N แล้ว X จาก Y คน"', await b.text('.policy-count'));
     await sql(`update shops set consent_version = $1 where id = 'demo'`, [v10.consent_version]);
+
+    console.log('\n[11] สองภาษา: ลูกค้าเลือกภาษาอังกฤษ (ร้าน demo เปิดสวิตช์ english)');
+    await b.eval(asUser('U_E2E_EN', 'Tom'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo?lang=en#home`);
+    await b.waitFor(`document.querySelector('#reg')`, 10000, 'ฟอร์มสมัครภาษาอังกฤษ');
+    // ชื่อร้านเป็นข้อความของร้าน (ส่วนก่อนหน้าตั้งเป็นภาษาไทย) → แสดงตามที่ร้านตั้ง ไม่นับว่าเป็นภาษาไทยปน
+    const shop11 = await b.eval(`document.title`);
+    const reg11 = (await b.text('#app')).split(shop11).join('<ชื่อร้าน>');
+    ok(await b.eval(`document.documentElement.lang === 'en' && document.querySelector('.lang-switch [data-lang=en]').getAttribute('aria-pressed') === 'true'`),
+      'ลิงก์ ?lang=en → หน้าเป็นภาษาอังกฤษ + ปุ่ม EN ถูกเลือก');
+    ok(/Join <ชื่อร้าน>/.test(reg11) && /First name/.test(reg11) && /Get 10 points when you join/.test(reg11) && /Sign up/.test(reg11) &&
+      !/[\u0E00-\u0E3E\u0E40-\u0E7F]/.test(reg11.replace(/<ชื่อร้าน>/g, '')), 'หน้าสมัครภาษาอังกฤษทั้งหน้า ไม่มีภาษาไทยปน (ยกเว้นชื่อร้าน)', reg11.slice(0, 400));
+    ok(await b.eval(`document.querySelector('#reg select[name=bdYear] option[value="2535"]').textContent === '1992' &&
+      document.querySelector('#reg select[name=bdMonth] option[value="3"]').textContent === 'March'`), 'วันเกิด: ชื่อเดือนอังกฤษ + ปี ค.ศ. (ค่าข้างในยังเป็น พ.ศ.)');
+    await b.click('#reg button[type=submit]');
+    ok(/Please enter your first name/.test(await b.text('#reg-error')), 'ตรวจฟอร์มในหน้าเว็บ → ข้อความภาษาอังกฤษ');
+    await b.type('#reg input[name=firstName]', 'Tom');
+    await b.type('#reg input[name=lastName]', 'Smith');
+    await b.eval(`(() => { const f = document.querySelector('#reg'); f.bdDay.value = '5'; f.bdMonth.value = '3'; f.bdYear.value = '2535'; return true; })()`);
+    await b.type('#reg input[name=phone]', '086-123-4567'); // เบอร์ของลูกค้าส่วน [1]
+    await b.eval(`document.querySelector('#reg input[name=consentPrivacy]').click()`);
+    await b.click('#reg button[type=submit]');
+    await b.waitFor(`/already registered/.test(document.getElementById('reg-error').innerText)`, 10000, 'ตัวกลางตอบเบอร์ซ้ำเป็นภาษาอังกฤษ');
+    ok(true, 'ตัวกลางตอบข้อผิดพลาดเป็นภาษาอังกฤษ (เบอร์นี้สมัครไว้แล้ว)');
+    await b.type('#reg input[name=phone]', '0639990011');
+    await b.click('#reg button[type=submit]');
+    await b.waitFor(`document.querySelector('.member-card') && document.querySelector('.modal')`, 10000, 'บัตร + ป๊อปอัปต้อนรับ');
+    ok(/Welcome!/.test(await b.text('.modal')) && /10 points welcome bonus/.test(await b.text('.modal')), 'ป๊อปอัปต้อนรับภาษาอังกฤษ', await b.text('.modal'));
+    await b.click('.modal [data-act=close]');
+    const home11 = await b.text('#app');
+    ok(/Hello/.test(home11) && /Membership card/.test(home11) && /Points (balance|collected)/.test(home11) && /Member since\s*\d{1,2} [A-Z][a-z]{2} 20\d\d/.test(home11),
+      'หน้าแรก: ข้อความระบบเป็นอังกฤษ + วันที่ปี ค.ศ.', home11.slice(0, 500));
+    ok(JSON.stringify(await b.eval(`[...document.querySelectorAll('.nav-btn')].map((x) => x.innerText.trim())`)) === JSON.stringify(['Home', 'Rewards', 'Coupons', 'History']),
+      'เมนูล่าง: Home / Rewards / Coupons / History');
+    await b.shot(path.join(OUT, 'n24-english-home.png'));
+    await b.nav(`${WEB}/demo#history`);
+    await b.waitFor(`document.querySelector('.tx-list')`, 10000, 'ประวัติ');
+    ok(/Points history/.test(await b.text('#app')) && /Welcome points for new members/.test(await b.text('.tx-list')),
+      'ประวัติ: รายละเอียดที่ระบบเขียนเป็นภาษาไทย แปลตอนแสดง');
+    await b.nav(`${WEB}/demo#home`);
+    await b.waitFor(`document.querySelector('.lang-switch [data-lang=th]')`, 8000, 'ปุ่ม TH');
+    await b.click('.lang-switch [data-lang=th]');
+    await b.waitFor(`document.querySelector('.nav-btn') && /หน้าแรก/.test(document.querySelector('.nav').innerText)`, 5000, 'สลับเป็นไทย');
+    ok(await b.eval(`document.documentElement.lang === 'th' && localStorage.getItem('crm_lang') === 'th'`), 'กด TH → เป็นภาษาไทยทันที + จำไว้ในเครื่อง');
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo#home`);
+    await b.waitFor(`document.querySelector('.nav')`, 10000, 'เปิดใหม่');
+    ok(/แลกของรางวัล/.test(await b.text('.nav')), 'เปิดใหม่ (ไม่มี ?lang) → ยังเป็นภาษาไทยตามที่เลือกไว้');
+    await b.click('.lang-switch [data-lang=en]');
+    await b.nav(`${WEB}/demo#profile`);
+    await b.waitFor(`document.querySelector('[data-act=delete-account]')`, 8000, 'หน้าข้อมูลของฉัน');
+    ok(/My profile/.test(await b.text('.page-head')) && await b.eval(`!!document.querySelector('.page-head .lang-switch')`), 'ข้อมูลของฉัน: หัวหน้าภาษาอังกฤษ + มีปุ่มสลับภาษา');
+    await b.click('[data-act=delete-account]');
+    await b.waitFor(`document.querySelector('.modal [data-act=delete-next]')`, 3000, 'ลบบัญชี ขั้นแรก');
+    await b.click('.modal [data-act=delete-next]');
+    await b.waitFor(`document.querySelector('#delete-word')`, 3000, 'ลบบัญชี ขั้นที่สอง');
+    ok(/Type DELETE to confirm/.test(await b.text('.modal')), 'ลบบัญชีภาษาอังกฤษ: ให้พิมพ์ DELETE (ลูกค้าต่างชาติพิมพ์ไทยไม่ได้)');
+    await b.type('#delete-word', 'delete');
+    ok(!(await b.eval(`document.querySelector('[data-act=delete-confirm]').disabled`)), 'พิมพ์ delete (ตัวเล็ก) → ปุ่มลบกดได้');
+    await b.click('.modal [data-act=close]');
+    await b.eval(`localStorage.removeItem('crm_lang')`);
 
     const errs = b.logs.filter((l) => /EXCEPTION|console\.error/.test(l));
     ok(errs.length === 0, 'ไม่มีข้อผิดพลาดในหน้าเว็บ', errs);

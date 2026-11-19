@@ -15,7 +15,7 @@ const path = require('path');
 const SHOPS_DIR = path.join(__dirname, '..', '..', 'shops');
 const SHOP_ID = /^[a-z0-9][a-z0-9-]{1,29}$/;
 // ชื่อสวิตช์ต้องตรงกับ SWITCHES ใน tools/new-shop.js และฟังก์ชัน *Feature() ใน app/admin.js
-const KEYS = ['tiers', 'branches', 'export', 'broadcast'];
+const KEYS = ['tiers', 'branches', 'export', 'broadcast', 'english']; // english = สองภาษา (หน้าเว็บอ่านเอง ตัวกลางไม่ต้องกันคำสั่งใด)
 const cache = new Map(); // ร้าน → Promise<แพ็กเกจ>
 
 // รูปเดียวกับที่หน้าเว็บอ่าน: เปิดเมื่อเป็น true เท่านั้น / maxBranches จำนวนเต็ม > 0 (ไม่ใส่ = ไม่จำกัด)

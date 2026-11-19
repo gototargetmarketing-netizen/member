@@ -2,6 +2,7 @@
 // ทดสอบในเครื่อง (localhost): LIFF ใช้ไม่ได้ จึงจำลองผู้ใช้แทน แล้วส่ง token ทดสอบ "TEST:<id>:<ชื่อ>"
 // Apps Script จะรับ token นี้ก็ต่อเมื่อเปิดโหมดทดสอบไว้ (เปิดเฉพาะสคริปต์ทดสอบของเรา) — ร้านจริงไม่รับ
 import { IS_LOCAL, getTestUser } from './devbar.js';
+import { t } from './i18n.js';
 
 export { IS_LOCAL };
 
@@ -19,8 +20,8 @@ export async function initLine(liffId) {
     };
   }
 
-  if (!window.liff) throw lineError('โหลดระบบ LINE ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่');
-  if (!liffId) throw lineError('ร้านนี้ยังไม่ได้ตั้งค่า LIFF');
+  if (!window.liff) throw lineError(t('โหลดระบบ LINE ไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'));
+  if (!liffId) throw lineError(t('ร้านนี้ยังไม่ได้ตั้งค่า LIFF'));
 
   await window.liff.init({ liffId, withLoginOnExternalBrowser: true });
 
@@ -50,6 +51,9 @@ export async function initLine(liffId) {
       return current || lastToken;
     },
     profile: { name: decoded.name || '', picture: decoded.picture || '' },
+    // ภาษาของแอป LINE ในเครื่อง (ใช้เลือกภาษาไทย/อังกฤษครั้งแรก — app/i18n.js) / getLanguage = LIFF รุ่นเก่า
+    language: typeof window.liff.getAppLanguage === 'function' ? window.liff.getAppLanguage()
+      : typeof window.liff.getLanguage === 'function' ? window.liff.getLanguage() : '',
     // เข้าสู่ระบบใหม่: ออกจากระบบก่อนเพื่อทิ้งรหัสเก่าที่ใช้ไม่ได้ แล้วให้ LINE ออกรหัสใหม่
     // ในแอป LINE เปิดหน้าใหม่แล้ว LIFF เข้าสู่ระบบให้เองอัตโนมัติ / นอกแอปพาไปหน้าเข้าสู่ระบบ LINE
     relogin() {

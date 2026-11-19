@@ -5,6 +5,7 @@
 // (URL หลักใน config.js ไม่ต้องเปลี่ยน) — ตั้งผ่านแผง "ทดสอบ" ในหน้าเว็บที่เปิดในเครื่อง
 
 import { showLoading, hideLoading } from './ui.js';
+import { t, getLang } from './i18n.js';
 
 export const apiKey = (shopId) => 'crm_api_url:' + shopId;
 
@@ -50,7 +51,7 @@ export function createApi(shop, line, options = {}) {
   // ถ้าเพิ่งลองไปแล้วยังไม่หาย → แจ้งผู้ใช้แทน ไม่โหลดวน
   function recover(message, code) {
     if (line.test || !reloginAllowed()) {
-      throw apiError(message || 'เชื่อมต่อ LINE ไม่สำเร็จ กรุณาปิดหน้านี้แล้วเปิดใหม่จากเมนูใน LINE', code);
+      throw apiError(message || t('เชื่อมต่อ LINE ไม่สำเร็จ กรุณาปิดหน้านี้แล้วเปิดใหม่จากเมนูใน LINE'), code);
     }
     markRelogin();
     hideLoading(true); // หน้ากำลังจะโหลดใหม่ ไม่ต้องค้างป๊อปอัปไว้บนหน้าเชื่อมต่อ LINE
@@ -88,22 +89,23 @@ export function createApi(shop, line, options = {}) {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           // shop: ระบบใหม่ (ตัวกลาง /api) ใช้ตัวเดียวทุกร้าน จึงต้องบอกร้าน / Apps Script แยกตัวต่อร้าน ไม่อ่านช่องนี้ (ส่งได้ไม่กระทบ)
-          body: JSON.stringify({ ...data, action, idToken, shop: shop.id }),
+          // lang = ภาษาของข้อความผิดพลาดที่ตัวกลางตอบ (Apps Script ไม่อ่านช่องนี้ → เว็บเดิมไม่กระทบ)
+          body: JSON.stringify({ ...data, action, idToken, shop: shop.id, lang: getLang() }),
           signal: ctrl.signal
         });
       } catch (e) {
         throw apiError(e && e.name === 'AbortError'
-          ? 'ระบบตอบช้าเกินไป กรุณาลองใหม่'
-          : 'เชื่อมต่อระบบไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่', 'NETWORK');
+          ? t('ระบบตอบช้าเกินไป กรุณาลองใหม่')
+          : t('เชื่อมต่อระบบไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่'), 'NETWORK');
       } finally {
         clearTimeout(timer);
       }
       let json;
       try { json = await res.json(); } catch (e) {
-        throw apiError('ระบบตอบกลับไม่ถูกต้อง (ตรวจสอบ apiUrl)', 'BAD_RESPONSE');
+        throw apiError(t('ระบบตอบกลับไม่ถูกต้อง (ตรวจสอบ apiUrl)'), 'BAD_RESPONSE');
       }
       if (json && !json.ok && AUTH_CODES.includes(json.code)) return recover(json.error, json.code);
-      if (!json || !json.ok) throw apiError((json && json.error) || 'เกิดข้อผิดพลาด', (json && json.code) || 'ERROR', json && json.debug);
+      if (!json || !json.ok) throw apiError((json && json.error) || t('เกิดข้อผิดพลาด'), (json && json.code) || 'ERROR', json && json.debug);
       clearRelogin(); // ใช้งานได้ปกติแล้ว ครั้งหน้าถ้ารหัสหายอีกก็เข้าสู่ระบบใหม่ให้ได้อีก
       return json;
   }

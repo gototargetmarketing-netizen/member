@@ -2,6 +2,7 @@
 // ร้านอัปโหลดรูปเองได้ (ขนาดแนะนำ 1200×500) / ไม่มีรูป = วาดจากสีของระดับ (ร้านที่ไม่มีนักออกแบบก็สวยตั้งแต่วันแรก)
 import { textOn, shade } from './shop.js';
 import { esc, icon } from './ui.js';
+import { t as tr } from './i18n.js'; // ตั้งชื่อ tr เพราะ t ในไฟล์นี้คือข้อมูลระดับ
 
 const HEX = /^#[0-9A-Fa-f]{6}$/;
 
@@ -19,7 +20,7 @@ export function tierPaint(color) {
 // t = { name, color, multiplier, image } / logo = HTML โลโก้ร้าน / unit = คำเรียกแต้มของร้าน
 export function tierBanner(t, { logo = '', shopName = '', unit = 'แต้ม' } = {}) {
   if (t.image) {
-    return `<div class="tier-banner has-img"><img src="${esc(t.image)}" alt="บัตรระดับ ${esc(t.name)}" loading="lazy" referrerpolicy="no-referrer"></div>`;
+    return `<div class="tier-banner has-img"><img src="${esc(t.image)}" alt="${tr('บัตรระดับ {tier}', { tier: esc(t.name) })}" loading="lazy" referrerpolicy="no-referrer"></div>`;
   }
   return `<div class="tier-banner" style="${tierPaint(t.color)}">
       <span class="tb-crown">${icon('crown', 120)}</span>

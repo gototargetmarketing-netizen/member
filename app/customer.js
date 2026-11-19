@@ -6,15 +6,26 @@ import { initLine, IS_LOCAL } from './line.js';
 import { createApi, createRetryKeeper } from './api.js';
 import { applyDevParams, mountDevBar } from './devbar.js';
 import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, qrSvg, setBusy, creditHtml, bootHtml } from './ui.js';
+import { t, initLang, autoLang, save as saveLang, isEn, langEnabled, langSwitchHtml, monthNames } from './i18n.js';
 
 const app = document.getElementById('app');
 const PAGES = ['home', 'rewards', 'coupons', 'history', 'collect', 'profile', 'tiers'];
 const S = { shop: null, line: null, api: null, data: null, page: 'home', histFilter: 'all', couponTab: 'active', ready: false, stale: false };
 const withRequestId = createRetryKeeper();
 
-const cfg = () => S.shop.config;
-const T = (key, fallback) => (cfg().texts && cfg().texts[key]) || fallback;
-const unit = () => T('pointUnit', 'แต้ม');
+// ยังโหลดไฟล์ร้านไม่สำเร็จ (เช่น ลิงก์ร้านผิด) → ค่าว่าง หน้าผิดพลาดยังแปลข้อความได้ ไม่พังซ้อน
+const cfg = () => (S.shop ? S.shop.config : {});
+// ข้อความหน้าจอที่ร้านตั้งเองได้ (greeting / registerTitle ฯลฯ): ภาษาอังกฤษใช้ textsEn ของร้าน ถ้าไม่มี → ข้อความตั้งต้นของระบบ (fallback ที่แปลแล้ว)
+// ต่างจากเนื้อหาของร้าน (นโยบาย / ขั้นตอนสะสมแต้ม / ข้อความหน้าสิทธิ์) ที่ไม่มีภาษาอังกฤษ → แสดงภาษาไทยของร้าน
+const T = (key, fallback) => { const src = isEn() ? cfg().textsEn : cfg().texts; return (src && src[key]) || fallback; };
+// คำเรียกแต้มอยู่กลางประโยคเสมอ → ภาษาอังกฤษใช้ points ถ้าร้านไม่ได้ตั้งคำอังกฤษไว้ (ไม่เอาคำไทยไปปนในประโยคอังกฤษ)
+const unit = () => T('pointUnit', isEn() ? 'points' : 'แต้ม');
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1);
+const unitOne = () => (isEn() ? unit().replace(/s$/i, '') : unit()); // "1 point" ไม่ใช่ "1 points"
+// แปลข้อความ + ใส่คำเรียกแต้ม {u} {U} {u1} ให้เอง — tu ใช้ใส่ใน HTML (escape คำเรียกแต้มแล้ว) / tt ใช้กับ toast และค่าที่ esc() ทีหลัง
+// ไฟล์นี้เรียกผ่าน tu / tt เท่านั้น (ไม่เรียก t ตรงๆ) เพราะหลายฟังก์ชันมีตัวแปรชื่อ t อยู่แล้ว (ข้อมูลระดับ / รายการแต้ม)
+const tu = (s, vars) => t(s, { u: esc(unit()), U: esc(cap(unit())), u1: esc(unitOne()), ...vars });
+const tt = (s, vars) => t(s, { u: unit(), U: cap(unit()), u1: unitOne(), ...vars });
 
 document.addEventListener('click', onClick);
 document.addEventListener('input', onPhoneInput);
@@ -29,15 +40,17 @@ main();
 async function main() {
   try {
     S.shop = await loadShop();
+    initLang(cfg()); // ร้านเปิดภาษาอังกฤษ (features.english) → ใช้ภาษาที่ลูกค้าเลือกไว้ / ร้านไม่เปิด = ไทยเสมอ
     applyDevParams(S.shop.id);
     captureJoinBranch();
     renderBoot();
     S.line = await initLine(cfg().liffId);
+    autoLang(S.line.language); // ยังไม่เคยเลือกภาษาเอง → ตามภาษาของแอป LINE
     S.api = createApi(S.shop, S.line, {
       beforeRelogin: saveRegisterDraft,
-      onRelogin: () => renderBoot('กำลังเชื่อมต่อ LINE ใหม่...'),
+      onRelogin: () => renderBoot(tt('กำลังเชื่อมต่อ LINE ใหม่...')),
       // ตอนเปิดหน้าครั้งแรกมีหน้าโหลดเต็มจอ (หรือบัตรจากครั้งก่อน) อยู่แล้ว ไม่ต้องขึ้นป๊อปอัปซ้อน
-      loadingText: (action) => (!S.ready ? null : LOADING_TEXT[action] || 'กำลังโหลด...')
+      loadingText: (action) => (!S.ready ? null : tt(LOADING_TEXT[action] || 'กำลังโหลด...'))
     });
     if (IS_LOCAL) mountDevBar(S.shop, S.api, { openNow: !S.api.overridden });
     S.page = pageFromHash();
@@ -53,7 +66,7 @@ async function main() {
     } catch (e) {
       // มีบัตรจากครั้งก่อนให้ดูอยู่แล้ว → แจ้งเตือนเฉยๆ ไม่ต้องเปลี่ยนเป็นหน้าผิดพลาด
       if (!S.stale) throw e;
-      toast('อัปเดตข้อมูลไม่สำเร็จ: ' + e.message, 'err');
+      toast(tt('อัปเดตข้อมูลไม่สำเร็จ: {msg}', { msg: e.message }), 'err');
     }
     S.ready = true;
   } catch (e) {
@@ -158,6 +171,7 @@ function onClick(e) {
     case 'delete-account': confirmDeleteAccount(); break;
     case 'delete-next': deleteAccountStep2(); break;
     case 'delete-confirm': doDeleteAccount(el); break;
+    case 'lang': saveLang(el.dataset.lang); closeModal(); if (S.data) render(); break;
     case 'close': closeModal(); break;
     case 'reload': window.location.reload(); break;
     case 'relogin': if (S.line) S.line.relogin(); break;
@@ -182,13 +196,13 @@ function renderError(e) {
   app.innerHTML = `
     <div class="state-page">
       <div class="state-icon">${icon('alert', 40)}</div>
-      <h1>เปิดไม่สำเร็จ</h1>
-      <p>${esc((e && e.message) || 'เกิดข้อผิดพลาด')}</p>
+      <h1>${tu('เปิดไม่สำเร็จ')}</h1>
+      <p>${esc((e && e.message) || tt('เกิดข้อผิดพลาด'))}</p>
       ${hint}
       ${IS_LOCAL && e && e.debug ? `<pre class="debug">${esc(e.debug)}</pre>` : ''}
       <div class="stack">
-        ${code === 'TOKEN_INVALID' || code === 'NO_TOKEN' ? '<button class="btn btn-primary" data-act="relogin">เข้าสู่ระบบใหม่</button>' : ''}
-        ${code === 'NO_SHOP' ? '' : '<button class="btn" data-act="reload">ลองใหม่</button>'}
+        ${code === 'TOKEN_INVALID' || code === 'NO_TOKEN' ? `<button class="btn btn-primary" data-act="relogin">${tu('เข้าสู่ระบบใหม่')}</button>` : ''}
+        ${code === 'NO_SHOP' ? '' : `<button class="btn" data-act="reload">${tu('ลองใหม่')}</button>`}
       </div>
     </div>`;
   if (IS_LOCAL && S.shop && !document.getElementById('devbar')) {
@@ -197,7 +211,7 @@ function renderError(e) {
 }
 
 function testBanner() {
-  return S.data && S.data.testMode ? '<div class="test-banner">โหมดทดสอบ — ข้อมูลไม่ใช่ของจริง</div>' : '';
+  return S.data && S.data.testMode ? `<div class="test-banner">${tu('โหมดทดสอบ — ข้อมูลไม่ใช่ของจริง')}</div>` : '';
 }
 
 /* =====================================================
@@ -214,8 +228,8 @@ function render() {
     app.innerHTML = testBanner() + `
       <div class="state-page">
         <div class="state-icon">${icon('shield', 40)}</div>
-        <h1>บัญชีสมาชิกถูกระงับ</h1>
-        <p>กรุณาติดต่อร้าน ${esc(cfg().name)}</p>
+        <h1>${tu('บัญชีสมาชิกถูกระงับ')}</h1>
+        <p>${tu('กรุณาติดต่อร้าน {shop}', { shop: esc(cfg().name) })}</p>
       </div>`;
     return;
   }
@@ -229,10 +243,10 @@ function render() {
 function nav() {
   const active = S.data.coupons.filter(c => c.status === 'ACTIVE').length;
   const items = [
-    ['home', 'home', 'หน้าแรก'],
-    ['rewards', 'gift', 'แลกของรางวัล'],
-    ['coupons', 'ticket', 'คูปอง'],
-    ['history', 'clock', 'ประวัติ']
+    ['home', 'home', tu('หน้าแรก')],
+    ['rewards', 'gift', tu('แลกของรางวัล')],
+    ['coupons', 'ticket', tu('คูปอง')],
+    ['history', 'clock', tu('ประวัติ')]
   ];
   return `<nav class="nav">${items.map(([page, ic, label]) => `
     <button class="nav-btn ${S.page === page ? 'active' : ''}" data-act="go" data-page="${page}">
@@ -242,7 +256,7 @@ function nav() {
 
 function pageHead(title, right = '') {
   return `<header class="page-head">
-    <button class="back" data-act="go" data-page="home" aria-label="กลับหน้าแรก">${icon('left', 22)}</button>
+    <button class="back" data-act="go" data-page="home" aria-label="${tu('กลับหน้าแรก')}">${icon('left', 22)}</button>
     <h1>${esc(title)}</h1><div class="page-head-right">${right}</div>
   </header>`;
 }
@@ -265,7 +279,7 @@ function avatarHtml() {
  * ===================================================== */
 // วันเกิดเลือกเป็น วัน / เดือน / ปี พ.ศ. (คนไทยคุ้นกว่า และหน้าตาเหมือนกันทุกเครื่อง
 // ปฏิทินของมือถือบางเครื่องเป็น ค.ศ. และต้องเลื่อนย้อนหลายสิบปี) — ส่งให้ Apps Script เป็น yyyy-mm-dd ค.ศ.
-const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+// ชื่อเดือนตามภาษา (monthNames ใน i18n.js) / ภาษาอังกฤษแสดงปี ค.ศ. แต่ค่าในตัวเลือกยังเป็น พ.ศ. → birthValue และฟอร์มที่จำไว้ใช้ได้เหมือนเดิม
 
 // value = วันเกิดเดิม yyyy-mm-dd (หน้าข้อมูลของฉัน) → เลือกไว้ให้
 function birthSelects(value = '') {
@@ -274,13 +288,13 @@ function birthSelects(value = '') {
   const pick = { bdDay: vd, bdMonth: vm, bdYear: vy ? vy + 543 : 0 };
   const opts = (placeholder, items, name) => `<option value="">${placeholder}</option>` + items.map(([v, t]) => `<option value="${v}" ${pick[name] === v ? 'selected' : ''}>${t}</option>`).join('');
   const days = Array.from({ length: 31 }, (_, i) => [i + 1, i + 1]);
-  const months = TH_MONTHS.map((m, i) => [i + 1, m]);
-  const years = Array.from({ length: 100 }, (_, i) => [thisYearBE - 1 - i, thisYearBE - 1 - i]);
+  const months = monthNames().map((m, i) => [i + 1, m]);
+  const years = Array.from({ length: 100 }, (_, i) => [thisYearBE - 1 - i, isEn() ? thisYearBE - 544 - i : thisYearBE - 1 - i]);
   return `
     <div class="date-row">
-      <select name="bdDay" class="select" aria-label="วันเกิด">${opts('วัน', days, 'bdDay')}</select>
-      <select name="bdMonth" class="select" aria-label="เดือนเกิด">${opts('เดือน', months, 'bdMonth')}</select>
-      <select name="bdYear" class="select" aria-label="ปีเกิด (พ.ศ.)">${opts('ปี พ.ศ.', years, 'bdYear')}</select>
+      <select name="bdDay" class="select" aria-label="${tu('วันเกิด@@วัน')}">${opts(tu('วัน'), days, 'bdDay')}</select>
+      <select name="bdMonth" class="select" aria-label="${tu('เดือนเกิด')}">${opts(tu('เดือน'), months, 'bdMonth')}</select>
+      <select name="bdYear" class="select" aria-label="${tu('ปีเกิด (พ.ศ.)')}">${opts(tu('ปี พ.ศ.'), years, 'bdYear')}</select>
     </div>`;
 }
 
@@ -301,20 +315,20 @@ function renderFriendGate() {
   const d = S.data;
   const welcome = d.settings.welcomePoints;
   app.innerHTML = testBanner() + `
-    <main class="screen register">
+    <main class="screen register">${langSwitchHtml('lang-on-page')}
       <div class="reg-hero">
         ${logoHtml('logo-lg')}
-        <h1>เพิ่มเพื่อน LINE ของร้านก่อนสมัครสมาชิก</h1>
-        <p>รับโปรโมชัน ส่วนลด และสิทธิพิเศษเฉพาะสมาชิก${esc(cfg().name ? ' ' + cfg().name : '')} ทาง LINE</p>
-        ${welcome > 0 ? `<div class="chip chip-accent">${icon('gift', 16)} สมัครแล้วรับทันที ${fmtNum(welcome)} ${esc(unit())}</div>` : ''}
+        <h1>${tu('เพิ่มเพื่อน LINE ของร้านก่อนสมัครสมาชิก')}</h1>
+        <p>${tu('รับโปรโมชัน ส่วนลด และสิทธิพิเศษเฉพาะสมาชิก{shop} ทาง LINE', { shop: esc(cfg().name ? ' ' + cfg().name : '') })}</p>
+        ${welcome > 0 ? `<div class="chip chip-accent">${icon('gift', 16)} ${tu('สมัครแล้วรับทันที {n} {u}', { n: fmtNum(welcome) })}</div>` : ''}
       </div>
       <section class="card gate-card">
         <ol class="gate-steps">
-          <li><b>กดเพิ่มเพื่อน</b> แล้วกด "เพิ่ม" ในหน้าของ LINE</li>
-          <li><b>กลับมาที่หน้านี้</b> แล้วกรอกข้อมูลสมัครสมาชิก</li>
+          <li>${tu('<b>กดเพิ่มเพื่อน</b> แล้วกด "เพิ่ม" ในหน้าของ LINE')}</li>
+          <li>${tu('<b>กลับมาที่หน้านี้</b> แล้วกรอกข้อมูลสมัครสมาชิก')}</li>
         </ol>
-        ${d.oa.addUrl ? `<a class="btn btn-primary btn-block btn-lg" href="${esc(d.oa.addUrl)}" data-friend-add>${icon('chat', 20)} เพิ่มเพื่อน</a>` : ''}
-        <button type="button" class="btn btn-block" data-act="friend-check">${icon('check', 18)} เพิ่มเพื่อนแล้ว ไปสมัครสมาชิก</button>
+        ${d.oa.addUrl ? `<a class="btn btn-primary btn-block btn-lg" href="${esc(d.oa.addUrl)}" data-friend-add>${icon('chat', 20)} ${tu('เพิ่มเพื่อน')}</a>` : ''}
+        <button type="button" class="btn btn-block" data-act="friend-check">${icon('check', 18)} ${tu('เพิ่มเพื่อนแล้ว ไปสมัครสมาชิก')}</button>
         <div class="form-error" id="gate-error" hidden></div>
       </section>
       ${creditHtml('credit-page')}
@@ -327,28 +341,28 @@ function renderFriendGate() {
 // ข้อความตามร่างที่ผู้ใช้กับน้องตกลง
 function renderPolicyGate() {
   app.innerHTML = testBanner() + `
-    <main class="screen register">
+    <main class="screen register">${langSwitchHtml('lang-on-page')}
       <div class="reg-hero">
         ${logoHtml('logo-lg')}
-        <h1>ร้านปรับปรุงนโยบายความเป็นส่วนตัว</h1>
-        <p>กรุณาอ่านและกดยอมรับเพื่อใช้บัตรสมาชิกต่อ</p>
+        <h1>${tu('ร้านปรับปรุงนโยบายความเป็นส่วนตัว')}</h1>
+        <p>${tu('กรุณาอ่านและกดยอมรับเพื่อใช้บัตรสมาชิกต่อ')}</p>
       </div>
       <section class="card gate-card">
-        <button type="button" class="btn btn-block" data-act="privacy">${icon('shield', 18)} อ่านนโยบาย</button>
-        <button type="button" class="btn btn-primary btn-block btn-lg" data-act="policy-accept">${icon('check', 20)} ยอมรับ</button>
+        <button type="button" class="btn btn-block" data-act="privacy">${icon('shield', 18)} ${tu('อ่านนโยบาย')}</button>
+        <button type="button" class="btn btn-primary btn-block btn-lg" data-act="policy-accept">${icon('check', 20)} ${tu('ยอมรับ')}</button>
         <div class="form-error" id="policy-error" hidden></div>
-        <p class="policy-leave">ไม่ต้องการใช้ต่อ? <button type="button" class="link link-danger" data-act="delete-account">ลบบัญชีสมาชิก</button></p>
+        <p class="policy-leave">${tu('ไม่ต้องการใช้ต่อ?')} <button type="button" class="link link-danger" data-act="delete-account">${tu('ลบบัญชีสมาชิก')}</button></p>
       </section>
       ${creditHtml('credit-page')}
     </main>`;
 }
 
 async function acceptPolicy(btn) {
-  setBusy(btn, true, 'กำลังบันทึก...');
+  setBusy(btn, true, tt('กำลังบันทึก...'));
   try {
     await S.api.call('acceptPolicy', { version: S.data.privacy.version });
     await refresh();
-    toast('ยอมรับนโยบายแล้ว ขอบคุณครับ', 'ok');
+    toast(tt('ยอมรับนโยบายแล้ว ขอบคุณครับ'), 'ok');
   } catch (e) {
     // ร้านเพิ่งแก้นโยบายอีกระหว่างอ่าน → โหลดฉบับล่าสุดให้อ่านใหม่
     if (e.code === 'POLICY_CHANGED') await refresh().catch(() => {});
@@ -363,38 +377,44 @@ function confirmDeleteAccount() {
   const m = S.data.member;
   if (!m) return;
   const coupons = (S.data.coupons || []).filter(c => c.status === 'ACTIVE').length;
-  const lost = [m.points > 0 ? `${unit()}คงเหลือ <b>${fmtNum(m.points)} ${esc(unit())}</b>` : '', coupons ? `คูปองที่ยังไม่ใช้ <b>${fmtNum(coupons)} ใบ</b>` : '']
-    .filter(Boolean).join(' และ');
+  const lost = [m.points > 0 ? tu('{u}คงเหลือ <b>{n} {u}</b>', { n: fmtNum(m.points) }) : '', coupons ? tu('คูปองที่ยังไม่ใช้ <b>{n} ใบ</b>', { n: fmtNum(coupons) }) : '']
+    .filter(Boolean).join(tu(' และ'));
   openModal(`
-    <div class="modal-head"><h2>ลบบัญชีสมาชิก?</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-    <p class="notice notice-danger">${icon('alert', 18)}<span>${lost ? lost + ' จะหายทั้งหมด และกู้คืนไม่ได้' : 'ข้อมูลสมาชิกจะถูกลบ และกู้คืนไม่ได้'}</span></p>
-    <p class="muted small">ร้านจะลบชื่อ เบอร์ วันเกิด และรูปโปรไฟล์ของคุณ ประวัติยอดซื้อจะเหลือแบบไม่มีชื่อ ถ้าสมัครใหม่ภายหลังจะเริ่มจาก 0</p>
+    <div class="modal-head"><h2>${tu('ลบบัญชีสมาชิก?')}</h2><button class="icon-btn" data-act="close" aria-label="${tu('ปิด')}">${icon('x')}</button></div>
+    <p class="notice notice-danger">${icon('alert', 18)}<span>${lost ? tu('{lost} จะหายทั้งหมด และกู้คืนไม่ได้', { lost }) : tu('ข้อมูลสมาชิกจะถูกลบ และกู้คืนไม่ได้')}</span></p>
+    <p class="muted small">${tu('ร้านจะลบชื่อ เบอร์ วันเกิด และรูปโปรไฟล์ของคุณ ประวัติยอดซื้อจะเหลือแบบไม่มีชื่อ ถ้าสมัครใหม่ภายหลังจะเริ่มจาก 0')}</p>
     <div class="modal-actions">
-      <button class="btn" data-act="close">ยกเลิก</button>
-      <button class="btn btn-danger-outline" data-act="delete-next">ต่อไป</button>
+      <button class="btn" data-act="close">${tu('ยกเลิก')}</button>
+      <button class="btn btn-danger-outline" data-act="delete-next">${tu('ต่อไป')}</button>
     </div>`);
 }
 
 function deleteAccountStep2() {
   const box = openModal(`
-    <div class="modal-head"><h2>ยืนยันลบบัญชี</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-    <label class="field"><span>พิมพ์คำว่า <b>ลบ</b> เพื่อยืนยัน</span>
+    <div class="modal-head"><h2>${tu('ยืนยันลบบัญชี')}</h2><button class="icon-btn" data-act="close" aria-label="${tu('ปิด')}">${icon('x')}</button></div>
+    <label class="field"><span>${tu('พิมพ์คำว่า <b>{word}</b> เพื่อยืนยัน', { word: tu('ลบ@@คำยืนยัน') })}</span>
       <input id="delete-word" autocomplete="off" maxlength="10" inputmode="text"></label>
     <div class="form-error" id="delete-error" hidden></div>
     <div class="modal-actions">
-      <button class="btn" data-act="close">ยกเลิก</button>
-      <button class="btn btn-danger" data-act="delete-confirm" disabled>ลบบัญชี</button>
+      <button class="btn" data-act="close">${tu('ยกเลิก')}</button>
+      <button class="btn btn-danger" data-act="delete-confirm" disabled>${tu('ลบบัญชี')}</button>
     </div>`);
   const input = box.querySelector('#delete-word');
   const go = box.querySelector('[data-act="delete-confirm"]');
-  input.addEventListener('input', () => { go.disabled = input.value.trim() !== 'ลบ'; });
+  input.addEventListener('input', () => { go.disabled = !deleteWordOk(input.value); });
   input.focus();
+}
+
+// คำยืนยัน: ไทยพิมพ์ "ลบ" / อังกฤษพิมพ์ DELETE (ลูกค้าต่างชาติพิมพ์ไทยไม่ได้ — ตัวเล็กใหญ่ได้) — ส่งให้ตัวกลางเป็น "ลบ" เสมอ
+function deleteWordOk(v) {
+  const w = String(v || '').trim();
+  return w === 'ลบ' || (isEn() && w.toUpperCase() === 'DELETE');
 }
 
 async function doDeleteAccount(btn) {
   const word = (document.getElementById('delete-word') || {}).value || '';
-  if (word.trim() !== 'ลบ') return;
-  setBusy(btn, true, 'กำลังลบ...');
+  if (!deleteWordOk(word)) return;
+  setBusy(btn, true, tt('กำลังลบ...'));
   try {
     await S.api.call('deleteAccount', { confirm: 'ลบ' });
   } catch (e) {
@@ -415,20 +435,20 @@ async function doDeleteAccount(btn) {
   openModal(`
     <div class="modal-center">
       <div class="big-icon ok">${icon('check', 34)}</div>
-      <h2>ลบบัญชีแล้ว</h2>
-      <p>ข้อมูลสมาชิกของคุณถูกลบเรียบร้อย</p>
-      <button class="btn btn-block" data-act="close">ปิด</button>
+      <h2>${tu('ลบบัญชีแล้ว')}</h2>
+      <p>${tu('ข้อมูลสมาชิกของคุณถูกลบเรียบร้อย')}</p>
+      <button class="btn btn-block" data-act="close">${tu('ปิด')}</button>
     </div>`);
 }
 
 // กดเพิ่มเพื่อนแล้ว → ถามตัวกลางใหม่ (ตัวกลางถาม LINE จริง ไม่เชื่อหน้าเว็บ)
 async function checkFriend(btn) {
-  if (btn) setBusy(btn, true, 'กำลังตรวจ...');
+  if (btn) setBusy(btn, true, tt('กำลังตรวจ...'));
   try {
     await refresh();
     const box = document.getElementById('gate-error');
     if (box && S.data.oa && S.data.oa.friend === false) {
-      box.textContent = 'ยังไม่พบว่าเพิ่มเพื่อนแล้ว กด "เพิ่มเพื่อน" แล้วกด "เพิ่ม" ในหน้าของ LINE ก่อน';
+      box.textContent = tt('ยังไม่พบว่าเพิ่มเพื่อนแล้ว กด "เพิ่มเพื่อน" แล้วกด "เพิ่ม" ในหน้าของ LINE ก่อน');
       box.hidden = false;
     }
   } catch (e) {
@@ -439,8 +459,8 @@ async function checkFriend(btn) {
 
 // ข้อความช่องยินยอมรับข่าวสาร (ผู้ใช้เลือกแบบที่ 1 — 12 พ.ย. 2569) บรรทัดเล็กบอกช่องทาง + วิธียกเลิก ตาม PDPA
 function consentLabel(bonus) {
-  return `<span><b>${bonus > 0 ? `รับฟรี ${fmtNum(bonus)} ${esc(unit())}ทันที</b> เมื่อรับข่าวสารและโปรโมชันจากร้าน` : 'รับข่าวสาร โปรโมชัน และสิทธิพิเศษจากร้าน</b>'}
-    <small class="consent-sub">ส่งทาง LINE ของร้าน · ยกเลิกได้ทุกเมื่อที่ "แก้ไขข้อมูล"</small></span>`;
+  return `<span>${bonus > 0 ? tu('<b>รับฟรี {n} {u}ทันที</b> เมื่อรับข่าวสารและโปรโมชันจากร้าน', { n: fmtNum(bonus) }) : tu('<b>รับข่าวสาร โปรโมชัน และสิทธิพิเศษจากร้าน</b>')}
+    <small class="consent-sub">${tu('ส่งทาง LINE ของร้าน · ยกเลิกได้ทุกเมื่อที่ "แก้ไขข้อมูล"')}</small></span>`;
 }
 
 function renderRegister() {
@@ -448,30 +468,30 @@ function renderRegister() {
   // ระบบเดิม (Apps Script) ไม่ส่ง signup มา → ช่องยินยอมแบบเดิม (ไม่ติ๊กไว้ให้)
   const su = S.data.signup;
   app.innerHTML = testBanner() + `
-    <main class="screen register">
+    <main class="screen register">${langSwitchHtml('lang-on-page')}
       <div class="reg-hero">
         ${logoHtml('logo-lg')}
-        <h1>${esc(T('registerTitle', 'สมัครสมาชิก ' + cfg().name))}</h1>
-        <p>${esc(T('registerSubtitle', 'สะสม' + unit() + 'ทุกครั้งที่ซื้อ แลกของรางวัลและสิทธิพิเศษ'))}</p>
-        ${welcome > 0 ? `<div class="chip chip-accent">${icon('gift', 16)} รับทันที ${fmtNum(welcome)} ${esc(unit())} เมื่อสมัคร</div>` : ''}
+        <h1>${esc(T('registerTitle', tt('สมัครสมาชิก {shop}', { shop: cfg().name })))}</h1>
+        <p>${esc(T('registerSubtitle', tt('สะสม{u}ทุกครั้งที่ซื้อ แลกของรางวัลและสิทธิพิเศษ')))}</p>
+        ${welcome > 0 ? `<div class="chip chip-accent">${icon('gift', 16)} ${tu('รับทันที {n} {u} เมื่อสมัคร', { n: fmtNum(welcome) })}</div>` : ''}
       </div>
       <form id="reg" class="card form" novalidate>
-        <label class="field"><span>ชื่อ <em>*</em></span>
-          <input name="firstName" maxlength="40" autocomplete="given-name" placeholder="ชื่อจริง"></label>
-        <label class="field"><span>นามสกุล <em>*</em></span>
-          <input name="lastName" maxlength="40" autocomplete="family-name" placeholder="นามสกุล"></label>
-        <div class="field"><span>วันเกิด <em>*</em> <small>ใช้มอบสิทธิพิเศษเดือนเกิด</small></span>
+        <label class="field"><span>${tu('ชื่อ')} <em>*</em></span>
+          <input name="firstName" maxlength="40" autocomplete="given-name" placeholder="${tu('ชื่อจริง')}"></label>
+        <label class="field"><span>${tu('นามสกุล')} <em>*</em></span>
+          <input name="lastName" maxlength="40" autocomplete="family-name" placeholder="${tu('นามสกุล')}"></label>
+        <div class="field"><span>${tu('วันเกิด')} <em>*</em> <small>${tu('ใช้มอบสิทธิพิเศษเดือนเกิด')}</small></span>
           ${birthSelects()}</div>
-        <label class="field"><span>เบอร์มือถือ <em>*</em></span>
+        <label class="field"><span>${tu('เบอร์มือถือ')} <em>*</em></span>
           ${phoneInput('')}</label>
         <label class="check"><input type="checkbox" name="consentPrivacy">
-          <span>ฉันยอมรับ<button type="button" class="link" data-act="privacy">นโยบายความเป็นส่วนตัว</button>ของร้าน <em>*</em></span></label>
+          <span>${tu('ฉันยอมรับ{link}ของร้าน', { link: privacyLink() })} <em>*</em></span></label>
         ${su ? `<label class="check check-consent"><input type="checkbox" name="consentMarketing" ${su.preticked ? 'checked' : ''}>
           ${consentLabel(su.bonusAvailable ? su.bonusPoints : 0)}</label>`
         : `<label class="check"><input type="checkbox" name="consentMarketing">
-          <span>ยินดีรับข่าวสารและโปรโมชันทาง LINE (ยกเลิกได้ทุกเมื่อ)</span></label>`}
+          <span>${tu('ยินดีรับข่าวสารและโปรโมชันทาง LINE (ยกเลิกได้ทุกเมื่อ)')}</span></label>`}
         <div class="form-error" id="reg-error" hidden></div>
-        <button class="btn btn-primary btn-block btn-lg" type="submit">สมัครสมาชิก</button>
+        <button class="btn btn-primary btn-block btn-lg" type="submit">${tu('สมัครสมาชิก')}</button>
       </form>
       ${creditHtml('credit-page')}
     </main>`;
@@ -515,7 +535,7 @@ function restoreRegisterDraft() {
   f.consentPrivacy.checked = !!draft.consentPrivacy;
   f.consentMarketing.checked = !!draft.consentMarketing;
   const box = document.getElementById('reg-error');
-  box.textContent = 'เชื่อมต่อ LINE ใหม่แล้ว ข้อมูลที่กรอกยังอยู่ กดสมัครสมาชิกอีกครั้งได้เลย';
+  box.textContent = tt('เชื่อมต่อ LINE ใหม่แล้ว ข้อมูลที่กรอกยังอยู่ กดสมัครสมาชิกอีกครั้งได้เลย');
   box.className = 'flash ok';
   box.hidden = false;
 }
@@ -568,46 +588,46 @@ const fmtBirth = iso => (iso ? fmtDate(iso + 'T00:00:00+07:00') : '-');
 function pageProfile() {
   const m = S.data.member;
   return `
-    ${pageHead('ข้อมูลของฉัน')}
+    ${pageHead(tt('ข้อมูลของฉัน'), langSwitchHtml())}
     <div class="profile-top">
       <span class="avatar avatar-lg">${avatarHtml()}</span>
       <b class="profile-name">${esc(m.name)}</b>
-      <span class="muted small">รหัสสมาชิก ${esc(m.memberId)}</span>
+      <span class="muted small">${tu('รหัสสมาชิก {id}', { id: esc(m.memberId) })}</span>
     </div>
     <form id="profile" class="card form profile-form" novalidate>
-      <label class="field"><span>ชื่อ <em>*</em></span>
+      <label class="field"><span>${tu('ชื่อ')} <em>*</em></span>
         <input name="firstName" maxlength="40" autocomplete="given-name" value="${esc(m.firstName || '')}"></label>
-      <label class="field"><span>นามสกุล <em>*</em></span>
-        <input name="lastName" maxlength="40" autocomplete="family-name" value="${esc(m.lastName || '')}" placeholder="นามสกุล"></label>
-      <label class="field"><span>เบอร์มือถือ <em>*</em></span>
+      <label class="field"><span>${tu('นามสกุล')} <em>*</em></span>
+        <input name="lastName" maxlength="40" autocomplete="family-name" value="${esc(m.lastName || '')}" placeholder="${tu('นามสกุล')}"></label>
+      <label class="field"><span>${tu('เบอร์มือถือ')} <em>*</em></span>
         ${phoneInput(m.phone || '')}
-        <small class="hint">ตัวเลข 10 หลัก พนักงานใช้ค้นหาบัตรสมาชิกของคุณ</small></label>
-      <div class="field"><span>วันเกิด <em>*</em></span>
+        <small class="hint">${tu('ตัวเลข 10 หลัก พนักงานใช้ค้นหาบัตรสมาชิกของคุณ')}</small></label>
+      <div class="field"><span>${tu('วันเกิด')} <em>*</em></span>
         ${m.birthLocked
           ? `<div class="locked">${icon('lock', 18)}<span>${esc(fmtBirth(m.birthDate))}</span></div>
-             <small class="hint">แก้วันเกิดได้ 1 ครั้ง (ใช้ไปแล้ว) ต้องการแก้อีก กรุณาติดต่อร้าน</small>`
+             <small class="hint">${tu('แก้วันเกิดได้ 1 ครั้ง (ใช้ไปแล้ว) ต้องการแก้อีก กรุณาติดต่อร้าน')}</small>`
           : `${birthSelects(m.birthDate)}
-             <small class="hint">${m.birthDate ? 'แก้วันเกิดได้ 1 ครั้ง (ใช้มอบสิทธิพิเศษเดือนเกิด)' : 'ใช้มอบสิทธิพิเศษเดือนเกิด'}</small>`}
+             <small class="hint">${m.birthDate ? tu('แก้วันเกิดได้ 1 ครั้ง (ใช้มอบสิทธิพิเศษเดือนเกิด)') : tu('ใช้มอบสิทธิพิเศษเดือนเกิด')}</small>`}
       </div>
       <label class="switch-row">
-        <span><b>รับข่าวสารและโปรโมชันทาง LINE</b><small class="hint" id="consent-hint">${esc(consentHint(m.marketingConsent))}</small></span>
+        <span><b>${tu('รับข่าวสารและโปรโมชันทาง LINE')}</b><small class="hint" id="consent-hint">${esc(consentHint(m.marketingConsent))}</small></span>
         <input type="checkbox" name="consentMarketing" class="switch-input" ${m.marketingConsent ? 'checked' : ''}>
         <span class="switch" aria-hidden="true"></span>
       </label>
       <div class="form-error" id="profile-error" hidden></div>
-      <button class="btn btn-primary btn-block btn-lg" type="submit">บันทึกข้อมูล</button>
+      <button class="btn btn-primary btn-block btn-lg" type="submit">${tu('บันทึกข้อมูล')}</button>
     </form>
-    <p class="profile-note">ร้านใช้ข้อมูลนี้ตาม<button type="button" class="link" data-act="privacy">นโยบายความเป็นส่วนตัว</button> · ${esc(unit())}และคูปองไม่เปลี่ยน</p>
-    ${S.data.privacy && S.data.privacy.canDelete ? '<p class="profile-delete"><button type="button" class="link link-danger" data-act="delete-account">ลบบัญชีสมาชิก</button></p>' : ''}`;
+    <p class="profile-note">${tu('ร้านใช้ข้อมูลนี้ตาม{link} · {u}และคูปองไม่เปลี่ยน', { link: privacyLink() })}</p>
+    ${S.data.privacy && S.data.privacy.canDelete ? `<p class="profile-delete"><button type="button" class="link link-danger" data-act="delete-account">${tu('ลบบัญชีสมาชิก')}</button></p>` : ''}`;
 }
 
 // คำใต้สวิตช์รับข่าวสาร: ยังไม่เคยได้แต้มรับข่าวสาร → บอกว่าเปิดแล้วได้กี่แต้ม / กำลังจะปิด → เตือนสั้นๆ ว่าจะพลาดอะไร (ไม่ห้ามปิด)
 function consentHint(on) {
   const su = S.data.signup;
   const m = S.data.member;
-  if (!on && m.marketingConsent) return 'ถ้ายกเลิก จะไม่ได้รับโปรโมชันและสิทธิพิเศษทาง LINE';
-  if (!on && su && su.bonusAvailable && su.bonusPoints > 0) return `เปิดรับ รับฟรี ${fmtNum(su.bonusPoints)} ${unit()}ทันที`;
-  return 'ปิดได้ทุกเมื่อ';
+  if (!on && m.marketingConsent) return tt('ถ้ายกเลิก จะไม่ได้รับโปรโมชันและสิทธิพิเศษทาง LINE');
+  if (!on && su && su.bonusAvailable && su.bonusPoints > 0) return tt('เปิดรับ รับฟรี {n} {u}ทันที', { n: fmtNum(su.bonusPoints) });
+  return tt('ปิดได้ทุกเมื่อ');
 }
 
 function onConsentToggle(e) {
@@ -630,26 +650,26 @@ function onProfileSubmit(e) {
   const firstName = f.firstName.value.trim();
   const lastName = f.lastName.value.trim();
   const phone = phoneDigits(f.phone.value);
-  if (!firstName) return showErr('กรุณากรอกชื่อ');
-  if (!lastName) return showErr('กรุณากรอกนามสกุล');
-  if (/\d/.test(firstName + lastName)) return showErr('ชื่อและนามสกุลต้องไม่มีตัวเลข');
-  if (!MOBILE.test(phone)) return fieldError(f.phone, PHONE_MSG);
+  if (!firstName) return showErr(tt('กรุณากรอกชื่อ'));
+  if (!lastName) return showErr(tt('กรุณากรอกนามสกุล'));
+  if (/\d/.test(firstName + lastName)) return showErr(tt('ชื่อและนามสกุลต้องไม่มีตัวเลข'));
+  if (!MOBILE.test(phone)) return fieldError(f.phone, tt(PHONE_MSG));
   let birthDate = m.birthDate;
   if (!m.birthLocked) {
     birthDate = birthValue(f);
-    if (birthDate === '') return showErr('กรุณาเลือกวันเกิดให้ครบ วัน เดือน ปี');
-    if (birthDate === null) return showErr('วันเกิดไม่ถูกต้อง กรุณาตรวจวันที่อีกครั้ง');
+    if (birthDate === '') return showErr(tt('กรุณาเลือกวันเกิดให้ครบ วัน เดือน ปี'));
+    if (birthDate === null) return showErr(tt('วันเกิดไม่ถูกต้อง กรุณาตรวจวันที่อีกครั้ง'));
   }
   S.pendingProfile = { firstName, lastName, phone, birthDate, consentMarketing: f.consentMarketing.checked };
   // เปลี่ยนวันเกิดได้ครั้งเดียว → ให้ยืนยันก่อน (เติมวันเกิดที่ยังว่างไม่นับ)
   if (m.birthDate && birthDate !== m.birthDate) {
     openModal(`
-      <div class="modal-head"><h2>ยืนยันเปลี่ยนวันเกิด</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-      <div class="confirm-cost"><b class="birth-new">${esc(fmtBirth(birthDate))}</b><span>เดิม ${esc(fmtBirth(m.birthDate))}</span></div>
-      <p class="notice">${icon('alert', 18)}<span>เปลี่ยนวันเกิดเองได้ครั้งเดียว หลังจากนี้ต้องติดต่อร้านถ้าต้องการแก้อีก</span></p>
+      <div class="modal-head"><h2>${tu('ยืนยันเปลี่ยนวันเกิด')}</h2><button class="icon-btn" data-act="close" aria-label="${tu('ปิด')}">${icon('x')}</button></div>
+      <div class="confirm-cost"><b class="birth-new">${esc(fmtBirth(birthDate))}</b><span>${tu('เดิม {date}', { date: esc(fmtBirth(m.birthDate)) })}</span></div>
+      <p class="notice">${icon('alert', 18)}<span>${tu('เปลี่ยนวันเกิดเองได้ครั้งเดียว หลังจากนี้ต้องติดต่อร้านถ้าต้องการแก้อีก')}</span></p>
       <div class="modal-actions">
-        <button class="btn" data-act="close">ยกเลิก</button>
-        <button class="btn btn-primary" data-act="profile-confirm">ยืนยัน บันทึก</button>
+        <button class="btn" data-act="close">${tu('ยกเลิก')}</button>
+        <button class="btn btn-primary" data-act="profile-confirm">${tu('ยืนยัน บันทึก')}</button>
       </div>`);
     return;
   }
@@ -668,9 +688,9 @@ async function doSaveProfile(btn) {
     closeModal();
     if (r.consentBonus) {
       await refresh().catch(() => {}); // แต้มในบัตร + ประวัติ อัปเดตทันที
-      toast(`บันทึกแล้ว รับ ${fmtNum(r.consentBonus)} ${unit()} จากการรับข่าวสาร`, 'ok');
+      toast(tt('บันทึกแล้ว รับ {n} {u} จากการรับข่าวสาร', { n: fmtNum(r.consentBonus) }), 'ok');
     } else {
-      toast(r.changed ? 'บันทึกข้อมูลแล้ว' : 'ข้อมูลเหมือนเดิม ไม่มีอะไรเปลี่ยน', 'ok');
+      toast(r.changed ? tt('บันทึกข้อมูลแล้ว') : tt('ข้อมูลเหมือนเดิม ไม่มีอะไรเปลี่ยน'), 'ok');
     }
     go('home');
   } catch (e) {
@@ -694,12 +714,12 @@ function badgesHtml() {
   if (!list.length) return '';
   return `<div class="bonus-cards">${list.map(b => {
     const mult = '×' + esc(String(b.multiplier));
-    const cond = [b.branchName ? 'เฉพาะ' + esc(b.branchName) : '', b.minAmount ? 'ซื้อครบ ฿' + fmtNum(b.minAmount) : ''].filter(Boolean).join(' · ');
+    const cond = [b.branchName ? tu('เฉพาะ{branch}', { branch: esc(b.branchName) }) : '', b.minAmount ? tu('ซื้อครบ ฿{n}', { n: fmtNum(b.minAmount) }) : ''].filter(Boolean).join(' · ');
     return `
     <section class="bonus-card">
       <div class="bonus-mult" aria-hidden="true">${mult}</div>
       <div class="grow">
-        <div class="bonus-title">วันนี้ได้${esc(unit())} ${mult} ${icon('bolt', 17)}</div>
+        <div class="bonus-title">${tu('วันนี้ได้{u} {mult}', { mult })} ${icon('bolt', 17)}</div>
         <div class="bonus-name">${esc(b.name)}</div>
         ${cond ? `<div class="bonus-cond">${cond}</div>` : ''}
       </div>
@@ -715,10 +735,10 @@ function friendCard() {
     <section class="oa-card">
       <div class="oa-card-icon">${icon('chat', 22)}</div>
       <div class="grow">
-        <b>เพิ่มเพื่อน LINE ของร้าน</b>
-        <small>รับโปรโมชันและสิทธิพิเศษสำหรับสมาชิก</small>
+        <b>${tu('เพิ่มเพื่อน LINE ของร้าน')}</b>
+        <small>${tu('รับโปรโมชันและสิทธิพิเศษสำหรับสมาชิก')}</small>
       </div>
-      <a class="btn btn-primary btn-sm" href="${esc(oa.addUrl)}" data-friend-add>เพิ่มเพื่อน</a>
+      <a class="btn btn-primary btn-sm" href="${esc(oa.addUrl)}" data-friend-add>${tu('เพิ่มเพื่อน')}</a>
     </section>`;
 }
 
@@ -731,10 +751,10 @@ function birthdayCard() {
       <section class="bday">
         <div class="bday-icon">${icon('cake', 30)}</div>
         <div class="grow">
-          <div class="bday-tag">เดือนเกิดของคุณ 🎉</div>
-          <h3>รับของขวัญวันเกิดแล้ว</h3>
-          <p>${esc(b.coupon.name)} · ใช้ที่ร้านได้ถึง ${fmtDate(b.coupon.expiresAt)}</p>
-          <button class="btn btn-primary btn-sm" data-act="coupon-qr" data-id="${esc(b.coupon.code)}">${icon('qr', 16)} แสดงคูปอง</button>
+          <div class="bday-tag">${tu('เดือนเกิดของคุณ 🎉')}</div>
+          <h3>${tu('รับของขวัญวันเกิดแล้ว')}</h3>
+          <p>${esc(b.coupon.name)} · ${tu('ใช้ที่ร้านได้ถึง {date}', { date: fmtDate(b.coupon.expiresAt) })}</p>
+          <button class="btn btn-primary btn-sm" data-act="coupon-qr" data-id="${esc(b.coupon.code)}">${icon('qr', 16)} ${tu('แสดงคูปอง')}</button>
         </div>
       </section>`;
   }
@@ -742,21 +762,21 @@ function birthdayCard() {
     <section class="bday">
       <div class="bday-icon">${icon('cake', 30)}</div>
       <div class="grow">
-        <div class="bday-tag">เดือนเกิดของคุณ 🎉</div>
-        <h3>สุขสันต์วันเกิด คุณ${esc(first)}</h3>
-        <p>ร้านมีของขวัญให้ รับได้ถึง ${fmtDate(b.until)}</p>
-        <div class="bday-gift">${icon('gift', 18)} ${esc(b.name)}${b.points ? ` <span class="muted small">(ใช้ ${fmtNum(b.points)} ${esc(unit())})</span>` : ''}</div>
-        <button class="btn btn-primary btn-sm" data-act="birthday-claim">รับของขวัญ</button>
+        <div class="bday-tag">${tu('เดือนเกิดของคุณ 🎉')}</div>
+        <h3>${tu('สุขสันต์วันเกิด คุณ{name}', { name: esc(first) })}</h3>
+        <p>${tu('ร้านมีของขวัญให้ รับได้ถึง {date}', { date: fmtDate(b.until) })}</p>
+        <div class="bday-gift">${icon('gift', 18)} ${esc(b.name)}${b.points ? ` <span class="muted small">${tu('(ใช้ {n} {u})', { n: fmtNum(b.points) })}</span>` : ''}</div>
+        <button class="btn btn-primary btn-sm" data-act="birthday-claim">${tu('รับของขวัญ')}</button>
       </div>
     </section>`;
 }
 
 async function claimBirthday(btn) {
-  setBusy(btn, true, 'กำลังรับ...');
+  setBusy(btn, true, tt('กำลังรับ...'));
   try {
     const r = await withRequestId('birthday', rid => S.api.call('claimBirthday', { requestId: rid }));
     await refresh();
-    toast(r.already ? 'คุณรับของขวัญปีนี้ไปแล้ว' : 'รับของขวัญวันเกิดแล้ว 🎉', 'ok');
+    toast(r.already ? tt('คุณรับของขวัญปีนี้ไปแล้ว') : tt('รับของขวัญวันเกิดแล้ว 🎉'), 'ok');
     if (r.coupon) showCouponQr(r.coupon.code);
   } catch (e) {
     setBusy(btn, false);
@@ -774,17 +794,17 @@ async function onRegister(e) {
   const lastName = f.lastName.value.trim();
   const birthDate = birthValue(f);
   const phone = phoneDigits(f.phone.value);
-  if (!firstName) return showErr('กรุณากรอกชื่อ');
-  if (!lastName) return showErr('กรุณากรอกนามสกุล');
-  if (/\d/.test(firstName + lastName)) return showErr('ชื่อและนามสกุลต้องไม่มีตัวเลข');
-  if (birthDate === '') return showErr('กรุณาเลือกวันเกิดให้ครบ วัน เดือน ปี');
-  if (birthDate === null) return showErr('วันเกิดไม่ถูกต้อง กรุณาตรวจวันที่อีกครั้ง');
-  if (!MOBILE.test(phone)) { showErr(''); return fieldError(f.phone, PHONE_MSG); }
-  if (!f.consentPrivacy.checked) return showErr('กรุณายอมรับนโยบายความเป็นส่วนตัว');
+  if (!firstName) return showErr(tt('กรุณากรอกชื่อ'));
+  if (!lastName) return showErr(tt('กรุณากรอกนามสกุล'));
+  if (/\d/.test(firstName + lastName)) return showErr(tt('ชื่อและนามสกุลต้องไม่มีตัวเลข'));
+  if (birthDate === '') return showErr(tt('กรุณาเลือกวันเกิดให้ครบ วัน เดือน ปี'));
+  if (birthDate === null) return showErr(tt('วันเกิดไม่ถูกต้อง กรุณาตรวจวันที่อีกครั้ง'));
+  if (!MOBILE.test(phone)) { showErr(''); return fieldError(f.phone, tt(PHONE_MSG)); }
+  if (!f.consentPrivacy.checked) return showErr(tt('กรุณายอมรับนโยบายความเป็นส่วนตัว'));
   showErr('');
 
   const btn = f.querySelector('button[type="submit"]');
-  setBusy(btn, true, 'กำลังสมัคร...');
+  setBusy(btn, true, tt('กำลังสมัคร...'));
   try {
     const r = await S.api.call('register', {
       firstName,
@@ -800,17 +820,17 @@ async function onRegister(e) {
     await refresh();
     const bonus = r.consentBonus || 0;
     if (r.welcomePoints > 0 || bonus > 0) {
-      const lines = [r.welcomePoints > 0 ? `<b>${fmtNum(r.welcomePoints)} ${esc(unit())}</b> ต้อนรับสมาชิกใหม่` : '',
-        bonus > 0 ? `<b>${fmtNum(bonus)} ${esc(unit())}</b> รับข่าวสารจากร้าน` : ''].filter(Boolean);
+      const lines = [r.welcomePoints > 0 ? tu('<b>{n} {u}</b> ต้อนรับสมาชิกใหม่', { n: fmtNum(r.welcomePoints) }) : '',
+        bonus > 0 ? tu('<b>{n} {u}</b> รับข่าวสารจากร้าน', { n: fmtNum(bonus) }) : ''].filter(Boolean);
       openModal(`
         <div class="modal-center">
           <div class="big-icon ok">${icon('gift', 34)}</div>
-          <h2>ยินดีต้อนรับ!</h2>
-          <p>คุณได้รับ ${lines.join(' + ')}</p>
-          <button class="btn btn-primary btn-block" data-act="close">เริ่มใช้งาน</button>
+          <h2>${tu('ยินดีต้อนรับ!')}</h2>
+          <p>${tu('คุณได้รับ {list}', { list: lines.join(' + ') })}</p>
+          <button class="btn btn-primary btn-block" data-act="close">${tu('เริ่มใช้งาน')}</button>
         </div>`);
     } else {
-      toast('สมัครสมาชิกสำเร็จ', 'ok');
+      toast(tt('สมัครสมาชิกสำเร็จ'), 'ok');
     }
   } catch (err) {
     setBusy(btn, false);
@@ -820,16 +840,24 @@ async function onRegister(e) {
   }
 }
 
+// ลิงก์ "นโยบายความเป็นส่วนตัว" กลางประโยค (ภาษาอังกฤษเป็นตัวเล็ก)
+const privacyLink = () => `<button type="button" class="link" data-act="privacy">${tu('นโยบายความเป็นส่วนตัว@@ลิงก์')}</button>`;
+
 function showPrivacy() {
   const legal = cfg().legal || {};
   if (legal.privacyUrl && /^https:\/\//.test(legal.privacyUrl)) {
     window.open(legal.privacyUrl, '_blank', 'noopener');
     return;
   }
+  // ภาษาอังกฤษ: ร้านมีฉบับอังกฤษ (privacyTextEn) → แสดงฉบับนั้น + บอกว่าฉบับไทยใช้บังคับ / ไม่มี → แสดงฉบับไทย + บอกว่ามีแต่ภาษาไทย
+  const enText = isEn() && legal.privacyTextEn;
+  const text = enText || legal.privacyText;
+  const note = isEn() && legal.privacyText
+    ? `<p class="notice">${icon('alert', 18)}<span>${enText ? tu('ฉบับภาษาไทยเป็นฉบับที่ใช้บังคับ') : tu('นโยบายฉบับนี้มีเฉพาะภาษาไทย')}</span></p>` : '';
   openModal(`
-    <div class="modal-head"><h2>นโยบายความเป็นส่วนตัว</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-    <p class="prose">${esc(legal.privacyText || 'ร้านยังไม่ได้ใส่นโยบายความเป็นส่วนตัว')}</p>
-    <button class="btn btn-block" data-act="close">ปิด</button>`);
+    <div class="modal-head"><h2>${tu('นโยบายความเป็นส่วนตัว')}</h2><button class="icon-btn" data-act="close" aria-label="${tu('ปิด')}">${icon('x')}</button></div>
+    ${note}<p class="prose">${esc(text || tt('ร้านยังไม่ได้ใส่นโยบายความเป็นส่วนตัว'))}</p>
+    <button class="btn btn-block" data-act="close">${tu('ปิด')}</button>`);
 }
 
 /* =====================================================
@@ -839,20 +867,20 @@ function pageHome() {
   const m = S.data.member;
   const active = S.data.coupons.filter(c => c.status === 'ACTIVE').length;
   const quick = [
-    ['collect', 'up', 'วิธีสะสม' + unit()],
-    ['rewards', 'gift', 'แลกของรางวัล'],
-    ['coupons', 'ticket', active ? `คูปอง (${active})` : 'คูปองของฉัน'],
-    ['history', 'clock', 'ประวัติ']
+    ['collect', 'up', tt('วิธีสะสม{u}')],
+    ['rewards', 'gift', tt('แลกของรางวัล')],
+    ['coupons', 'ticket', active ? tt('คูปอง ({n})', { n: active }) : tt('คูปองของฉัน')],
+    ['history', 'clock', tt('ประวัติ')]
   ];
   return `
-    <header class="hero">
+    <header class="hero${langEnabled() ? ' has-lang' : ''}">${langSwitchHtml('lang-on-hero')}
       <div class="hero-row">
-        <button type="button" class="avatar-wrap" data-act="go" data-page="profile" aria-label="แก้ไขข้อมูลของฉัน">
+        <button type="button" class="avatar-wrap" data-act="go" data-page="profile" aria-label="${tu('แก้ไขข้อมูลของฉัน')}">
           <span class="avatar">${avatarHtml()}</span><span class="avatar-edit">${icon('edit', 12)}</span></button>
         <div class="hero-text">
-          <div class="hello">${esc(T('greeting', 'สวัสดี'))}</div>
+          <div class="hello">${esc(T('greeting', tt('สวัสดี')))}</div>
           <div class="hero-name">${esc(m.name)}</div>
-          <button type="button" class="hero-edit" data-act="go" data-page="profile">แก้ไขข้อมูล ${icon('right', 13)}</button>
+          <button type="button" class="hero-edit" data-act="go" data-page="profile">${tu('แก้ไขข้อมูล')} ${icon('right', 13)}</button>
         </div>
         ${logoHtml('logo-sm')}
       </div>
@@ -870,7 +898,7 @@ function pageHome() {
     ${promos()}
     ${S.data.rewards.length ? `
       <section class="section">
-        <div class="section-head"><h2>ของรางวัล</h2><button class="link" data-act="go" data-page="rewards">ดูทั้งหมด ${icon('right', 14)}</button></div>
+        <div class="section-head"><h2>${tu('ของรางวัล')}</h2><button class="link" data-act="go" data-page="rewards">${tu('ดูทั้งหมด')} ${icon('right', 14)}</button></div>
         <div class="rewards-grid">${S.data.rewards.slice(0, 4).map(rewardCard).join('')}</div>
       </section>` : ''}
     ${creditHtml('credit-page')}`;
@@ -899,15 +927,15 @@ function tierCard(m) {
   const pct = next && next.minPoints > 0 ? Math.max(2, Math.min(100, t.points12m / next.minPoints * 100)) : 100;
   const color = tierColor(t.color);
   return `
-    <button type="button" class="tier-card tier-ring" data-act="go" data-page="tiers" aria-label="ระดับของคุณ ${esc(t.name)} — ดูสิทธิ์สมาชิก">
+    <button type="button" class="tier-card tier-ring" data-act="go" data-page="tiers" aria-label="${tu('ระดับของคุณ {tier} — ดูสิทธิ์สมาชิก', { tier: esc(t.name) })}">
       <span class="tr-ring">${ringSvg(pct, color)}<span class="tr-icon"${color ? ` style="color:${inkOn(color)}"` : ''}>${icon('crown', 22)}</span></span>
       <span class="tr-text">
-        <span class="tr-label">ระดับสมาชิกของคุณ</span>
+        <span class="tr-label">${tu('ระดับสมาชิกของคุณ')}</span>
         <span class="tr-name">${esc(t.name)}${t.multiplier > 1 ? ` <small>· ${u} ×${t.multiplier}</small>` : ''}</span>
         <span class="tr-next">${next
-          ? `อีก <b>${fmtNum(next.remaining)} ${u}</b> ถึง <b>${esc(next.name)}</b>`
-          : `<b>คุณอยู่ระดับสูงสุดแล้ว</b>`}</span>
-        ${t.until ? `<span class="tr-sub">คงระดับถึง ${fmtDate(t.until)}</span>` : ''}
+          ? tu('อีก <b>{n} {u}</b> ถึง <b>{tier}</b>', { n: fmtNum(next.remaining), tier: esc(next.name) })
+          : `<b>${tu('คุณอยู่ระดับสูงสุดแล้ว')}</b>`}</span>
+        ${t.until ? `<span class="tr-sub">${tu('คงระดับถึง {date}', { date: fmtDate(t.until) })}</span>` : ''}
       </span>
       <span class="tr-chev">${icon('right', 18)}</span>
     </button>`;
@@ -945,19 +973,19 @@ function memberCard(m) {
   return `
     <section class="member-card">
       <div class="mc-top">
-        <div><div class="mc-label">${esc(T('cardLabel', 'บัตรสมาชิก'))}</div><div class="mc-shop">${esc(cfg().name)}</div></div>
+        <div><div class="mc-label">${esc(T('cardLabel', tt('บัตรสมาชิก')))}</div><div class="mc-shop">${esc(cfg().name)}</div></div>
         ${tiers && m.tier ? mcTier(m) : ''}
       </div>
       <div class="mc-mid">
         <div>
-          <div class="mc-label">${esc(unit())}${tiersOn() ? 'คงเหลือ' : 'สะสม'}</div>
+          <div class="mc-label">${tiersOn() ? tu('{u}คงเหลือ') : tu('{u}สะสม')}</div>
           <div class="mc-points">${fmtNum(m.points)}<small>${esc(unit())}</small></div>
         </div>
-        <button class="mc-qr" data-act="qr">${icon('qr', 26)}<span>แสดง QR</span></button>
+        <button class="mc-qr" data-act="qr">${icon('qr', 26)}<span>${tu('แสดง QR')}</span></button>
       </div>
       <div class="mc-bottom">
-        <div><span>รหัสสมาชิก</span><b>${esc(m.memberId)}</b></div>
-        <div class="right"><span>สมาชิกตั้งแต่</span><b>${fmtDate(m.joinedAt)}</b></div>
+        <div><span>${tu('รหัสสมาชิก')}</span><b>${esc(m.memberId)}</b></div>
+        <div class="right"><span>${tu('สมาชิกตั้งแต่')}</span><b>${fmtDate(m.joinedAt)}</b></div>
       </div>
     </section>`;
 }
@@ -967,13 +995,13 @@ function promos() {
   if (!list.length) return '';
   return `
     <section class="section">
-      <div class="section-head"><h2>${esc(T('promoTitle', 'สิทธิพิเศษสำหรับคุณ'))}</h2></div>
+      <div class="section-head"><h2>${esc(T('promoTitle', tt('สิทธิพิเศษสำหรับคุณ')))}</h2></div>
       <div class="promo-track">${list.map(p => {
         const inner = `
           ${p.image ? `<img src="${esc(p.image)}" alt="" loading="lazy">` : ''}
           <div class="promo-text">
             ${p.tag ? `<span class="promo-tag">${esc(p.tag)}</span>` : ''}
-            ${p.minTier ? `<span class="promo-tag promo-tier">${p.locked ? icon('lock', 11) + ' ' : ''}สำหรับระดับ ${esc(p.minTier.name)} ขึ้นไป</span>` : ''}
+            ${p.minTier ? `<span class="promo-tag promo-tier">${p.locked ? icon('lock', 11) + ' ' : ''}${tu('สำหรับระดับ {tier} ขึ้นไป', { tier: esc(p.minTier.name) })}</span>` : ''}
             <div class="promo-title">${esc(p.title)}</div>
             ${p.subtitle ? `<div class="promo-sub">${esc(p.subtitle)}</div>` : ''}
           </div>`;
@@ -987,9 +1015,9 @@ function promos() {
 function showMemberQr() {
   const m = S.data.member;
   openModal(`
-    <div class="modal-head"><h2>QR สมาชิก</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tu('QR สมาชิก')}</h2><button class="icon-btn" data-act="close" aria-label="${tu('ปิด')}">${icon('x')}</button></div>
     <div class="qr-box">${qrSvg(m.memberId)}<div class="qr-code-text">${esc(m.memberId)}</div></div>
-    <p class="muted center">แสดง QR นี้ให้พนักงานสแกน เพื่อสะสม${esc(unit())}หรือใช้คูปอง</p>`);
+    <p class="muted center">${tu('แสดง QR นี้ให้พนักงานสแกน เพื่อสะสม{u}หรือใช้คูปอง')}</p>`);
 }
 
 /* =====================================================
@@ -1001,18 +1029,18 @@ function rewardCard(r) {
   // ระดับไม่ถึง: แสดงแต่ล็อก (ผู้ใช้เลือก 7 พ.ย. 2569 — ลูกค้ารู้ว่ามีอะไรรออยู่ เป็นแรงจูงใจ) / ระบบก็ไม่ยอมให้แลกอีกชั้น
   const locked = r.locked === true && r.minTier;
   const can = !soldOut && !locked && pts >= r.points;
-  const label = soldOut ? 'หมดแล้ว' : locked ? `${icon('lock', 14)} ระดับ ${esc(r.minTier.name)} ขึ้นไป` : can ? 'แลกของรางวัล' : `ขาดอีก ${fmtNum(r.points - pts)}`;
+  const label = soldOut ? tu('หมดแล้ว') : locked ? `${icon('lock', 14)} ${tu('ระดับ {tier} ขึ้นไป', { tier: esc(r.minTier.name) })}` : can ? tu('แลกของรางวัล@@ปุ่ม') : tu('ขาดอีก {n}', { n: fmtNum(r.points - pts) });
   return `
     <article class="reward ${locked ? 'is-locked' : ''}">
       <div class="reward-img">
         ${r.image ? `<img src="${esc(r.image)}" alt="" loading="lazy">` : `<div class="reward-ph">${icon('gift', 34)}</div>`}
         <span class="reward-cost">${fmtNum(r.points)} ${esc(unit())}</span>
-        ${r.minTier ? `<span class="reward-tier">${locked ? icon('lock', 12) : ''}${esc(r.minTier.name)} ขึ้นไป</span>` : ''}
+        ${r.minTier ? `<span class="reward-tier">${locked ? icon('lock', 12) : ''}${tu('{tier} ขึ้นไป', { tier: esc(r.minTier.name) })}</span>` : ''}
       </div>
       <div class="reward-body">
         <h3>${esc(r.name)}</h3>
         ${r.description ? `<p>${esc(r.description)}</p>` : ''}
-        ${r.remaining != null && r.remaining > 0 && r.remaining <= 10 ? `<div class="reward-left">เหลือ ${fmtNum(r.remaining)} สิทธิ์</div>` : ''}
+        ${r.remaining != null && r.remaining > 0 && r.remaining <= 10 ? `<div class="reward-left">${tu('เหลือ {n} สิทธิ์', { n: fmtNum(r.remaining) })}</div>` : ''}
         <button class="btn btn-primary btn-sm btn-block" data-act="redeem" data-id="${esc(r.id)}" ${can ? '' : 'disabled'}>${label}</button>
       </div>
     </article>`;
@@ -1020,11 +1048,11 @@ function rewardCard(r) {
 
 function pageRewards() {
   const list = S.data.rewards;
-  return pageHead('แลกของรางวัล', `<span class="chip">${fmtNum(S.data.member.points)} ${esc(unit())}</span>`) + `
+  return pageHead(tt('แลกของรางวัล'), `<span class="chip">${fmtNum(S.data.member.points)} ${esc(unit())}</span>`) + `
     <section class="section">
       ${list.length
         ? `<div class="rewards-grid">${list.map(rewardCard).join('')}</div>`
-        : `<div class="empty">${icon('gift', 36)}<p>ยังไม่มีของรางวัลในตอนนี้</p></div>`}
+        : `<div class="empty">${icon('gift', 36)}<p>${tu('ยังไม่มีของรางวัลในตอนนี้')}</p></div>`}
     </section>`;
 }
 
@@ -1033,20 +1061,20 @@ function confirmRedeem(id) {
   if (!r) return;
   const pts = S.data.member.points;
   openModal(`
-    <div class="modal-head"><h2>ยืนยันการแลก</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tu('ยืนยันการแลก')}</h2><button class="icon-btn" data-act="close" aria-label="${tu('ปิด')}">${icon('x')}</button></div>
     <div class="confirm-title">${esc(r.name)}</div>
-    <div class="confirm-cost"><b>${fmtNum(r.points)}</b><span>${esc(unit())}ที่ใช้</span>
-      <div class="muted">คงเหลือ ${fmtNum(pts)} → ${fmtNum(pts - r.points)} ${esc(unit())}</div></div>
-    <p class="muted">หลังแลก คุณจะได้คูปองในหน้า "คูปอง" ให้แสดง QR คูปองกับพนักงานเพื่อรับของ</p>
+    <div class="confirm-cost"><b>${fmtNum(r.points)}</b><span>${tu('{u}ที่ใช้')}</span>
+      <div class="muted">${tu('คงเหลือ {from} → {to} {u}', { from: fmtNum(pts), to: fmtNum(pts - r.points) })}</div></div>
+    <p class="muted">${tu('หลังแลก คุณจะได้คูปองในหน้า "คูปอง" ให้แสดง QR คูปองกับพนักงานเพื่อรับของ')}</p>
     <div class="form-error" id="redeem-error" hidden></div>
     <div class="modal-actions">
-      <button class="btn" data-act="close">ยกเลิก</button>
-      <button class="btn btn-primary" data-act="redeem-confirm" data-id="${esc(r.id)}">ยืนยันการแลก</button>
+      <button class="btn" data-act="close">${tu('ยกเลิก')}</button>
+      <button class="btn btn-primary" data-act="redeem-confirm" data-id="${esc(r.id)}">${tu('ยืนยันการแลก')}</button>
     </div>`);
 }
 
 async function doRedeem(id, btn) {
-  setBusy(btn, true, 'กำลังแลก...');
+  setBusy(btn, true, tt('กำลังแลก...'));
   try {
     const r = await withRequestId('redeem:' + id, rid => S.api.call('redeem', { rewardId: id, requestId: rid }));
     await refresh();
@@ -1054,11 +1082,11 @@ async function doRedeem(id, btn) {
     openModal(`
       <div class="modal-center">
         <div class="big-icon ok">${icon('check', 34)}</div>
-        <h2>แลกสำเร็จ!</h2>
-        ${coupon ? `<p><b>${esc(coupon.name)}</b><br><span class="muted">ใช้ได้ถึง ${fmtDate(coupon.expiresAt)}</span></p>` : '<p>รายการนี้แลกไปแล้ว</p>'}
+        <h2>${tu('แลกสำเร็จ!')}</h2>
+        ${coupon ? `<p><b>${esc(coupon.name)}</b><br><span class="muted">${tu('ใช้ได้ถึง {date}', { date: fmtDate(coupon.expiresAt) })}</span></p>` : `<p>${tu('รายการนี้แลกไปแล้ว')}</p>`}
         <div class="stack">
-          ${coupon ? `<button class="btn btn-primary btn-block" data-act="coupon-qr" data-id="${esc(coupon.code)}">${icon('qr', 18)} แสดง QR คูปองเลย</button>` : ''}
-          <button class="btn btn-block" data-act="go" data-page="coupons">ไปหน้าคูปอง</button>
+          ${coupon ? `<button class="btn btn-primary btn-block" data-act="coupon-qr" data-id="${esc(coupon.code)}">${icon('qr', 18)} ${tu('แสดง QR คูปองเลย')}</button>` : ''}
+          <button class="btn btn-block" data-act="go" data-page="coupons">${tu('ไปหน้าคูปอง')}</button>
         </div>
       </div>`);
   } catch (e) {
@@ -1080,22 +1108,22 @@ function pageCoupons() {
   const list = S.couponTab === 'past' ? past : active;
   const tabs = `
     <div class="tabs">
-      <button class="${S.couponTab !== 'past' ? 'active' : ''}" data-act="coupon-tab" data-tab="active">ใช้ได้ (${active.length})</button>
-      <button class="${S.couponTab === 'past' ? 'active' : ''}" data-act="coupon-tab" data-tab="past">ใช้แล้ว/หมดอายุ</button>
+      <button class="${S.couponTab !== 'past' ? 'active' : ''}" data-act="coupon-tab" data-tab="active">${tu('ใช้ได้ ({n})', { n: active.length })}</button>
+      <button class="${S.couponTab === 'past' ? 'active' : ''}" data-act="coupon-tab" data-tab="past">${tu('ใช้แล้ว/หมดอายุ')}</button>
     </div>`;
-  return pageHead('คูปองของฉัน') + `<section class="section">${tabs}
+  return pageHead(tt('คูปองของฉัน')) + `<section class="section">${tabs}
     ${list.length ? list.map(couponCard).join('') : `
-      <div class="empty">${icon('ticket', 36)}<p>${S.couponTab === 'past' ? 'ยังไม่มีคูปองที่ใช้แล้ว' : 'ยังไม่มีคูปอง'}</p>
-        ${S.couponTab === 'past' ? '' : `<button class="btn btn-primary" data-act="go" data-page="rewards">แลกของรางวัลด้วย${esc(unit())}</button>`}
+      <div class="empty">${icon('ticket', 36)}<p>${S.couponTab === 'past' ? tu('ยังไม่มีคูปองที่ใช้แล้ว') : tu('ยังไม่มีคูปอง')}</p>
+        ${S.couponTab === 'past' ? '' : `<button class="btn btn-primary" data-act="go" data-page="rewards">${tu('แลกของรางวัลด้วย{u}')}</button>`}
       </div>`}
   </section>`;
 }
 
 function couponCard(c) {
-  const label = { ACTIVE: 'ใช้ได้', USED: 'ใช้แล้ว', EXPIRED: 'หมดอายุ', CANCELLED: 'ยกเลิก' }[c.status] || c.status;
-  const meta = c.status === 'ACTIVE' ? 'ใช้ได้ถึง ' + fmtDate(c.expiresAt)
-    : c.status === 'USED' ? 'ใช้เมื่อ ' + fmtDateTime(c.usedAt)
-      : 'หมดอายุ ' + fmtDate(c.expiresAt);
+  const label = { ACTIVE: tt('ใช้ได้'), USED: tt('ใช้แล้ว'), EXPIRED: tt('หมดอายุ'), CANCELLED: tt('ยกเลิก@@คูปอง') }[c.status] || c.status;
+  const meta = c.status === 'ACTIVE' ? tt('ใช้ได้ถึง {date}', { date: fmtDate(c.expiresAt) })
+    : c.status === 'USED' ? tt('ใช้เมื่อ {date}', { date: fmtDateTime(c.usedAt) })
+      : tt('หมดอายุ {date}', { date: fmtDate(c.expiresAt) });
   return `
     <article class="coupon ${c.status === 'ACTIVE' ? '' : 'is-past'}">
       <div class="coupon-side">${icon('ticket', 26)}<span>${esc(label)}</span></div>
@@ -1103,7 +1131,7 @@ function couponCard(c) {
         <h3>${esc(c.name)}</h3>
         <div class="coupon-meta">${esc(meta)}</div>
         <div class="coupon-code">${esc(c.code)}</div>
-        ${c.status === 'ACTIVE' ? `<button class="btn btn-primary btn-sm" data-act="coupon-qr" data-id="${esc(c.code)}">${icon('qr', 16)} แสดง QR ให้พนักงาน</button>` : ''}
+        ${c.status === 'ACTIVE' ? `<button class="btn btn-primary btn-sm" data-act="coupon-qr" data-id="${esc(c.code)}">${icon('qr', 16)} ${tu('แสดง QR ให้พนักงาน')}</button>` : ''}
       </div>
     </article>`;
 }
@@ -1112,37 +1140,51 @@ function showCouponQr(code) {
   const c = S.data.coupons.find(x => x.code === code);
   if (!c) return;
   openModal(`
-    <div class="modal-head"><h2>${esc(c.name)}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${esc(c.name)}</h2><button class="icon-btn" data-act="close" aria-label="${tu('ปิด')}">${icon('x')}</button></div>
     <div class="qr-box">${qrSvg(c.code)}<div class="qr-code-text">${esc(c.code)}</div></div>
-    <p class="muted center">ให้พนักงานสแกน QR นี้เพื่อใช้คูปอง<br>คูปองจะถูกใช้เมื่อพนักงานยืนยันเท่านั้น · ใช้ได้ถึง ${fmtDate(c.expiresAt)}</p>`,
+    <p class="muted center">${tu('ให้พนักงานสแกน QR นี้เพื่อใช้คูปอง')}<br>${tu('คูปองจะถูกใช้เมื่อพนักงานยืนยันเท่านั้น · ใช้ได้ถึง {date}', { date: fmtDate(c.expiresAt) })}</p>`,
   { onClose: () => { refresh().catch(() => {}); } }); // พนักงานอาจเพิ่งใช้คูปองไป → โหลดสถานะใหม่
 }
 
 /* =====================================================
  * ประวัติแต้ม
  * ===================================================== */
-const TX_LABEL = { EARN: 'สะสมจากการซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกของรางวัล', ADJUST: 'ปรับโดยร้าน', CONSENT: 'รับข่าวสารจากร้าน', DELETE: 'ลบบัญชี' };
+const TX_LABEL = { EARN: 'สะสมจากการซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกของรางวัล@@ประวัติ', ADJUST: 'ปรับโดยร้าน', CONSENT: 'รับข่าวสารจากร้าน', DELETE: 'ลบบัญชี' };
+const txLabel = type => (TX_LABEL[type] ? tt(TX_LABEL[type]) : type);
+
+// รายละเอียดที่ระบบเขียนลงประวัติตอนบันทึก (เก็บเป็นภาษาไทย) → แปลตอนแสดง / หมายเหตุที่พนักงานพิมพ์เอง แสดงตามเดิม
+function txDetail(tx) {
+  const d = String(tx.detail || '');
+  if (!isEn() || !d) return d;
+  if (d === 'แต้มต้อนรับสมาชิกใหม่' || d === 'แต้มรับข่าวสารจากร้าน') return tt(d);
+  let m = tx.type === 'REDEEM' && d.match(/^แลก (.+)$/);
+  if (m) return tt('แลก {name}', { name: m[1] });
+  // แบบที่ staff.js เขียน: "ซื้อสินค้า 250 บาท" + " (ไม่ถึงเกณฑ์รับแต้ม)" + " · ชื่อกติกาแต้มพิเศษ"
+  m = tx.type === 'EARN' && d.match(/^ซื้อสินค้า ([\d,.]+) บาท( \(ไม่ถึงเกณฑ์รับแต้ม\))?(.*)$/);
+  if (m) return tt('ซื้อสินค้า ฿{amount}', { amount: m[1] }) + (m[2] ? tt(' (ไม่ถึงเกณฑ์รับแต้ม)') : '') + m[3];
+  return d;
+}
 const TX_ICON = { EARN: 'up', WELCOME: 'star', REDEEM: 'gift', ADJUST: 'coins', CONSENT: 'chat' };
 
 function pageHistory() {
   const all = S.data.history;
   const list = all.filter(t => S.histFilter === 'all' || (S.histFilter === 'earn' ? t.points > 0 : t.points < 0));
-  const filters = [['all', 'ทั้งหมด'], ['earn', 'ได้รับ'], ['use', 'ใช้ไป']];
-  return pageHead('ประวัติ' + unit()) + `
+  const filters = [['all', tu('ทั้งหมด')], ['earn', tu('ได้รับ')], ['use', tu('ใช้ไป')]];
+  return pageHead(tt('ประวัติ{u}')) + `
     <section class="section">
-      <div class="balance-box"><span>${esc(unit())}คงเหลือ</span><b>${fmtNum(S.data.member.points)}</b></div>
+      <div class="balance-box"><span>${tu('{u}คงเหลือ')}</span><b>${fmtNum(S.data.member.points)}</b></div>
       <div class="chips">${filters.map(([k, label]) => `<button class="chip-btn ${S.histFilter === k ? 'active' : ''}" data-act="hist" data-filter="${k}">${label}</button>`).join('')}</div>
       ${list.length ? `<div class="tx-list">${list.map(t => `
         <div class="tx">
           <div class="tx-icon">${icon(TX_ICON[t.type] || 'coins', 20)}</div>
           <div class="tx-main">
-            <div class="tx-title">${esc(t.detail || TX_LABEL[t.type] || t.type)}</div>
-            <div class="tx-sub">${esc(TX_LABEL[t.type] || t.type)} · ${fmtDateTime(t.date)}</div>
+            <div class="tx-title">${esc(txDetail(t) || txLabel(t.type))}</div>
+            <div class="tx-sub">${esc(txLabel(t.type))} · ${fmtDateTime(t.date)}</div>
           </div>
           <div class="tx-points ${t.points > 0 ? 'plus' : t.points < 0 ? 'minus' : ''}">${t.points > 0 ? '+' : ''}${fmtNum(t.points)}</div>
         </div>`).join('')}</div>
-        <p class="muted center small">แสดงรายการล่าสุด ${fmtNum(all.length)} รายการ</p>`
-      : `<div class="empty">${icon('clock', 36)}<p>ยังไม่มีประวัติ</p></div>`}
+        <p class="muted center small">${tu('แสดงรายการล่าสุด {n} รายการ', { n: fmtNum(all.length) })}</p>`
+      : `<div class="empty">${icon('clock', 36)}<p>${tu('ยังไม่มีประวัติ')}</p></div>`}
     </section>`;
 }
 
@@ -1151,17 +1193,18 @@ function pageHistory() {
  * ===================================================== */
 function pageCollect() {
   const rate = S.data.settings.pointRate;
-  const steps = cfg().howTo || [
-    { title: 'แสดง QR สมาชิกตอนชำระเงิน', text: 'กดปุ่ม "แสดง QR" ที่บัตรสมาชิก แล้วให้พนักงานสแกน' },
-    { title: 'รับ' + unit() + 'อัตโนมัติ', text: 'ระบบคำนวณจากยอดซื้อให้ทันที ดูได้ในหน้าประวัติ' },
-    { title: 'แลกของรางวัล', text: 'ใช้' + unit() + 'แลกของรางวัล แล้วแสดง QR คูปองให้พนักงาน' }
+  // ขั้นตอนที่ร้านเขียนเอง (howTo) เป็นเนื้อหาของร้าน → ภาษาอังกฤษใช้ howToEn ถ้ามี ไม่งั้นแสดงของร้านภาษาไทย
+  const steps = (isEn() && cfg().howToEn) || cfg().howTo || [
+    { title: tt('แสดง QR สมาชิกตอนชำระเงิน'), text: tt('กดปุ่ม "แสดง QR" ที่บัตรสมาชิก แล้วให้พนักงานสแกน') },
+    { title: tt('รับ{u}อัตโนมัติ'), text: tt('ระบบคำนวณจากยอดซื้อให้ทันที ดูได้ในหน้าประวัติ') },
+    { title: tt('แลกของรางวัล@@ขั้นตอน'), text: tt('ใช้{u}แลกของรางวัล แล้วแสดง QR คูปองให้พนักงาน') }
   ];
-  return pageHead('วิธีสะสม' + unit()) + `
+  return pageHead(tt('วิธีสะสม{u}')) + `
     <section class="section">
       <div class="collect-hero">
-        <div class="muted-on-dark">ทุกยอดซื้อ</div>
-        <div class="collect-rate">${fmtMoney(rate)} บาท = 1 ${esc(unit())}</div>
-        <button class="btn btn-accent" data-act="qr">${icon('qr', 18)} แสดง QR ของฉัน</button>
+        <div class="muted-on-dark">${tu('ทุกยอดซื้อ')}</div>
+        <div class="collect-rate">${tu('{rate} บาท = 1 {u1}', { rate: fmtMoney(rate) })}</div>
+        <button class="btn btn-accent" data-act="qr">${icon('qr', 18)} ${tu('แสดง QR ของฉัน')}</button>
       </div>
       <ol class="steps">${steps.map((s, i) => `
         <li><span class="step-no">${i + 1}</span><div><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p></div></li>`).join('')}
@@ -1176,16 +1219,16 @@ function tierTable() {
   const mine = S.data.member && S.data.member.tierInfo ? S.data.member.tierInfo.id : '';
   return `
     <section class="section">
-      <div class="section-head"><h2>ระดับสมาชิก</h2></div>
-      <p class="muted small">คิดจาก${esc(unit())}ที่ได้จากการซื้อ 12 เดือนล่าสุด · ถึงเกณฑ์ขึ้นระดับทันที และคงระดับไว้ 12 เดือน · ครบแล้วไม่ถึง ลดลงทีละ 1 ระดับ</p>
+      <div class="section-head"><h2>${tu('ระดับสมาชิก')}</h2></div>
+      <p class="muted small">${tu('คิดจาก{u}ที่ได้จากการซื้อ 12 เดือนล่าสุด · ถึงเกณฑ์ขึ้นระดับทันที และคงระดับไว้ 12 เดือน · ครบแล้วไม่ถึง ลดลงทีละ 1 ระดับ')}</p>
       <div class="tier-list">${S.data.tiers.map(t => `
         <div class="tier-row ${t.id === mine ? 'current' : ''}">
-          <span class="tier-row-name">${tierDot(t.color)}${esc(t.name)}${t.id === mine ? ' <small>(ระดับของคุณ)</small>' : ''}</span>
-          <span>${t.minPoints > 0 ? fmtNum(t.minPoints) + ' ' + esc(unit()) + ' ขึ้นไป' : 'สมาชิกทุกคน'}</span>
+          <span class="tier-row-name">${tierDot(t.color)}${esc(t.name)}${t.id === mine ? ` <small>${tu('(ระดับของคุณ)')}</small>` : ''}</span>
+          <span>${t.minPoints > 0 ? tu('{n} {u} ขึ้นไป', { n: fmtNum(t.minPoints) }) : tu('สมาชิกทุกคน')}</span>
           <span class="tier-row-mult">${t.multiplier > 1 ? esc(unit()) + ' ×' + t.multiplier : '-'}</span>
         </div>`).join('')}
       </div>
-      <button class="btn btn-block tier-more-btn" data-act="go" data-page="tiers">ดูสิทธิ์ของแต่ละระดับ ${icon('right', 16)}</button>
+      <button class="btn btn-block tier-more-btn" data-act="go" data-page="tiers">${tu('ดูสิทธิ์ของแต่ละระดับ')} ${icon('right', 16)}</button>
     </section>`;
 }
 
@@ -1201,16 +1244,17 @@ function pageTiers() {
   const tiers = S.data.tiers;
   const mine = tierIndex(S.data.member.tierInfo.id);
   if (!(S.tierTab >= 0 && S.tierTab < tiers.length)) S.tierTab = mine;
-  const intro = S.data.tierIntro || `สมัครสมาชิกฟรี สะสม${unit()}ทุกบิล\nยิ่งสะสมมาก ยิ่งได้สิทธิ์มาก`;
+  // ข้อความหัวหน้าที่ร้านเขียน = เนื้อหาของร้าน → ภาษาอังกฤษใช้ tierIntroEn ถ้ามี ไม่งั้นแสดงของร้านภาษาไทย / ร้านไม่ได้เขียน → ข้อความตั้งต้นตามภาษา
+  const intro = (isEn() && S.data.tierIntroEn) || S.data.tierIntro || tt('สมัครสมาชิกฟรี สะสม{u}ทุกบิล\nยิ่งสะสมมาก ยิ่งได้สิทธิ์มาก');
   const opts = { logo: logoHtml('logo-xs'), shopName: cfg().name, unit: unit() };
   return `
     <header class="tp-top">
-      <button class="back tp-back" data-act="go" data-page="home" aria-label="กลับหน้าแรก">${icon('left', 22)}</button>
+      <button class="back tp-back" data-act="go" data-page="home" aria-label="${tu('กลับหน้าแรก')}">${icon('left', 22)}</button>
       ${logoHtml('logo-lg')}
       <p class="tp-intro">${esc(intro).replace(/\n/g, '<br>')}</p>
     </header>
-    <div class="tp-tabs" role="tablist" aria-label="ระดับสมาชิก">${tiers.map((t, i) => `
-      <button role="tab" data-act="tier-tab" data-id="${i}" aria-selected="${i === S.tierTab}">${esc(t.name)}<small>${i === mine ? 'ระดับของคุณ' : '&nbsp;'}</small></button>`).join('')}
+    <div class="tp-tabs" role="tablist" aria-label="${tu('ระดับสมาชิก')}">${tiers.map((t, i) => `
+      <button role="tab" data-act="tier-tab" data-id="${i}" aria-selected="${i === S.tierTab}">${esc(t.name)}<small>${i === mine ? tu('ระดับของคุณ') : '&nbsp;'}</small></button>`).join('')}
     </div>
     <div class="tp-carousel" id="tier-carousel">${tiers.map(t => tierBanner(t, opts)).join('')}</div>
     <div class="tp-dots" aria-hidden="true">${tiers.map((t, i) => `<i class="${i === S.tierTab ? 'on' : ''}"></i>`).join('')}</div>
@@ -1223,14 +1267,14 @@ function autoPerks(i) {
   const t = d.tiers[i];
   const u = unit();
   const out = [];
-  if (i === 0) out.push(`สะสม${u}ทุกบิล ${fmtMoney(d.settings.pointRate)} บาท = 1 ${u}`);
-  if (t.multiplier > 1) out.push(`ได้${u} ×${t.multiplier} ทุกบิล`);
+  if (i === 0) out.push(tt('สะสม{u}ทุกบิล {rate} บาท = 1 {u1}', { rate: fmtMoney(d.settings.pointRate) }));
+  if (t.multiplier > 1) out.push(tt('ได้{u} ×{m} ทุกบิล', { m: t.multiplier }));
   const upTo = x => x.minTier && tierIndex(x.minTier.id) <= i && tierIndex(x.minTier.id) > 0;
-  const list = names => (names.length > 3 ? names.slice(0, 3).join(', ') + ` และอีก ${names.length - 3} รายการ` : names.join(', '));
+  const list = names => (names.length > 3 ? names.slice(0, 3).join(', ') + tt(' และอีก {n} รายการ', { n: names.length - 3 }) : names.join(', '));
   const rewards = (d.rewards || []).filter(upTo).map(r => r.name);
-  if (i > 0 && rewards.length) out.push('แลกของรางวัลเฉพาะสมาชิกระดับนี้: ' + list(rewards));
+  if (i > 0 && rewards.length) out.push(tt('แลกของรางวัลเฉพาะสมาชิกระดับนี้: {list}', { list: list(rewards) }));
   const promos = (d.promos || []).filter(upTo).map(p => p.title);
-  if (i > 0 && promos.length) out.push('โปรโมชันเฉพาะสมาชิกระดับนี้: ' + list(promos));
+  if (i > 0 && promos.length) out.push(tt('โปรโมชันเฉพาะสมาชิกระดับนี้: {list}', { list: list(promos) }));
   return out;
 }
 
@@ -1242,31 +1286,31 @@ function tierDetail(i) {
   const u = esc(unit());
   let status;
   // นับจาก "แต้มจากการซื้อ" 12 เดือน ไม่ใช่แต้มคงเหลือบนบัตร → เขียนให้ชัด กันลูกค้าเอาแต้มคงเหลือไปเทียบกับเกณฑ์
-  const got = `สะสมจากการซื้อใน 12 เดือน <b>${fmtNum(ti.points12m)}</b> ${u}`;
-  if (i === mine) status = `${icon('check', 15)}<span>คุณอยู่ระดับนี้${ti.until ? ` · คงระดับถึง ${fmtDate(ti.until)}` : ''}<span class="tp-sub">${got}</span></span>`;
-  else if (i < mine) status = `${icon('check', 15)}<span>คุณผ่านระดับนี้แล้ว</span>`;
+  const got = tu('สะสมจากการซื้อใน 12 เดือน <b>{n}</b> {u}', { n: fmtNum(ti.points12m) });
+  if (i === mine) status = `${icon('check', 15)}<span>${tu('คุณอยู่ระดับนี้')}${ti.until ? tu(' · คงระดับถึง {date}', { date: fmtDate(ti.until) }) : ''}<span class="tp-sub">${got}</span></span>`;
+  else if (i < mine) status = `${icon('check', 15)}<span>${tu('คุณผ่านระดับนี้แล้ว')}</span>`;
   else {
     const pct = t.minPoints > 0 ? Math.max(2, Math.min(100, Math.round(ti.points12m / t.minPoints * 100))) : 100;
-    status = `<span>${got} · อีก <b>${fmtNum(Math.max(0, t.minPoints - ti.points12m))}</b> ${u}
+    status = `<span>${got} · ${tu('อีก <b>{n}</b> {u}', { n: fmtNum(Math.max(0, t.minPoints - ti.points12m)) })}
       <span class="tp-bar"><i style="width:${pct}%"></i></span></span>`;
   }
   const perks = autoPerks(i);
   return `
     <section class="tp-sec">
-      <h2>${icon('receipt', 20)}เงื่อนไข</h2>
-      <ul>${i === 0 ? '<li>สมัครสมาชิกฟรี ได้ระดับนี้ทันที</li><li>ไม่มีวันหมดอายุ</li>'
-        : `<li>สะสม ${fmtNum(t.minPoints)} ${u}จากการซื้อ ภายใน 12 เดือน</li><li>ถึงเกณฑ์เลื่อนระดับทันที และคงระดับ 12 เดือน</li><li>แลกของรางวัลแล้ว ${u}สะสมเพื่อเลื่อนระดับไม่ลด</li>`}</ul>
+      <h2>${icon('receipt', 20)}${tu('เงื่อนไข')}</h2>
+      <ul>${i === 0 ? `<li>${tu('สมัครสมาชิกฟรี ได้ระดับนี้ทันที')}</li><li>${tu('ไม่มีวันหมดอายุ')}</li>`
+        : `<li>${tu('สะสม {n} {u}จากการซื้อ ภายใน 12 เดือน', { n: fmtNum(t.minPoints) })}</li><li>${tu('ถึงเกณฑ์เลื่อนระดับทันที และคงระดับ 12 เดือน')}</li><li>${tu('แลกของรางวัลแล้ว {u}สะสมเพื่อเลื่อนระดับไม่ลด')}</li>`}</ul>
       <div class="tp-status ${i > mine ? '' : 'done'}">${status}</div>
     </section>
     <section class="tp-sec">
-      <h2>${icon('star', 20)}สิทธิพิเศษ</h2>
-      <ul>${perks.map(x => `<li><b>${esc(x)}</b></li>`).join('')}${(t.benefits || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul>
+      <h2>${icon('star', 20)}${tu('สิทธิพิเศษ')}</h2>
+      <ul>${perks.map(x => `<li><b>${esc(x)}</b></li>`).join('')}${((isEn() && t.benefitsEn && t.benefitsEn.length ? t.benefitsEn : t.benefits) || []).map(x => `<li>${esc(x)}</li>`).join('')}</ul>
     </section>
     <section class="tp-sec">
-      <h2>${icon('shield', 20)}นโยบายและเงื่อนไข</h2>
+      <h2>${icon('shield', 20)}${tu('นโยบายและเงื่อนไข')}</h2>
       <ul class="tp-links">
-        <li><button type="button" class="link" data-act="tier-rules">เงื่อนไขสำหรับสมาชิก</button></li>
-        <li><button type="button" class="link" data-act="privacy">นโยบายความเป็นส่วนตัว</button></li>
+        <li><button type="button" class="link" data-act="tier-rules">${tu('เงื่อนไขสำหรับสมาชิก')}</button></li>
+        <li><button type="button" class="link" data-act="privacy">${tu('นโยบายความเป็นส่วนตัว')}</button></li>
       </ul>
     </section>`;
 }
@@ -1315,14 +1359,14 @@ function mountTierCarousel() {
 function showTierRules() {
   const u = esc(unit());
   openModal(`
-    <div class="modal-head"><h2>เงื่อนไขสำหรับสมาชิก</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tu('เงื่อนไขสำหรับสมาชิก')}</h2><button class="icon-btn" data-act="close" aria-label="${tu('ปิด')}">${icon('x')}</button></div>
     <ul class="prose tp-rules">
-      <li>ระดับสมาชิกคิดจาก${u}ที่ได้จากการซื้อ ภายใน 12 เดือนล่าสุด (${esc(fmtMoney(S.data.settings.pointRate))} บาท = 1 ${u})</li>
-      <li>${u}พิเศษ ${u}ต้อนรับ และ${u}ที่ร้านปรับให้ ไม่นับรวม · แลกของรางวัลแล้ว${u}ที่ใช้นับระดับไม่ลด</li>
-      <li>ถึงเกณฑ์ขึ้นระดับทันที และคงระดับไว้ 12 เดือน</li>
-      <li>ครบ 12 เดือนแล้ว${u}ไม่ถึงเกณฑ์ของระดับนั้น ลดลง 1 ระดับ (ถึงเกณฑ์ คงระดับต่ออีก 12 เดือน)</li>
-      <li>ระดับแรกไม่มีวันหมดอายุ</li>
-      <li>ตัวคูณ${u}ของระดับไม่รวมกับ${u}พิเศษในวันโปรโมชัน ระบบให้แบบที่ได้มากกว่า</li>
+      <li>${tu('ระดับสมาชิกคิดจาก{u}ที่ได้จากการซื้อ ภายใน 12 เดือนล่าสุด ({rate} บาท = 1 {u1})', { rate: esc(fmtMoney(S.data.settings.pointRate)) })}</li>
+      <li>${tu('{u}พิเศษ {u}ต้อนรับ และ{u}ที่ร้านปรับให้ ไม่นับรวม · แลกของรางวัลแล้ว{u}ที่ใช้นับระดับไม่ลด')}</li>
+      <li>${tu('ถึงเกณฑ์ขึ้นระดับทันที และคงระดับไว้ 12 เดือน')}</li>
+      <li>${tu('ครบ 12 เดือนแล้ว{u}ไม่ถึงเกณฑ์ของระดับนั้น ลดลง 1 ระดับ (ถึงเกณฑ์ คงระดับต่ออีก 12 เดือน)')}</li>
+      <li>${tu('ระดับแรกไม่มีวันหมดอายุ')}</li>
+      <li>${tu('ตัวคูณ{u}ของระดับไม่รวมกับ{u}พิเศษในวันโปรโมชัน ระบบให้แบบที่ได้มากกว่า')}</li>
     </ul>
-    <button class="btn btn-block" data-act="close">ปิด</button>`);
+    <button class="btn btn-block" data-act="close">${tu('ปิด')}</button>`);
 }

@@ -22,8 +22,8 @@ export default {
     greeting: 'สวัสดี',
     pointUnit: 'แต้ม'
   },
-  // ร้านเดโม (ใช้เดโมขาย): เปิดทุกแพ็กเกจ — ระดับสมาชิก + หลายสาขา (ไม่ใส่ maxBranches = ไม่จำกัด) + ส่งออก Excel
-  features: { tiers: true, branches: true, export: true, broadcast: true },
+  // ร้านเดโม (ใช้เดโมขาย): เปิดทุกแพ็กเกจ — ระดับสมาชิก + หลายสาขา (ไม่ใส่ maxBranches = ไม่จำกัด) + ส่งออก Excel + ส่งข้อความ + ภาษาอังกฤษ
+  features: { tiers: true, branches: true, export: true, broadcast: true, english: true },
   legal: {
     privacyUrl: '',
     // แม่แบบกลางของระบบ (เหมือน POLICY_LINES ใน tools/new-shop.js) — ร้านเดโมใช้โชว์ตอนเสนอขาย

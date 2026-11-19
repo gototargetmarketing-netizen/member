@@ -1,4 +1,5 @@
 // เครื่องมือหน้าจอที่ใช้ร่วมกันทุกหน้า: escape ข้อความ ไอคอน ป๊อปอัป ข้อความแจ้งเตือน รูปแบบตัวเลข/วันที่ QR
+import { t, dateLocale } from './i18n.js';
 
 // ข้อมูลทุกอย่างที่มาจากชีต/ผู้ใช้ ต้องผ่าน esc() ก่อนใส่ใน HTML (กันฝังโค้ด)
 export function esc(s) {
@@ -59,7 +60,7 @@ export function creditHtml(cls = '') {
  * อาจเห็นสีเก่าแวบหนึ่งแล้วเปลี่ยนเป็นสีใหม่ (กะพริบ)
  * ต้องตรงกับหน้าโหลดที่เขียนไว้ใน index.html / staff.html / admin.html (ขึ้นก่อนโค้ดนี้ทำงาน) */
 export function bootHtml(message = '') {
-  return `<div class="boot-screen" role="status" aria-label="กำลังโหลด"><div class="boot-ring"></div><div class="boot-msg">${esc(message)}</div>${creditHtml('credit-boot')}</div>`;
+  return `<div class="boot-screen" role="status" aria-label="${t('กำลังโหลด')}"><div class="boot-ring"></div><div class="boot-msg">${esc(message)}</div>${creditHtml('credit-boot')}</div>`;
 }
 
 /* ---------- ข้อความแจ้งเตือนสั้นๆ ---------- */
@@ -81,7 +82,7 @@ export function toast(message, kind = '') {
 let loadingCount = 0;
 let loadingTimer = null;
 
-export function showLoading(text = 'กำลังโหลด...') {
+export function showLoading(text = t('กำลังโหลด...')) {
   let el = document.getElementById('loading-pop');
   if (!el) {
     el = document.createElement('div');
@@ -134,7 +135,7 @@ export function closeModal() {
   if (fn) fn();
 }
 
-/* ---------- รูปแบบตัวเลข / วันที่ (เวลาไทย) ---------- */
+/* ---------- รูปแบบตัวเลข / วันที่ (เวลาไทย — ภาษาอังกฤษใช้ปี ค.ศ. ตาม dateLocale ใน i18n.js) ---------- */
 const nf = new Intl.NumberFormat('th-TH');
 const mf = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 2 });
 export const fmtNum = n => nf.format(Math.round(Number(n) || 0));
@@ -143,13 +144,13 @@ export const fmtMoney = n => mf.format(Number(n) || 0);
 export function fmtDate(iso) {
   if (!iso) return '-';
   const d = new Date(iso);
-  return isNaN(d) ? '-' : d.toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Bangkok' });
+  return isNaN(d) ? '-' : d.toLocaleDateString(dateLocale(), { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Bangkok' });
 }
 
 export function fmtDateTime(iso) {
   if (!iso) return '-';
   const d = new Date(iso);
-  return isNaN(d) ? '-' : d.toLocaleString('th-TH', { day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bangkok' });
+  return isNaN(d) ? '-' : d.toLocaleString(dateLocale(), { day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Bangkok' });
 }
 
 /* ---------- QR (สร้างในเครื่อง ไม่ส่งรหัสลูกค้าไปเว็บภายนอก) ---------- */
@@ -162,7 +163,7 @@ export function qrSvg(text) {
 }
 
 /* ---------- ปุ่มระหว่างรอ ---------- */
-export function setBusy(btn, busy, busyText = 'กำลังบันทึก...') {
+export function setBusy(btn, busy, busyText = t('กำลังบันทึก...')) {
   if (!btn) return;
   if (busy) {
     btn.dataset.label = btn.innerHTML;
