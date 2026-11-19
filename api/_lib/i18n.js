@@ -107,7 +107,15 @@ const EN = {
   'คุณไม่ได้อยู่ในสาขานี้ กรุณาเลือกสาขาใหม่ หรือติดต่อเจ้าของร้าน': 'You are not assigned to this branch. Choose another branch or contact the shop owner',
   'บัญชี LINE นี้ยังไม่ได้รับสิทธิ์พนักงาน': 'This LINE account does not have staff access yet',
   'จำนวนแต้มต้องเป็นจำนวนเต็ม และไม่เป็น 0': 'Points must be a whole number other than 0',
-  'กรุณาใส่เหตุผลในการปรับแต้ม': 'Please enter the reason for the adjustment'
+  'กรุณาใส่เหตุผลในการปรับแต้ม': 'Please enter the reason for the adjustment',
+  // ---------- หน้าพนักงาน (staff.js — รอบ 3) ----------
+  'กรุณาใส่รหัสสมาชิก เบอร์โทร หรือรหัสคูปอง': 'Please enter a member ID, phone number or coupon code',
+  'ไม่พบคูปองรหัสนี้': 'No coupon with this code',
+  'กรุณาใส่ยอดซื้อมากกว่า 0 บาท': 'Please enter a purchase amount greater than 0',
+  'รหัสคูปองไม่ถูกต้อง': 'Invalid coupon code',
+  'คูปองนี้หมดอายุแล้ว': 'This coupon has expired',
+  'คูปองนี้ใช้ไม่ได้': 'This coupon cannot be used',
+  'ระบบยังตั้งค่าไม่ครบ กรุณาติดต่อผู้ดูแลระบบ': 'The system is not fully set up yet. Please contact the system administrator'
 };
 
 // ชื่อช่องในข้อความของหลังบ้าน ("กรุณากรอก" + ชื่อช่อง / ชื่อช่อง + "ไม่ถูกต้อง" ฯลฯ) → ใช้ขึ้นต้นประโยค
@@ -180,7 +188,10 @@ const PATTERNS = [
   [/^โควตาข้อความเดือนนี้ของ LINE OA เหลือ ([\d,]+) ข้อความ ไม่พอส่ง ([\d,]+) คน ลดกลุ่มลง หรือเพิ่มแพ็กเกจ LINE OA$/,
     (m) => `The LINE OA has ${m[1]} messages left this month, not enough for ${m[2]} people. Make the group smaller or upgrade the LINE OA plan`],
   [/^บทบาท (\w+) ใช้คำสั่งนี้ไม่ได้$/, (m) => `The ${m[1]} role cannot do this`],
-  [/^ปรับแล้วแต้มติดลบไม่ได้ \(มีอยู่ ([\d,]+) แต้ม\)$/, (m) => `Points cannot go below zero (current balance ${m[1]} points)`]
+  [/^ปรับแล้วแต้มติดลบไม่ได้ \(มีอยู่ ([\d,]+) แต้ม\)$/, (m) => `Points cannot go below zero (current balance ${m[1]} points)`],
+  [/^ยอดซื้อเกิน ([\d,]+) บาทต่อบิล \(ถ้าถูกต้อง ให้เจ้าของร้านปรับ "ยอดซื้อสูงสุดต่อบิล" ในหลังบ้าน เมนูตั้งค่าร้าน\)$/,
+    (m) => `The purchase is over ฿${m[1]} per bill (if it is correct, ask the shop owner to change "Maximum purchase per bill" in the back office, Shop settings)`],
+  [/^คูปองนี้ถูกใช้ไปแล้วเมื่อ (.+)$/, (m) => `This coupon was already used on ${m[1]}`]
 ];
 
 function translate(message, lang) {

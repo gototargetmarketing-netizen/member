@@ -789,6 +789,41 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     await b.waitFor(`/ภาพรวม/.test(document.querySelector('.adm-nav').innerText) && /ของรางวัล/.test(document.querySelector('#view').innerText)`, 8000, 'กลับเป็นไทย');
     ok(await b.eval(`localStorage.getItem('crm_admin_lang') === 'th'`), 'กด TH → หลังบ้านกลับเป็นภาษาไทยทันที');
 
+    console.log('\n[14] หน้าพนักงานสองภาษา: ภาษาอังกฤษ (จำร่วมกับหลังบ้าน) → ค้นลูกค้า บันทึกยอด ข้อผิดพลาด');
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo/staff`);
+    await b.waitFor(`document.querySelector('#lookup') || document.querySelector('[data-act=branch-set]')`, 10000, 'หน้าพนักงาน');
+    if (await b.eval(`!document.querySelector('#lookup')`)) await b.click('[data-act=branch-set]');
+    await b.waitFor(`document.querySelector('#lookup') && document.querySelector('.staff-lang')`, 10000, 'หน้าพนักงาน + ปุ่ม TH | EN');
+    ok(/สแกน QR ลูกค้า/.test(await b.text('.staff-main')), 'เปิดครั้งแรก = ภาษาไทยเหมือนเดิม (หลังบ้านกด TH ไว้ในส่วนก่อน)');
+    await b.click('.staff-lang [data-lang=en]');
+    await b.waitFor(`/Scan customer QR/.test(document.querySelector('.staff-main').innerText)`, 5000, 'หน้าพนักงานภาษาอังกฤษ');
+    ok(await b.eval(`localStorage.getItem('crm_admin_lang') === 'en'`), 'จำภาษาร่วมกับหลังบ้าน (เลือกครั้งเดียวใช้ทั้งสองหน้า)');
+    await b.type('#lookup input', '0861234567');
+    await b.eval(`document.querySelector('#lookup').requestSubmit()`);
+    await b.waitFor(`document.querySelector('#purchase')`, 8000, 'ฟอร์มยอดซื้อ');
+    const staffLeft = async () => (await thaiLeft(`document.getElementById('app')`)).filter((x) => !/^(Bonus points today|Recent entries|Branch )/.test(x)); // ข้อความที่มีชื่อกติกา/สาขา (ข้อมูลที่ร้านพิมพ์) ปนอยู่
+    const sl = await staffLeft();
+    ok(sl.length === 0, 'ค้นลูกค้าแล้ว: ข้อความระบบเป็นภาษาอังกฤษทั้งหมด (ชื่อลูกค้า/สาขา/ของรางวัลแสดงตามที่พิมพ์)', sl);
+    await b.type('#purchase input[name=amount]', '120');
+    await b.waitFor(`/Customer will get/.test(document.getElementById('result').innerText)`, 3000, 'ตัวอย่างแต้มภาษาอังกฤษ');
+    ok(true, 'ตัวอย่างแต้มก่อนบันทึก: "Customer will get +N points"');
+    await b.eval(`document.querySelector('#purchase').requestSubmit()`);
+    await b.waitFor(`document.querySelector('.flash.ok')`, 8000, 'บันทึกสำเร็จ');
+    ok(/Recorded ฿120/.test(await b.text('.flash')), 'บันทึกยอดแล้ว: "Recorded ฿120 → +N …"', await b.text('.flash'));
+    await b.click('[data-act=clear]');
+    await b.type('#lookup input', 'CP-NOTEXIST');
+    await b.eval(`document.querySelector('#lookup').requestSubmit()`);
+    await b.waitFor(`/No coupon with this code|not found/i.test((document.querySelector('.toast.show') || document.getElementById('result') || {}).innerText || '')`, 8000, 'ข้อผิดพลาดภาษาอังกฤษ');
+    ok(true, 'ตัวกลางตอบข้อผิดพลาดของหน้าพนักงานเป็นภาษาอังกฤษ');
+    await sleep(1500);
+    const sl2 = await staffLeft();
+    ok(sl2.length === 0, 'รายการล่าสุด: ประเภท/ผู้ทำเป็นภาษาอังกฤษ', sl2);
+    await b.shot(path.join(OUT, 'n29-staff-english.png'), { full: true });
+    await b.click('.staff-lang [data-lang=th]');
+    await b.waitFor(`/สแกน QR ลูกค้า/.test(document.querySelector('.staff-main').innerText)`, 5000, 'กลับเป็นไทย');
+    ok(true, 'กด TH → หน้าพนักงานกลับเป็นภาษาไทยทันที');
+
     const errs = b.logs.filter((l) => /EXCEPTION|console\.error/.test(l));
     ok(errs.length === 0, 'ไม่มีข้อผิดพลาดในหน้าเว็บ', errs);
   } catch (e) {

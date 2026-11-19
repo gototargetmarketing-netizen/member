@@ -5,6 +5,13 @@ import { initLine, IS_LOCAL } from './line.js';
 import { createApi, createRetryKeeper } from './api.js';
 import { applyDevParams, mountDevBar } from './devbar.js';
 import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, setBusy, loadScript, creditHtml, bootHtml } from './ui.js';
+// สองภาษา รอบ 3 (19 พ.ย. 2569): ปุ่ม TH | EN มีทุกร้าน (เหมือนหลังบ้าน) และจำภาษาร่วมกับหลังบ้าน (crm_admin_lang — เจ้าของร้านต่างชาติเลือกครั้งเดียว)
+// ใช้ชื่อ tr ไม่ใช่ t เพราะไฟล์นี้มีตัวแปรชื่อ t / คำแปลอยู่ i18n-staff-en.js (หน้าลูกค้าไม่ต้องโหลด)
+import { t as tBase, isEn, initLang, autoLang, save as saveLang, langSwitchHtml, extend as extendLang } from './i18n.js';
+import STAFF_EN from './i18n-staff-en.js';
+extendLang(STAFF_EN);
+// {U} = ขึ้นต้นประโยค / {u1} = เอกพจน์ ("1 point" ไม่ใช่ "1 points")
+const tr = (s, v) => tBase(s, v && typeof v.u === 'string' && v.U === undefined ? { U: v.u.charAt(0).toUpperCase() + v.u.slice(1), u1: isEn() ? v.u.replace(/s$/i, '') : v.u, ...v } : v);
 
 const SCANNER_JS = 'https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js';
 const ROLE_LABEL = { OWNER: 'เจ้าของร้าน', ADMIN: 'ผู้จัดการ', CASHIER: 'แคชเชียร์' };
@@ -22,7 +29,10 @@ const LOADING_TEXT = { staffLookup: 'กำลังค้นหา...', addPurc
 const withRequestId = createRetryKeeper();
 
 const cfg = () => S.shop.config;
-const unit = () => (cfg().texts && cfg().texts.pointUnit) || 'แต้ม';
+// คำเรียกแต้ม: อังกฤษใช้คำอังกฤษของร้าน หรือ points (ไม่เอาคำไทยไปปนในประโยคอังกฤษ)
+const unit = () => (isEn() ? (cfg().textsEn && cfg().textsEn.pointUnit) || 'points' : (cfg().texts && cfg().texts.pointUnit) || 'แต้ม');
+// ผู้ทำรายการที่ระบบเขียนเอง (SYSTEM / ลูกค้า) แปล / ชื่อพนักงานแสดงตามเดิม
+const staffLabel = n => (n === 'SYSTEM' ? tr('ระบบ') : n === 'ลูกค้า' ? tr('ลูกค้า@@ผู้ทำ') : n);
 const isManager = () => S.me && (S.me.role === 'OWNER' || S.me.role === 'ADMIN');
 
 document.addEventListener('click', onClick);
@@ -31,17 +41,19 @@ main();
 async function main() {
   try {
     S.shop = await loadShop();
+    initLang(cfg(), { key: 'crm_admin_lang', always: true });
     applyDevParams(S.shop.id);
     // หน้าโหลดสีกลางเหมือนหน้าลูกค้า (ไม่โชว์ชื่อ/สีร้าน กันสีกะพริบ — เหตุผลอยู่ที่ bootHtml ใน ui.js)
-    app.innerHTML = bootHtml('กำลังเปิดหน้าพนักงาน...');
+    app.innerHTML = bootHtml(tr('กำลังเปิดหน้าพนักงาน...'));
     S.line = await initLine(cfg().liffId);
+    autoLang(S.line.language); // แอป LINE ภาษาอังกฤษ → อังกฤษเอง (ถ้ายังไม่เคยเลือก)
     S.api = createApi(S.shop, S.line, {
       beforeRelogin: saveStaffDraft,
       onRelogin: () => {
         closeModal();
-        app.innerHTML = bootHtml('กำลังเชื่อมต่อ LINE ใหม่...');
+        app.innerHTML = bootHtml(tr('กำลังเชื่อมต่อ LINE ใหม่...'));
       },
-      loadingText: (action) => (!S.ready ? null : action in LOADING_TEXT ? LOADING_TEXT[action] : 'กำลังโหลด...')
+      loadingText: (action) => (!S.ready ? null : action in LOADING_TEXT ? LOADING_TEXT[action] && tr(LOADING_TEXT[action]) : tr('กำลังโหลด...'))
     });
     if (IS_LOCAL) mountDevBar(S.shop, S.api, { openNow: !S.api.overridden });
     const r = await S.api.call('staffMe', { withBrand: true });
@@ -91,8 +103,21 @@ function onClick(e) {
     case 'branch-pick': if (S.branches.length > 1) renderBranchPicker(false); break;
     case 'branch-set': setBranch(id); break;
     case 'reload': window.location.reload(); break;
+    case 'lang': setStaffLang(el.dataset.lang); break;
     case 'relogin': if (S.line) S.line.relogin(); break;
   }
+}
+
+// สลับภาษา: วาดหน้าที่เปิดอยู่ใหม่ (ค้นลูกค้าค้างไว้ก็แสดงต่อ)
+function setStaffLang(l) {
+  saveLang(l);
+  closeModal();
+  if (!S.me) return;
+  if (S.me.status !== 'ACTIVE') return renderPending(S.testMode);
+  if (S.hasBranches && !S.branch) return renderBranchPicker(true);
+  renderMain(S.testMode);
+  renderResult();
+  loadRecent();
 }
 
 /* =====================================================
@@ -102,12 +127,12 @@ function renderFatal(e) {
   app.innerHTML = `
     <div class="state-page">
       <div class="state-icon">${icon('alert', 40)}</div>
-      <h1>เปิดหน้าพนักงานไม่สำเร็จ</h1>
-      <p>${esc((e && e.message) || 'เกิดข้อผิดพลาด')}</p>
+      <h1>${tr('เปิดหน้าพนักงานไม่สำเร็จ')}</h1>
+      <p>${esc((e && e.message) || tr('เกิดข้อผิดพลาด'))}</p>
       ${IS_LOCAL && e && e.debug ? `<pre class="debug">${esc(e.debug)}</pre>` : ''}
       <div class="stack">
-        ${e && (e.code === 'TOKEN_INVALID' || e.code === 'NO_TOKEN') ? '<button class="btn btn-primary" data-act="relogin">เข้าสู่ระบบใหม่</button>' : ''}
-        <button class="btn" data-act="reload">ลองใหม่</button>
+        ${e && (e.code === 'TOKEN_INVALID' || e.code === 'NO_TOKEN') ? `<button class="btn btn-primary" data-act="relogin">${tr('เข้าสู่ระบบใหม่')}</button>` : ''}
+        <button class="btn" data-act="reload">${tr('ลองใหม่')}</button>
       </div>
     </div>`;
   if (IS_LOCAL && S.shop && !document.getElementById('devbar')) {
@@ -117,17 +142,18 @@ function renderFatal(e) {
 
 function renderPending(testMode) {
   const disabled = S.me.status === 'DISABLED';
-  app.innerHTML = (testMode ? '<div class="test-banner">โหมดทดสอบ</div>' : '') + `
+  app.innerHTML = (testMode ? `<div class="test-banner">${tr('โหมดทดสอบ')}</div>` : '') + `
     <div class="state-page">
+      ${langSwitchHtml('lang-on-page')}
       <div class="state-icon">${icon(disabled ? 'shield' : 'clock', 40)}</div>
-      <h1>${disabled ? 'บัญชีนี้ถูกปิดสิทธิ์พนักงาน' : 'ส่งคำขอสิทธิ์พนักงานแล้ว'}</h1>
-      ${disabled ? '<p>ติดต่อเจ้าของร้านหากต้องการใช้งาน</p>' : `
-        <p>แจ้งเจ้าของร้านหรือผู้จัดการให้กดอนุมัติในหลังบ้าน (เมนูพนักงาน)</p>
-        <p>ชื่อที่ขึ้นในรายการรออนุมัติ: <b>${esc(S.me.name || '-')}</b></p>
-        <p class="muted small">อนุมัติแล้วกด "ตรวจสอบอีกครั้ง" ด้านล่าง</p>
-        <p class="muted small">รหัสผู้ใช้ของคุณ: <code>${esc(S.me.userId)}</code>
-          <button class="link" data-act="copy-id">${icon('copy', 14)} คัดลอก</button></p>`}
-      <button class="btn btn-primary" data-act="reload">${icon('refresh', 18)} ตรวจสอบอีกครั้ง</button>
+      <h1>${disabled ? tr('บัญชีนี้ถูกปิดสิทธิ์พนักงาน') : tr('ส่งคำขอสิทธิ์พนักงานแล้ว')}</h1>
+      ${disabled ? `<p>${tr('ติดต่อเจ้าของร้านหากต้องการใช้งาน')}</p>` : `
+        <p>${tr('แจ้งเจ้าของร้านหรือผู้จัดการให้กดอนุมัติในหลังบ้าน (เมนูพนักงาน)')}</p>
+        <p>${tr('ชื่อที่ขึ้นในรายการรออนุมัติ: <b>{x}</b>', { x: esc(S.me.name || '-') })}</p>
+        <p class="muted small">${tr('อนุมัติแล้วกด "ตรวจสอบอีกครั้ง" ด้านล่าง')}</p>
+        <p class="muted small">${tr('รหัสผู้ใช้ของคุณ:')} <code>${esc(S.me.userId)}</code>
+          <button class="link" data-act="copy-id">${icon('copy', 14)} ${tr('คัดลอก')}</button></p>`}
+      <button class="btn btn-primary" data-act="reload">${icon('refresh', 18)} ${tr('ตรวจสอบอีกครั้ง')}</button>
       ${creditHtml('credit-page')}
     </div>`;
 }
@@ -160,7 +186,7 @@ function setBranch(id) {
   if (badge) badge.outerHTML = branchBadge();
   const title = document.getElementById('recent-title');
   if (title) title.textContent = recentTitle();
-  toast(`เปลี่ยนเป็น${b.name}แล้ว`, 'ok');
+  toast(`${tr('เปลี่ยนเป็น{name}แล้ว', { name: b.name })}`, 'ok');
   loadRecent();
 }
 
@@ -177,19 +203,20 @@ function branchListHtml() {
 // startup = ก่อนเริ่มงาน (เต็มหน้า) / ไม่ใช่ = เปลี่ยนสาขาระหว่างวัน (ป๊อปอัป)
 function renderBranchPicker(startup) {
   if (startup) {
-    app.innerHTML = (S.testMode ? '<div class="test-banner">โหมดทดสอบ — ข้อมูลไม่ใช่ของจริง</div>' : '') + `
+    app.innerHTML = (S.testMode ? `<div class="test-banner">${tr('โหมดทดสอบ — ข้อมูลไม่ใช่ของจริง')}</div>` : '') + `
       <div class="state-page branch-page">
+        ${langSwitchHtml('lang-on-page')}
         <div class="state-icon">${icon('pin', 40)}</div>
-        <h1>วันนี้ทำงานสาขาไหน</h1>
-        <p class="muted">${esc(S.me.name)} · เลือกครั้งเดียว เครื่องนี้จะจำไว้ให้</p>
+        <h1>${tr('วันนี้ทำงานสาขาไหน')}</h1>
+        <p class="muted">${tr('{name} · เลือกครั้งเดียว เครื่องนี้จะจำไว้ให้', { name: esc(S.me.name) })}</p>
         ${branchListHtml()}
         ${creditHtml('credit-page')}
       </div>`;
     return;
   }
   openModal(`
-    <div class="modal-head"><h2>เปลี่ยนสาขา</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-    <p class="muted">รายการที่บันทึกหลังจากนี้จะเป็นของสาขาที่เลือก</p>
+    <div class="modal-head"><h2>${tr('เปลี่ยนสาขา')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
+    <p class="muted">${tr('รายการที่บันทึกหลังจากนี้จะเป็นของสาขาที่เลือก')}</p>
     ${branchListHtml()}`);
 }
 
@@ -197,9 +224,9 @@ function renderNoBranch() {
   app.innerHTML = `
     <div class="state-page">
       <div class="state-icon">${icon('pin', 40)}</div>
-      <h1>ยังไม่มีสาขาที่คุณใช้งานได้</h1>
-      <p>สาขาของคุณอาจปิดไปแล้ว แจ้งเจ้าของร้านหรือผู้จัดการให้ตั้งสาขาในหลังบ้าน (เมนูพนักงาน)</p>
-      <button class="btn btn-primary" data-act="reload">${icon('refresh', 18)} ตรวจสอบอีกครั้ง</button>
+      <h1>${tr('ยังไม่มีสาขาที่คุณใช้งานได้')}</h1>
+      <p>${tr('สาขาของคุณอาจปิดไปแล้ว แจ้งเจ้าของร้านหรือผู้จัดการให้ตั้งสาขาในหลังบ้าน (เมนูพนักงาน)')}</p>
+      <button class="btn btn-primary" data-act="reload">${icon('refresh', 18)} ${tr('ตรวจสอบอีกครั้ง')}</button>
       ${creditHtml('credit-page')}
     </div>`;
 }
@@ -208,11 +235,11 @@ function renderNoBranch() {
 function branchBadge() {
   if (!S.branch) return '';
   const many = S.branches.length > 1;
-  return `<button type="button" id="branch-badge" class="branch-badge" data-act="branch-pick" ${many ? '' : 'disabled'} aria-label="สาขา ${esc(S.branch.name)}${many ? ' (กดเพื่อเปลี่ยน)' : ''}">
-    ${icon('pin', 16)}<span>${esc(S.branch.name)}</span>${many ? `<small>เปลี่ยน</small>` : ''}</button>`;
+  return `<button type="button" id="branch-badge" class="branch-badge" data-act="branch-pick" ${many ? '' : 'disabled'} aria-label="${tr('สาขา {name}{x}', { name: esc(S.branch.name), x: many ? tr(' (กดเพื่อเปลี่ยน)') : '' })}">
+    ${icon('pin', 16)}<span>${esc(S.branch.name)}</span>${many ? `<small>${tr('เปลี่ยน')}</small>` : ''}</button>`;
 }
 
-const recentTitle = () => (S.branch ? `รายการล่าสุด · ${S.branch.name}` : 'รายการล่าสุดของร้าน');
+const recentTitle = () => (S.branch ? `${tr('รายการล่าสุด · {name}', { name: S.branch.name })}` : tr('รายการล่าสุดของร้าน'));
 
 // สาขาที่เลือกไว้ใช้ไม่ได้แล้ว (ถูกปิด / ถูกย้ายสาขา) → ล้างที่จำไว้ แล้วให้เลือกใหม่
 function onBranchError(e) {
@@ -249,7 +276,7 @@ function pointsFor(amount) {
   const ruleMult = rule ? rule.multiplier : 1;
   const mult = Math.max(ruleMult, tierMult);
   const total = mult > 1 ? Math.floor(base * mult + 1e-9) : base;
-  const applied = total > base ? (tierMult > ruleMult ? { name: 'ระดับ ' + m.tier, multiplier: tierMult } : rule) : null;
+  const applied = total > base ? (tierMult > ruleMult ? { name: tr('ระดับ {tier}', { tier: m.tier }), multiplier: tierMult } : rule) : null;
   return { base, total, rule: applied };
 }
 
@@ -259,34 +286,34 @@ const ruleLabel = r => (/[x×]\s*\d/i.test(r.name) ? r.name : `×${r.multiplier}
 function todayPromoHtml() {
   const list = branchRules();
   if (!list.length) return '';
-  return `<div class="today-promo">${icon('bolt', 18)}<span>วันนี้มีแต้มพิเศษ: ${list.map(r => esc(r.name) + (r.minAmount ? ` (ซื้อครบ ฿${fmtNum(r.minAmount)})` : '') + (r.minTierName ? ` (ระดับ ${esc(r.minTierName)} ขึ้นไป)` : '')).join(' · ')}</span></div>`;
+  return `<div class="today-promo">${icon('bolt', 18)}<span>${tr('วันนี้มีแต้มพิเศษ:')} ${list.map(r => esc(r.name) + (r.minAmount ? ` ${tr('(ซื้อครบ ฿{n})', { n: fmtNum(r.minAmount) })}` : '') + (r.minTierName ? ` ${tr('(ระดับ {minTierName} ขึ้นไป)', { minTierName: esc(r.minTierName) })}` : '')).join(' · ')}</span></div>`;
 }
 
 /* =====================================================
  * หน้าหลักของพนักงาน
  * ===================================================== */
 function renderMain(testMode) {
-  app.innerHTML = (testMode ? '<div class="test-banner">โหมดทดสอบ — ข้อมูลไม่ใช่ของจริง</div>' : '') + `
+  app.innerHTML = (testMode ? `<div class="test-banner">${tr('โหมดทดสอบ — ข้อมูลไม่ใช่ของจริง')}</div>` : '') + `
     <header class="staff-head">
       <div>
         <div class="staff-shop">${esc(cfg().name)}</div>
-        <div class="staff-sub">หน้าพนักงาน · ทุก ${fmtMoney(S.settings.pointRate)} บาท = 1 ${esc(unit())}</div>
+        <div class="staff-sub">${tr('หน้าพนักงาน · ทุก {n} บาท = 1 {u}', { n: fmtMoney(S.settings.pointRate), u: esc(unit()) })}</div>
         ${branchBadge()}
       </div>
-      <div class="staff-me"><span>${esc(S.me.name)}</span><span class="chip">${esc(ROLE_LABEL[S.me.role] || S.me.role)}</span></div>
+      <div class="staff-me"><span>${esc(S.me.name)}</span><span class="chip">${esc(tr(ROLE_LABEL[S.me.role] || S.me.role))}</span>${langSwitchHtml('staff-lang')}</div>
     </header>
     <main class="staff-main">
       <section class="card">
-        <button class="btn btn-primary btn-xl btn-block" data-act="scan">${icon('scan', 26)} สแกน QR ลูกค้า</button>
+        <button class="btn btn-primary btn-xl btn-block" data-act="scan">${icon('scan', 26)} ${tr('สแกน QR ลูกค้า')}</button>
         <form id="lookup" class="lookup-row" autocomplete="off">
-          <input name="q" placeholder="หรือพิมพ์ รหัสสมาชิก / เบอร์โทร / รหัสคูปอง" autocapitalize="characters" enterkeyhint="search">
-          <button class="btn" type="submit" aria-label="ค้นหา">${icon('search', 20)}</button>
+          <input name="q" placeholder="${tr('หรือพิมพ์ รหัสสมาชิก / เบอร์โทร / รหัสคูปอง')}" autocapitalize="characters" enterkeyhint="search">
+          <button class="btn" type="submit" aria-label="${tr('ค้นหา')}">${icon('search', 20)}</button>
         </form>
       </section>
       <div id="result"></div>
       <section class="card">
-        <div class="card-head"><h2 id="recent-title">${esc(recentTitle())}</h2><button class="link" data-act="recent">${icon('refresh', 14)} รีเฟรช</button></div>
-        <div id="recent"><div class="muted small">กำลังโหลด...</div></div>
+        <div class="card-head"><h2 id="recent-title">${esc(recentTitle())}</h2><button class="link" data-act="recent">${icon('refresh', 14)} ${tr('รีเฟรช')}</button></div>
+        <div id="recent"><div class="muted small">${tr('กำลังโหลด...')}</div></div>
       </section>
       ${creditHtml('credit-page')}
     </main>`;
@@ -305,7 +332,7 @@ function focusSearch() {
 async function lookup(query) {
   S.flash = null;
   const box = document.getElementById('result');
-  box.innerHTML = `<section class="card"><div class="muted">${icon('search', 18)} กำลังค้นหา...</div></section>`;
+  box.innerHTML = `<section class="card"><div class="muted">${icon('search', 18)} ${tr('กำลังค้นหา...')}</div></section>`;
   try {
     S.view = await S.api.call('staffLookup', { query });
     renderResult();
@@ -334,8 +361,8 @@ function renderResult() {
       const a = parseAmount(amount.value);
       const p = pointsFor(a > 0 ? a : 0);
       document.getElementById('preview').innerHTML = a > 0
-        ? `ลูกค้าจะได้ <b>+${fmtNum(p.total)}</b> ${esc(unit())}${p.rule ? ` <span class="chip">${esc(ruleLabel(p.rule))}</span><span class="was">ปกติ +${fmtNum(p.base)}</span>` : ''}${p.total === 0 ? ' (ยอดไม่ถึงเกณฑ์ แต่จะบันทึกยอดซื้อ)' : ''}`
-        : `ทุก ${fmtMoney(S.settings.pointRate)} บาท = 1 ${esc(unit())}`;
+        ? `${tr('ลูกค้าจะได้ <b>+{n}</b> {u}{n2}{x}', { n: fmtNum(p.total), u: esc(unit()), n2: p.rule ? ` <span class="chip">${esc(ruleLabel(p.rule))}</span><span class="was">${tr('ปกติ +{n}', { n: fmtNum(p.base) })}</span>` : '', x: p.total === 0 ? tr(' (ยอดไม่ถึงเกณฑ์ แต่จะบันทึกยอดซื้อ)') : '' })}`
+        : `${tr('ทุก {n} บาท = 1 {u}', { n: fmtMoney(S.settings.pointRate), u: esc(unit()) })}`;
     };
     amount.addEventListener('input', update);
     form.addEventListener('submit', onPurchaseSubmit);
@@ -364,39 +391,39 @@ function memberView(v) {
           <div class="m-name">${esc(m.name)}${m.tier ? ` <span class="chip chip-tier">${/^#[0-9A-Fa-f]{6}$/.test(m.tierColor || '') ? `<i class="tier-dot" style="background:${m.tierColor}"></i>` : ''}${esc(m.tier)}${m.tierMultiplier > 1 ? ' ×' + m.tierMultiplier : ''}</span>` : ''}</div>
           <div class="m-sub">${esc(m.memberId)}${m.phoneMasked ? ' · ' + esc(m.phoneMasked) : ''}</div>
         </div>
-        <button class="icon-btn" data-act="clear" aria-label="ลูกค้าคนถัดไป">${icon('x')}</button>
+        <button class="icon-btn" data-act="clear" aria-label="${tr('ลูกค้าคนถัดไป')}">${icon('x')}</button>
       </div>
       <div class="stats">
-        <div><b>${fmtNum(m.points)}</b><span>${esc(unit())}คงเหลือ</span></div>
-        <div><b>${fmtNum(m.visitCount)}</b><span>ครั้งที่มา</span></div>
-        <div><b>฿${fmtMoney(m.totalSpend)}</b><span>ยอดซื้อรวม</span></div>
+        <div><b>${fmtNum(m.points)}</b><span>${tr('{u}คงเหลือ', { u: esc(unit()) })}</span></div>
+        <div><b>${fmtNum(m.visitCount)}</b><span>${tr('ครั้งที่มา')}</span></div>
+        <div><b>฿${fmtMoney(m.totalSpend)}</b><span>${tr('ยอดซื้อรวม')}</span></div>
       </div>
-      ${blocked ? `<div class="notice notice-err">${icon('shield', 18)} สมาชิกนี้ถูกระงับ บันทึกแต้มไม่ได้</div>` : `
+      ${blocked ? `<div class="notice notice-err">${icon('shield', 18)} ${tr('สมาชิกนี้ถูกระงับ บันทึกแต้มไม่ได้')}</div>` : `
       ${todayPromoHtml()}
       <form id="purchase" class="purchase" autocomplete="off">
-        <label class="field"><span>ยอดซื้อ (บาท)</span>
+        <label class="field"><span>${tr('ยอดซื้อ (บาท)')}</span>
           <input name="amount" class="input-xl" inputmode="decimal" placeholder="0" enterkeyhint="done"></label>
         <div class="preview" id="preview"></div>
-        <label class="field"><span>หมายเหตุ <small>(ไม่บังคับ เช่น เลขที่บิล)</small></span>
+        <label class="field"><span>${tr('หมายเหตุ')} <small>${tr('(ไม่บังคับ เช่น เลขที่บิล)')}</small></span>
           <input name="note" maxlength="100"></label>
-        <button class="btn btn-success btn-block btn-lg" type="submit">${icon('receipt', 20)} บันทึกยอดซื้อ</button>
+        <button class="btn btn-success btn-block btn-lg" type="submit">${icon('receipt', 20)} ${tr('บันทึกยอดซื้อ')}</button>
       </form>`}
       ${v.coupons && v.coupons.length && !blocked ? `
-        <div class="sub-head">คูปองที่ใช้ได้ (${v.coupons.length})</div>
+        <div class="sub-head">${tr('คูปองที่ใช้ได้ ({n})', { n: v.coupons.length })}</div>
         <div class="coupon-list">${v.coupons.map(c => `
           <div class="coupon-mini">
-            <div class="grow"><b>${esc(c.name)}</b><div class="m-sub">${esc(c.code)} · ถึง ${fmtDate(c.expiresAt)}</div></div>
-            <button class="btn btn-sm" data-act="use-coupon" data-id="${esc(c.code)}">ใช้คูปอง</button>
+            <div class="grow"><b>${esc(c.name)}</b><div class="m-sub">${tr('{code} · ถึง {date}', { code: esc(c.code), date: fmtDate(c.expiresAt) })}</div></div>
+            <button class="btn btn-sm" data-act="use-coupon" data-id="${esc(c.code)}">${tr('ใช้คูปอง')}</button>
           </div>`).join('')}</div>` : ''}
       ${isManager() ? `
         <details class="adjust">
-          <summary>${icon('coins', 18)} ปรับแต้ม (ผู้จัดการ)</summary>
+          <summary>${icon('coins', 18)} ${tr('ปรับแต้ม (ผู้จัดการ)')}</summary>
           <form id="adjust" autocomplete="off">
             <div class="adjust-row">
-              <label class="field"><span>จำนวน (+ เพิ่ม / − ลด)</span><input name="points" inputmode="numeric" placeholder="เช่น 50 หรือ -20"></label>
+              <label class="field"><span>${tr('จำนวน (+ เพิ่ม / − ลด)')}</span><input name="points" inputmode="numeric" placeholder="${tr('เช่น 50 หรือ -20')}"></label>
             </div>
-            <label class="field"><span>เหตุผล <em>*</em></span><input name="reason" maxlength="150" placeholder="เช่น แก้ยอดที่บันทึกผิด"></label>
-            <button class="btn btn-block" type="submit">ปรับแต้ม</button>
+            <label class="field"><span>${tr('เหตุผล <em>*</em>')}</span><input name="reason" maxlength="150" placeholder="${tr('เช่น แก้ยอดที่บันทึกผิด')}"></label>
+            <button class="btn btn-block" type="submit">${tr('ปรับแต้ม')}</button>
           </form>
         </details>` : ''}
     </section>`;
@@ -404,23 +431,23 @@ function memberView(v) {
 
 function couponView(v) {
   const c = v.coupon;
-  const label = { ACTIVE: 'ใช้ได้', USED: 'ใช้แล้ว', EXPIRED: 'หมดอายุ', CANCELLED: 'ยกเลิก' }[c.status] || c.status;
+  const label = { ACTIVE: tr('ใช้ได้'), USED: tr('ใช้แล้ว'), EXPIRED: tr('หมดอายุ'), CANCELLED: tr('ยกเลิก') }[c.status] || c.status;
   return `
     <section class="card result">
       ${flashHtml()}
       <div class="member-row">
         <div class="avatar sm">${icon('ticket', 22)}</div>
         <div class="grow"><div class="m-name">${esc(c.name)}</div><div class="m-sub">${esc(c.code)}</div></div>
-        <button class="icon-btn" data-act="clear" aria-label="ปิด">${icon('x')}</button>
+        <button class="icon-btn" data-act="clear" aria-label="${tr('ปิด')}">${icon('x')}</button>
       </div>
       <dl class="kv">
-        <dt>สถานะ</dt><dd><span class="status status-${esc(c.status.toLowerCase())}">${esc(label)}</span></dd>
-        <dt>เจ้าของ</dt><dd>${v.member ? esc(v.member.name) + ' · ' + esc(v.member.memberId) : '-'}</dd>
-        <dt>ใช้ได้ถึง</dt><dd>${fmtDate(c.expiresAt)}</dd>
-        ${c.usedAt ? `<dt>ใช้เมื่อ</dt><dd>${fmtDateTime(c.usedAt)}</dd>` : ''}
+        <dt>${tr('สถานะ')}</dt><dd><span class="status status-${esc(c.status.toLowerCase())}">${esc(label)}</span></dd>
+        <dt>${tr('เจ้าของ')}</dt><dd>${v.member ? esc(v.member.name) + ' · ' + esc(v.member.memberId) : '-'}</dd>
+        <dt>${tr('ใช้ได้ถึง')}</dt><dd>${fmtDate(c.expiresAt)}</dd>
+        ${c.usedAt ? `<dt>${tr('ใช้เมื่อ')}</dt><dd>${fmtDateTime(c.usedAt)}</dd>` : ''}
       </dl>
       ${c.status === 'ACTIVE'
-        ? `<button class="btn btn-success btn-block btn-lg" data-act="use-coupon" data-id="${esc(c.code)}">${icon('check', 20)} ยืนยันใช้คูปอง</button>`
+        ? `<button class="btn btn-success btn-block btn-lg" data-act="use-coupon" data-id="${esc(c.code)}">${icon('check', 20)} ${tr('ยืนยันใช้คูปอง')}</button>`
         : ''}
     </section>`;
 }
@@ -437,8 +464,8 @@ function onPurchaseSubmit(e) {
   e.preventDefault();
   const f = e.target;
   const amount = parseAmount(f.amount.value);
-  if (!(amount > 0)) return toast('กรุณาใส่ยอดซื้อ', 'err');
-  if (amount > S.settings.maxPurchase) return toast(`ยอดเกิน ${fmtNum(S.settings.maxPurchase)} บาทต่อบิล`, 'err');
+  if (!(amount > 0)) return toast(tr('กรุณาใส่ยอดซื้อ'), 'err');
+  if (amount > S.settings.maxPurchase) return toast(`${tr('ยอดเกิน {n} บาทต่อบิล', { n: fmtNum(S.settings.maxPurchase) })}`, 'err');
   const pts = pointsFor(amount).total;
   const m = S.view.member;
   S.pendingPurchase = { memberId: m.memberId, amount, note: f.note.value.trim() };
@@ -446,13 +473,13 @@ function onPurchaseSubmit(e) {
   // ยอดสูงกว่าปกติ → ให้ยืนยันอีกครั้ง (กันพิมพ์เลขเกิน เช่น 5000 แทน 500)
   if (amount >= S.settings.confirmOver) {
     openModal(`
-      <div class="modal-head"><h2>ตรวจสอบยอดอีกครั้ง</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-      <div class="confirm-cost"><b>฿${fmtMoney(amount)}</b><span>ยอดซื้อของ ${esc(m.name)}</span>
-        <div class="muted">ได้ +${fmtNum(pts)} ${esc(unit())}</div></div>
-      <p class="notice">ยอดนี้สูงกว่าปกติ กรุณาตรวจตัวเลขให้ถูกต้องก่อนบันทึก</p>
+      <div class="modal-head"><h2>${tr('ตรวจสอบยอดอีกครั้ง')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
+      <div class="confirm-cost"><b>฿${fmtMoney(amount)}</b><span>${tr('ยอดซื้อของ {name}', { name: esc(m.name) })}</span>
+        <div class="muted">${tr('ได้ +{n} {u}', { n: fmtNum(pts), u: esc(unit()) })}</div></div>
+      <p class="notice">${tr('ยอดนี้สูงกว่าปกติ กรุณาตรวจตัวเลขให้ถูกต้องก่อนบันทึก')}</p>
       <div class="modal-actions">
-        <button class="btn" data-act="close">แก้ไข</button>
-        <button class="btn btn-success" data-act="purchase-confirm">ถูกต้อง บันทึก</button>
+        <button class="btn" data-act="close">${tr('แก้ไข')}</button>
+        <button class="btn btn-success" data-act="purchase-confirm">${tr('ถูกต้อง บันทึก')}</button>
       </div>`);
     return;
   }
@@ -470,16 +497,16 @@ async function doPurchase(btn) {
     S.pendingPurchase = null;
     if (r.member) S.view.member = r.member;
     S.flash = r.duplicate
-      ? { kind: 'warn', html: 'รายการนี้บันทึกไปแล้ว (ระบบไม่บันทึกซ้ำ)' }
-      : { kind: 'ok', html: `บันทึก ฿${fmtMoney(r.amount)} → <b>+${fmtNum(r.pointsAdded)} ${esc(unit())}</b>${r.rule ? ` (${esc(ruleLabel(r.rule))})` : ''} · คงเหลือ ${fmtNum(r.balance)}`
-          + (r.tierUp ? `<br>🎉 ลูกค้าเลื่อนเป็นระดับ <b>${esc(r.tierUp.name)}</b> แล้ว` : '') };
+      ? { kind: 'warn', html: tr('รายการนี้บันทึกไปแล้ว (ระบบไม่บันทึกซ้ำ)') }
+      : { kind: 'ok', html: `${tr('บันทึก ฿{n} → <b>+{n2} {u}</b>{x} · คงเหลือ {n3}', { n: fmtMoney(r.amount), n2: fmtNum(r.pointsAdded), u: esc(unit()), x: r.rule ? ` (${esc(ruleLabel(r.rule))})` : '', n3: fmtNum(r.balance) })}`
+          + (r.tierUp ? `${tr('<br>🎉 ลูกค้าเลื่อนเป็นระดับ <b>{name}</b> แล้ว', { name: esc(r.tierUp.name) })}` : '') };
     renderResult();
-    toast('บันทึกแล้ว', 'ok');
+    toast(tr('บันทึกแล้ว'), 'ok');
     loadRecent();
   } catch (e) {
     setBusy(btn, false);
     if (onBranchError(e)) return;
-    toast(e.code === 'NETWORK' ? e.message + ' (กดบันทึกอีกครั้งได้ ระบบจะไม่บันทึกซ้ำ)' : e.message, 'err');
+    toast(e.code === 'NETWORK' ? e.message + tr(' (กดบันทึกอีกครั้งได้ ระบบจะไม่บันทึกซ้ำ)') : e.message, 'err');
   }
 }
 
@@ -497,17 +524,17 @@ function confirmUseCoupon(code) {
   const c = findCoupon(code);
   if (!c) return;
   openModal(`
-    <div class="modal-head"><h2>ยืนยันใช้คูปอง</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tr('ยืนยันใช้คูปอง')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <div class="confirm-title">${esc(c.name)}</div>
-    <p class="muted">${esc(c.code)} · ใช้แล้วจะนำกลับมาใช้อีกไม่ได้</p>
+    <p class="muted">${tr('{code} · ใช้แล้วจะนำกลับมาใช้อีกไม่ได้', { code: esc(c.code) })}</p>
     <div class="modal-actions">
-      <button class="btn" data-act="close">ยกเลิก</button>
-      <button class="btn btn-success" data-act="use-coupon-confirm" data-id="${esc(c.code)}">ยืนยันใช้คูปอง</button>
+      <button class="btn" data-act="close">${tr('ยกเลิก')}</button>
+      <button class="btn btn-success" data-act="use-coupon-confirm" data-id="${esc(c.code)}">${tr('ยืนยันใช้คูปอง')}</button>
     </div>`);
 }
 
 async function doUseCoupon(code, btn) {
-  setBusy(btn, true, 'กำลังบันทึก...');
+  setBusy(btn, true, tr('กำลังบันทึก...'));
   try {
     const r = await withRequestId('coupon|' + code, rid => S.api.call('useCoupon', { code, ...branchData(), requestId: rid }));
     closeModal();
@@ -516,9 +543,9 @@ async function doUseCoupon(code, btn) {
     } else {
       S.view.coupons = (S.view.coupons || []).filter(c => c.code !== code);
     }
-    S.flash = { kind: 'ok', html: `ใช้คูปอง <b>${esc(r.coupon.name)}</b> แล้ว — มอบของ/ส่วนลดให้ลูกค้าได้เลย` };
+    S.flash = { kind: 'ok', html: `${tr('ใช้คูปอง <b>{name}</b> แล้ว — มอบของ/ส่วนลดให้ลูกค้าได้เลย', { name: esc(r.coupon.name) })}` };
     renderResult();
-    toast('ใช้คูปองแล้ว', 'ok');
+    toast(tr('ใช้คูปองแล้ว'), 'ok');
   } catch (e) {
     setBusy(btn, false);
     closeModal();
@@ -535,18 +562,18 @@ function onAdjustSubmit(e) {
   const f = e.target;
   const points = Number(String(f.points.value).replace(/[,\s]/g, '').replace('−', '-'));
   const reason = f.reason.value.trim();
-  if (!Number.isInteger(points) || points === 0) return toast('ใส่จำนวนแต้มเป็นจำนวนเต็ม เช่น 50 หรือ -20', 'err');
-  if (reason.length < 3) return toast('กรุณาใส่เหตุผล', 'err');
+  if (!Number.isInteger(points) || points === 0) return toast(tr('ใส่จำนวนแต้มเป็นจำนวนเต็ม เช่น 50 หรือ -20'), 'err');
+  if (reason.length < 3) return toast(tr('กรุณาใส่เหตุผล'), 'err');
   const m = S.view.member;
   S.pendingAdjust = { memberId: m.memberId, points, reason };
   openModal(`
-    <div class="modal-head"><h2>ยืนยันปรับแต้ม</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tr('ยืนยันปรับแต้ม')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <div class="confirm-cost"><b>${points > 0 ? '+' : ''}${fmtNum(points)}</b><span>${esc(unit())} · ${esc(m.name)}</span>
-      <div class="muted">คงเหลือ ${fmtNum(m.points)} → ${fmtNum(m.points + points)}</div></div>
-    <p class="muted">เหตุผล: ${esc(reason)}</p>
+      <div class="muted">${tr('คงเหลือ {n} → {n2}', { n: fmtNum(m.points), n2: fmtNum(m.points + points) })}</div></div>
+    <p class="muted">${tr('เหตุผล: {reason}', { reason: esc(reason) })}</p>
     <div class="modal-actions">
-      <button class="btn" data-act="close">ยกเลิก</button>
-      <button class="btn btn-primary" data-act="adjust-confirm">ยืนยัน</button>
+      <button class="btn" data-act="close">${tr('ยกเลิก')}</button>
+      <button class="btn btn-primary" data-act="adjust-confirm">${tr('ยืนยัน')}</button>
     </div>`);
 }
 
@@ -560,7 +587,7 @@ async function doAdjust(btn) {
     closeModal();
     S.pendingAdjust = null;
     if (r.member) S.view.member = r.member;
-    S.flash = { kind: 'ok', html: `ปรับ ${r.pointsAdded > 0 ? '+' : ''}${fmtNum(r.pointsAdded)} ${esc(unit())} · คงเหลือ ${fmtNum(r.balance)}` };
+    S.flash = { kind: 'ok', html: `${tr('ปรับ {x}{n} {u} · คงเหลือ {n2}', { x: r.pointsAdded > 0 ? '+' : '', n: fmtNum(r.pointsAdded), u: esc(unit()), n2: fmtNum(r.balance) })}` };
     renderResult();
     loadRecent();
   } catch (e) {
@@ -582,10 +609,10 @@ async function loadRecent() {
       <div class="recent-row">
         <div class="grow">
           <b>${esc(t.memberName || t.memberId)}</b>
-          <div class="m-sub">${esc(TX_LABEL[t.type] || t.type)}${t.type === 'EARN' ? ' ฿' + fmtMoney(t.amount) : ''} · ${fmtDateTime(t.date)}${t.staff ? ' · ' + esc(t.staff) : ''}</div>
+          <div class="m-sub">${esc(tr(TX_LABEL[t.type] || t.type))}${t.type === 'EARN' ? ' ฿' + fmtMoney(t.amount) : ''} · ${fmtDateTime(t.date)}${t.staff ? ' · ' + esc(staffLabel(t.staff)) : ''}</div>
         </div>
         <div class="tx-points ${t.points > 0 ? 'plus' : t.points < 0 ? 'minus' : ''}">${t.points > 0 ? '+' : ''}${fmtNum(t.points)}</div>
-      </div>`).join('')}</div>` : '<div class="muted small">ยังไม่มีรายการ</div>';
+      </div>`).join('')}</div>` : `<div class="muted small">${tr('ยังไม่มีรายการ')}</div>`;
   } catch (e) {
     box.innerHTML = `<div class="muted small">${esc(e.message)}</div>`;
   }
@@ -601,7 +628,7 @@ async function scan() {
       if (value) lookup(value);
       return;
     } catch (e) {
-      console.warn('LINE scan ใช้ไม่ได้ ใช้กล้องผ่านเว็บแทน', e);
+      console.warn(tr('LINE scan ใช้ไม่ได้ ใช้กล้องผ่านเว็บแทน'), e);
     }
   }
   openCamera();
@@ -609,9 +636,9 @@ async function scan() {
 
 async function openCamera() {
   const box = openModal(`
-    <div class="modal-head"><h2>สแกน QR ลูกค้า</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-    <div id="reader" class="reader"><div class="muted center">กำลังเปิดกล้อง...</div></div>
-    <p class="muted center small">ส่อง QR สมาชิกหรือ QR คูปองให้อยู่ในกรอบ</p>`, { onClose: stopCamera });
+    <div class="modal-head"><h2>${tr('สแกน QR ลูกค้า')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
+    <div id="reader" class="reader"><div class="muted center">${tr('กำลังเปิดกล้อง...')}</div></div>
+    <p class="muted center small">${tr('ส่อง QR สมาชิกหรือ QR คูปองให้อยู่ในกรอบ')}</p>`, { onClose: stopCamera });
   try {
     await loadScript(SCANNER_JS);
     if (!document.getElementById('reader')) return; // ปิดป๊อปอัปไปก่อนกล้องเปิด
@@ -624,7 +651,7 @@ async function openCamera() {
     );
   } catch (e) {
     const reader = box.querySelector('#reader');
-    if (reader) reader.innerHTML = `<div class="notice notice-err">เปิดกล้องไม่ได้ — อนุญาตการใช้กล้อง หรือพิมพ์รหัสในช่องค้นหาแทน<br><small>${esc(e && e.message ? e.message : e)}</small></div>`;
+    if (reader) reader.innerHTML = `<div class="notice notice-err">${tr('เปิดกล้องไม่ได้ — อนุญาตการใช้กล้อง หรือพิมพ์รหัสในช่องค้นหาแทน<br>')}<small>${esc(e && e.message ? e.message : e)}</small></div>`;
   }
 }
 
@@ -661,7 +688,7 @@ async function restoreStaffDraft() {
   if (!draft || !draft.query) return;
   await lookup(draft.query);
   if (!S.view) return;
-  S.flash = { kind: 'warn', html: 'เชื่อมต่อ LINE ใหม่แล้ว รายการยังไม่ได้บันทึก — ตรวจยอดแล้วกดอีกครั้ง' };
+  S.flash = { kind: 'warn', html: tr('เชื่อมต่อ LINE ใหม่แล้ว รายการยังไม่ได้บันทึก — ตรวจยอดแล้วกดอีกครั้ง') };
   renderResult();
   const f = document.getElementById('purchase');
   if (f && draft.amount) {
@@ -672,6 +699,6 @@ async function restoreStaffDraft() {
 }
 
 function copyText(text) {
-  if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast('คัดลอกแล้ว', 'ok'), () => toast(text));
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast(tr('คัดลอกแล้ว'), 'ok'), () => toast(text));
   else toast(text);
 }

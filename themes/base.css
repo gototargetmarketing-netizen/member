@@ -942,3 +942,5 @@ input.input-err { border-color: var(--danger); }
 /* ปุ่ม TH | EN ของหลังบ้าน อยู่แถวชื่อร้าน (คอม = เมนูข้าง / มือถือ = แถบบน) */
 .adm-brand .adm-lang { margin-left: auto; }
 .adm-brand .adm-lang button { min-width: 34px; min-height: 28px; padding: 3px 8px; font-size: 12px; }
+/* ปุ่ม TH | EN ของหน้าพนักงาน ใต้ชื่อ/บทบาทที่หัวหน้า */
+.staff-me .staff-lang button { min-width: 34px; min-height: 28px; padding: 3px 8px; font-size: 12px; }

@@ -198,6 +198,31 @@ function objectValues(src, name) {
   ok(I18N.detailText('EARN', 'ซื้อสินค้า 250 บาท · วันพุธแต้ม 2 เท่า', 'en') === 'Purchase ฿250 · วันพุธแต้ม 2 เท่า' && I18N.detailText('REDEEM', 'แลก กาแฟ', 'en') === 'Redeemed กาแฟ' &&
     I18N.detailText('ADJUST', 'แก้ยอดผิด', 'en') === 'แก้ยอดผิด', 'รายละเอียดรายการแต้มใน Excel: ที่ระบบเขียนแปล / ชื่อกติกาและหมายเหตุที่คนพิมพ์คงเดิม');
 
+  // ---------------- หน้าพนักงาน (รอบ 3 — 19 พ.ย. 2569) ----------------
+  console.log('\n[9] หน้าพนักงาน: ทุกข้อความมีคำแปล + ตัวกลางแปลข้อความผิดพลาดครบทุกไฟล์');
+  const STF = (await import(pathToFileURL(path.join(ROOT, 'app', 'i18n-staff-en.js')).href)).default;
+  const staffSrc = read('app/staff.js');
+  const skeys = new Set([...literalCalls(staffSrc, ['tr']), ...['ROLE_LABEL', 'TX_LABEL', 'LOADING_TEXT'].flatMap((c) => objectValues(staffSrc, c)).filter((v) => THAI.test(v)), 'ลูกค้า@@ผู้ทำ']);
+  const shas = (k) => Object.prototype.hasOwnProperty.call(STF, k) || Object.prototype.hasOwnProperty.call(EN, k);
+  const smiss = [...skeys].filter((k) => !shas(k));
+  ok(skeys.size > 90 && smiss.length === 0, `ข้อความหน้าพนักงาน ${skeys.size} จุด มีคำแปลครบ`, smiss.slice(0, 10));
+  ok(!/[^\w.]t\('/.test(staffSrc.replace(/tBase\(/g, '')), 'หน้าพนักงานเรียกแปลผ่าน tr() เท่านั้น');
+  const serr = [];
+  for (const [th, en] of Object.entries(STF)) {
+    const allow = new Set([...holes(th), ...(/\{u\}/.test(th) ? ['u'] : [])]);
+    if ([...holes(en)].some((h) => !allow.has(h))) serr.push(th + ' → ช่องเกิน');
+    if ([...holes(th)].some((h) => !holes(en).has(h) && h !== 'u')) serr.push(th + ' → ไม่ได้ใช้ช่อง');
+    if (THAI.test(en)) serr.push(th + ' → มีอักษรไทย');
+    const tags = (x) => (String(x).match(/<\/?[a-z]+/g) || []).sort().join();
+    if (tags(th) !== tags(en)) serr.push(th + ' → แท็กไม่ตรง');
+  }
+  ok(serr.length === 0, `คำแปลหน้าพนักงาน ${Object.keys(STF).length} ข้อ ถูกรูปแบบ`, serr.slice(0, 8));
+  ok(Object.keys(STF).every((k) => skeys.has(k)), 'ไม่มีคำแปลค้าง', Object.keys(STF).filter((k) => !skeys.has(k)));
+  const allSrv = fs.readdirSync(path.join(ROOT, 'api', '_lib')).filter((f) => f.endsWith('.js')).map((f) => read('api/_lib/' + f)).join('\n');
+  const allMsgs = [...new Set([...allSrv.matchAll(/userError\('((?:[^'\\]|\\.)*)',/g)].map((m) => m[1].replace(/\\'/g, "'")))];
+  const left = allMsgs.filter((m) => THAI.test(I18N.translate(m, 'en')));
+  ok(allMsgs.length > 80 && left.length === 0, `ข้อความผิดพลาดทุกไฟล์ของตัวกลาง (${allMsgs.length} ข้อความ) แปลครบ`, left);
+
   console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

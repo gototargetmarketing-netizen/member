@@ -14,7 +14,8 @@ import { t as tBase, isEn, initLang, autoLang, save as saveLang, langSwitchHtml,
 import ADMIN_EN from './i18n-admin-en.js';
 extendLang(ADMIN_EN);
 // ส่งคำเรียกแต้ม {u} มา → ใส่ {U} (ตัวแรกใหญ่ — ขึ้นต้นประโยคภาษาอังกฤษ) ให้เอง
-const tr = (s, v) => tBase(s, v && typeof v.u === 'string' && v.U === undefined ? { ...v, U: v.u.charAt(0).toUpperCase() + v.u.slice(1) } : v);
+// {U} = ขึ้นต้นประโยค / {u1} = เอกพจน์ ("1 point" ไม่ใช่ "1 points")
+const tr = (s, v) => tBase(s, v && typeof v.u === 'string' && v.U === undefined ? { U: v.u.charAt(0).toUpperCase() + v.u.slice(1), u1: isEn() ? v.u.replace(/s$/i, '') : v.u, ...v } : v);
 import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, setBusy, showLoading, hideLoading, creditHtml, bootHtml, qrSvg, loadScript } from './ui.js';
 
 const ROLE_LABEL = { OWNER: 'เจ้าของร้าน', ADMIN: 'ผู้จัดการ', CASHIER: 'แคชเชียร์' };
