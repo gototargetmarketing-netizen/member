@@ -717,6 +717,78 @@ const num = (s) => Number(String(s).replace(/[^\d]/g, ''));
     await b.click('.modal [data-act=close]');
     await b.eval(`localStorage.removeItem('crm_lang')`);
 
+    console.log('\n[13] หลังบ้านสองภาษา: เจ้าของร้านสลับเป็นภาษาอังกฤษ → ทุกหน้าไม่มีภาษาไทยปน (ยกเว้นข้อมูลที่คนพิมพ์)');
+    await b.eval(asUser('U_DEMO_OWNER', 'เจ้าของร้าน'));
+    await b.nav('about:blank');
+    await b.nav(`${WEB}/demo/admin#overview`);
+    await b.waitFor(`document.querySelector('.adm-lang [data-lang=en]')`, 10000, 'ปุ่ม TH | EN ของหลังบ้าน');
+    ok(await b.eval(`document.querySelector('.adm-lang [data-lang=th]').getAttribute('aria-pressed') === 'true' && /ภาพรวม/.test(document.querySelector('.adm-nav').innerText)`),
+      'เปิดครั้งแรก = ภาษาไทย (เหมือนเดิม) + มีปุ่ม TH | EN แถวชื่อร้าน');
+    await b.click('.adm-lang [data-lang=en]');
+    await b.waitFor(`/Overview/.test(document.querySelector('.adm-nav').innerText) && document.querySelector('.kpis')`, 10000, 'หลังบ้านภาษาอังกฤษ');
+    ok(await b.eval(`localStorage.getItem('crm_admin_lang') === 'en' && localStorage.getItem('crm_lang') !== 'en'`), 'จำภาษาหลังบ้านแยกจากหน้าลูกค้า (crm_admin_lang)');
+    // ข้อมูลที่คนพิมพ์ (ชื่อลูกค้า สาขา ของรางวัล ฯลฯ) ไม่นับ — ดึงจากฐานข้อมูลจำลอง
+    const dataText = new Set();
+    for (const q of [`select name as v from members`, `select name as v from staff`, `select name as v from branches`, `select name as v from rewards union select description from rewards`,
+      `select title as v from promotions union select subtitle from promotions union select tag from promotions`, `select name as v from point_rules`, `select name as v from tiers`,
+      `select name as v from shops`, `select distinct name as v from coupons`, `select 'OA ทดลอง' as v`, `select distinct detail as v from transactions where type = 'ADJUST'`]) {
+      (await sql(q)).forEach((r) => r.v && dataText.add(String(r.v).trim()));
+    }
+    const thaiLeft = async (scope) => (await b.eval(`(() => { const root = ${scope}; if (!root) return []; const out = new Set(); const TH = /[ก-ฺเ-๛]/;
+      const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      while (w.nextNode()) { const el = w.currentNode.parentElement; if (el.closest('select[data-branch-filter], #brand-preview, .tier-banner, .pv, textarea')) continue; const v = w.currentNode.nodeValue.trim(); if (TH.test(v)) out.add(v); }
+      root.querySelectorAll('[placeholder],[aria-label],[title]').forEach((e) => ['placeholder', 'aria-label', 'title'].forEach((a) => { const v = e.getAttribute(a);
+        // ช่องข้อความลูกค้าภาษาไทย (หน้าตาร้าน / ข้อความหัวหน้าสิทธิ์) ตั้งใจแสดงค่าตั้งต้นภาษาไทยที่ลูกค้าเห็น
+        if (a === 'placeholder' && e.matches('[name^=TEXT_]:not([name$=_EN]), [name=PRIVACY_TEXT], [name=SHOP_NAME], [name=intro]')) return;
+        if (v && TH.test(v) && !/^ภาษา \\/ Language$/.test(v)) out.add(v); }));
+      return [...out]; })()`)).filter((x) => {
+      const t = x.replace(/^(Rewards|Promotions|Bonus points|Branches|Tier|Membership benefits page): /, '').replace(/^[\d ]+[A-Z][a-z]{2} \d\d, [\d:]+ · /, '').trim();
+      return !dataText.has(x) && !dataText.has(t) && !/^Redeemed:? /.test(x) && !/ · /.test(x) && !/^\d/.test(x);
+    });
+    const shopPages = ['overview', 'members', 'transactions', 'coupons', 'rewards', 'promos', 'broadcast', 'rules', 'tiers', 'staff', 'branches', 'brand', 'settings'];
+    const leftAll = {};
+    for (const p of shopPages) {
+      await b.nav(`${WEB}/demo/admin#${p}`);
+      await b.waitFor(`!document.getElementById('view').classList.contains('is-loading') && document.querySelector('#view .adm-head')`, 10000, 'หน้า ' + p);
+      await sleep(p === 'broadcast' ? 1500 : 300);
+      const left = await thaiLeft(`document.getElementById('app')`);
+      if (left.length) leftAll[p] = left.slice(0, 5);
+    }
+    ok(Object.keys(leftAll).length === 0, `ครบ ${shopPages.length} หน้า (ภาพรวม → ตั้งค่าร้าน): ข้อความระบบเป็นภาษาอังกฤษทั้งหมด`, leftAll);
+    ok(/Members/.test(await b.text('.adm-nav')) && /Shop settings/.test(await b.text('.adm-nav')), 'เมนู: Members … Shop settings');
+    // หน้าต่างฟอร์ม
+    const modals = [['rewards', '[data-act=reward-edit][data-id=R001]'], ['promos', '[data-act=promo-edit][data-id=P002]'], ['rules', '[data-act=rule-edit]'],
+      ['staff', '[data-act=staff-edit]'], ['branches', '[data-act=branch-edit]:not([data-id=""])'], ['members', '[data-act=export]']];
+    const leftModal = {};
+    for (const [p, sel] of modals) {
+      await b.nav(`${WEB}/demo/admin#${p}`);
+      await b.waitFor(`document.querySelector('${sel}')`, 10000, 'ปุ่ม ' + sel);
+      await b.click(sel);
+      await b.waitFor(`document.querySelector('.modal')`, 5000, 'หน้าต่าง ' + sel);
+      const left = await thaiLeft(`document.querySelector('.modal')`);
+      if (left.length) leftModal[sel] = left.slice(0, 5);
+      await b.eval(`document.querySelector('.modal [data-act=close]') && document.querySelector('.modal [data-act=close]').click(); true`);
+    }
+    ok(Object.keys(leftModal).length === 0, `หน้าต่างฟอร์ม ${modals.length} แบบ (ของรางวัล โปรโมชัน แต้มพิเศษ พนักงาน สาขา ส่งออก) เป็นภาษาอังกฤษ`, leftModal);
+    // วันที่ ค.ศ. + ข้อความผิดพลาดจากตัวกลางเป็นอังกฤษ
+    await b.nav(`${WEB}/demo/admin#overview`);
+    await b.waitFor(`document.querySelector('.range-text, .kpis')`, 10000, 'ภาพรวม');
+    ok(/20\d\d|\b\d{1,2} [A-Z][a-z]{2} \d\d\b/.test(await b.text('#view')) && !/พ\.ย\.|ต\.ค\./.test(await b.text('#view')), 'วันที่เป็นภาษาอังกฤษ (ไม่มี พ.ย. / ต.ค.)');
+    await b.nav(`${WEB}/demo/admin#rewards`);
+    await b.waitFor(`document.querySelector('[data-act=reward-edit][data-id=R001]')`, 10000, 'ของรางวัล');
+    await b.click('[data-act=reward-edit][data-id=R001]');
+    await b.waitFor(`document.querySelector('.modal form[data-form=reward]')`, 5000, 'ฟอร์ม');
+    await b.eval(`(() => { const f = document.querySelector('.modal form[data-form=reward]'); f.nameEn.value = 'x'.repeat(81); f.nameEn.removeAttribute('maxlength'); return true; })()`);
+    await b.eval(`document.querySelector('.modal form[data-form=reward]').requestSubmit()`);
+    await b.waitFor(`/English reward name is too long/.test((document.querySelector('.toast.show') || {}).innerText || '')`, 8000, 'ข้อความผิดพลาดภาษาอังกฤษ');
+    ok(true, 'ตัวกลางตอบข้อผิดพลาดของหลังบ้านเป็นภาษาอังกฤษ ("English reward name is too long …")');
+    await b.click('.modal [data-act=close]');
+    await b.shot(path.join(OUT, 'n28-admin-english.png'));
+    // กลับเป็นไทย → เหมือนเดิมทุกอย่าง
+    await b.click('.adm-lang [data-lang=th]');
+    await b.waitFor(`/ภาพรวม/.test(document.querySelector('.adm-nav').innerText) && /ของรางวัล/.test(document.querySelector('#view').innerText)`, 8000, 'กลับเป็นไทย');
+    ok(await b.eval(`localStorage.getItem('crm_admin_lang') === 'th'`), 'กด TH → หลังบ้านกลับเป็นภาษาไทยทันที');
+
     const errs = b.logs.filter((l) => /EXCEPTION|console\.error/.test(l));
     ok(errs.length === 0, 'ไม่มีข้อผิดพลาดในหน้าเว็บ', errs);
   } catch (e) {

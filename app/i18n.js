@@ -7,11 +7,12 @@
 //     (ภาษาไทยตัด @@... ทิ้งก่อนแสดง)
 //   • ช่องแทนค่า {ชื่อ} เช่น t('ใช้ได้ถึง {date}', { date }) — ค่าที่ใส่ต้อง esc() เองถ้าจะเอาไปใส่ใน HTML
 //
-// เปิดได้เฉพาะร้านที่เปิดสวิตช์ features.english ในไฟล์ร้าน (ผู้ใช้เป็นคนเปิดให้ — ร้านต้องเติมข้อความภาษาอังกฤษของร้านเอง)
-// ร้านที่ไม่เปิด = ภาษาไทยเสมอ ไม่มีปุ่มสลับ (เหมือนก่อนมีระบบนี้ทุกอย่าง)
+// หน้าลูกค้า: เปิดได้เฉพาะร้านที่เปิดสวิตช์ features.english ในไฟล์ร้าน (ผู้ใช้เป็นคนเปิดให้ — ร้านต้องเติมข้อความภาษาอังกฤษของร้านเอง)
+//   ร้านที่ไม่เปิด = ภาษาไทยเสมอ ไม่มีปุ่มสลับ (เหมือนก่อนมีระบบนี้ทุกอย่าง)
+// หลังบ้าน: เปิดทุกร้าน (ผู้ใช้เลือก 19 พ.ย. 2569 — เจ้าของ/ผู้จัดการต่างชาติอาจอยู่ร้านที่ลูกค้าเป็นคนไทยทั้งหมด) จำภาษาแยกจากหน้าลูกค้า
 import EN from './i18n-en.js';
 
-const KEY = 'crm_lang';
+let KEY = 'crm_lang'; // หลังบ้านใช้ crm_admin_lang (ลองหน้าลูกค้าเป็นอังกฤษ หลังบ้านไม่เปลี่ยนตาม)
 const SUPPORTED = ['th', 'en'];
 let lang = 'th';
 let enabled = false;
@@ -31,8 +32,10 @@ function apply(l) {
 }
 
 // เรียกหลังโหลดไฟล์ร้าน (ก่อนเชื่อมต่อ LINE): ลิงก์ ?lang=en → ที่ลูกค้าเลือกไว้ในเครื่อง → ไทย
-export function initLang(config) {
-  enabled = !!(config && config.features && config.features.english === true);
+// opts.key = ที่จำภาษาในเครื่อง / opts.always = มีปุ่มสลับเสมอ ไม่ดูสวิตช์ของร้าน (หลังบ้าน)
+export function initLang(config, opts = {}) {
+  if (opts.key) KEY = opts.key;
+  enabled = !!opts.always || !!(config && config.features && config.features.english === true);
   if (!enabled) { chosen = false; apply('th'); return; }
   const q = new URLSearchParams(window.location.search);
   // เปิดผ่าน liff.line.me ครั้งแรก ค่ายังซ่อนอยู่ใน liff.state
@@ -58,6 +61,9 @@ export function save(l) {
   try { localStorage.setItem(KEY, l); } catch (e) { /* เก็บไม่ได้ ครั้งหน้าก็เลือกใหม่ */ }
   apply(l);
 }
+
+// เพิ่มคำแปลของหน้าอื่น (หลังบ้านมีพจนานุกรมของตัวเอง — หน้าลูกค้าจะได้ไม่ต้องโหลดข้อความหลังบ้าน)
+export function extend(dict) { Object.assign(EN, dict); }
 
 const fill = (s, vars) => (vars ? s.replace(/\{(\w+)\}/g, (m, k) => (Object.prototype.hasOwnProperty.call(vars, k) ? String(vars[k]) : m)) : s);
 

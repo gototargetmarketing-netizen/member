@@ -133,6 +133,71 @@ function objectValues(src, name) {
   r = await app.handle({ action: 'ไม่มีคำสั่งนี้' });
   ok(!r.ok && r.error === 'ไม่รู้จักคำสั่งนี้', 'ไม่ส่ง lang → ภาษาไทยเหมือนเดิม (ระบบเดิม / หน้าพนักงาน / หลังบ้าน)', r);
 
+  // ---------------- หลังบ้าน (19 พ.ย. 2569) ----------------
+  console.log('\n[6] หลังบ้าน: ทุกข้อความมีคำแปล');
+  const ADM = (await import(pathToFileURL(path.join(ROOT, 'app', 'i18n-admin-en.js')).href)).default;
+  const admin = read('app/admin.js');
+  // ค่าคงที่ระดับไฟล์ (ประเมินก่อนเลือกภาษา) เก็บเป็นไทยแล้วแปลตอนใช้ด้วย tr(...)
+  const CONSTS = ['ROLE_LABEL', 'TX_LABEL', 'COUPON_LABEL', 'STAFF_STATUS_LABEL', 'STATE_LABEL', 'LOADING_TEXT', 'EN_KIND', 'TIER_REASON', 'BC_ERROR',
+    'THEME_LABEL', 'ON_OFF', 'READONLY_UI'];
+  const arrayLabels = (name) => { const m = admin.match(new RegExp(`const ${name} = \\[([\\s\\S]*?)\\];`)); return m ? [...m[1].matchAll(/'([^']*[฀-๿][^']*)'/g)].map((x) => x[1]) : []; };
+  const blockStrings = (name) => { const m = admin.match(new RegExp(`const ${name} = \\{([\\s\\S]*?)\\n\\};`)); return m ? [...m[1].matchAll(/'([^']*[฀-๿][^']*)'/g)].map((x) => x[1]) : []; };
+  // ข้อความไทยทุกตัวในค่าคงที่ (ถึง ; ตัวแรกที่ท้ายบรรทัด)
+  const constStrings = (name) => { const i = admin.indexOf('const ' + name + ' = '); if (i < 0) return []; const body = admin.slice(i, admin.indexOf(';\n', i));
+    return [...body.matchAll(/'([^']*[\u0E00-\u0E7F][^']*)'/g)].map((x) => x[1]).filter((v) => THAI.test(v)); };
+  const DAY = arrayLabels('DAYS').map((d) => d + '@@วัน');
+  const FIELD = ['ชื่อ', 'รายละเอียด', 'หัวข้อ', 'ข้อความรอง', 'ป้าย', 'สิทธิพิเศษ', 'ข้อความ'].map((f) => f + '@@ช่อง'); // ชื่อช่องจาก englishStatus ของตัวกลาง
+  const akeys = new Set([
+    ...literalCalls(admin, ['tr']),
+    ...CONSTS.concat(['PAGES', 'PRESETS', 'BC_STATUS', 'RULE_STATE', 'BRAND_COLORS', 'IMAGE_SPECS', 'DELETE_KIND', 'SETTING_UI']).flatMap(constStrings),
+    ...DAY, ...FIELD, 'ข้อความหัวหน้า', 'ลบบัญชีสมาชิก@@ประวัติ', 'ลูกค้า@@ผู้ทำ', 'วางลิงก์รูปที่ขึ้นต้นด้วย https://'
+  ].filter((k) => k !== 'แต้ม'));
+  const has = (k) => Object.prototype.hasOwnProperty.call(ADM, k) || Object.prototype.hasOwnProperty.call(EN, k);
+  const amiss = [...akeys].filter((k) => !has(k));
+  ok(akeys.size > 700 && amiss.length === 0, `ข้อความหลังบ้าน ${akeys.size} จุด มีคำแปลครบ`, amiss.slice(0, 15));
+  ok(!/\btr\(`/.test(admin) && !/[^\w.]t\('/.test(admin.replace(/tBase\(/g, '')), 'หลังบ้านเรียกแปลผ่าน tr() ด้วยข้อความคงที่เท่านั้น (ชุดนี้ตรวจกุญแจได้ครบ)');
+
+  console.log('\n[7] คำแปลหลังบ้านถูกรูปแบบ');
+  const aerr = [];
+  for (const [th, en] of Object.entries(ADM)) {
+    // {u} มา → {U} {u1} ใส่ให้เอง / ชื่อค่าร้านที่มีคำว่า "แต้ม" (settingLabel) ส่ง {u} {u1} มาด้วย
+    const allow = new Set([...holes(th), ...(/\{u\}|แต้ม/.test(th) ? ['u'] : [])]);
+    const bad = [...holes(en)].filter((h) => !allow.has(h));
+    if (bad.length) aerr.push(th + ' → ช่องเกิน ' + bad.join(','));
+    if (THAI.test(en)) aerr.push(th + ' → มีอักษรไทย');
+    const tags = (x) => (String(x).match(/<\/?[a-z]+/g) || []).sort().join();
+    if (tags(th) !== tags(en)) aerr.push(th + ' → แท็ก HTML ไม่ตรง');
+    const lost = [...holes(th)].filter((h) => !holes(en).has(h) && !['u', 'icon', 'color'].includes(h)); // ไอคอน/สีจุดไม่จำเป็นต้องอยู่ในคำแปล
+    if (lost.length) aerr.push(th + ' → ไม่ได้ใช้ช่อง ' + lost.join(','));
+  }
+  ok(aerr.length === 0, `คำแปล ${Object.keys(ADM).length} ข้อ: ช่องแทนค่าตรง / ไม่มีอักษรไทย / แท็กตรง`, aerr.slice(0, 10));
+  const aunused = Object.keys(ADM).filter((k) => !akeys.has(k) && !['ชื่อ', 'วัน', 'สมาชิกที่ลบแล้ว', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส', 'อา'].includes(k));
+  ok(aunused.length === 0, 'ไม่มีคำแปลค้าง (ข้อความถูกลบจากหลังบ้านแล้ว)', aunused.slice(0, 10));
+
+  console.log('\n[8] ตัวกลาง: ข้อความผิดพลาดของหลังบ้าน + ไฟล์ Excel');
+  const I18N = require(path.join(ROOT, 'api', '_lib', 'i18n.js'));
+  const srv = ['admin', 'broadcast'].map((f) => read('api/_lib/' + f + '.js')).join('\n');
+  // เฉพาะข้อความที่เป็นสตริงเดียวทั้งก้อน (ข้อความที่ต่อด้วยตัวเลข/ชื่อ ตรวจด้วยตัวอย่างข้างล่าง)
+  const alits = [...new Set([...srv.matchAll(/userError\('((?:[^'\\]|\\.)*)',/g)].map((m) => m[1].replace(/\\'/g, "'")))];
+  const anotEn = alits.filter((m) => THAI.test(I18N.translate(m, 'en')));
+  ok(alits.length > 40 && anotEn.length === 0, `ข้อความผิดพลาด ${alits.length} ข้อความของหลังบ้าน แปลครบ`, anotEn.slice(0, 8));
+  // ชื่อช่องที่ใช้ประกอบข้อความ (cleanText / intIn / optInt ... และ label ของค่าร้าน/หน้าตาร้าน)
+  const alabels = new Set([...srv.matchAll(/(?:cleanText|intIn|optInt|cleanKey|num|days|range|idList)\([^;]*?'([^']*[฀-๿][^']*)'\)/g)].map((m) => m[1])
+    .concat([...srv.matchAll(/label: '([^']+)'/g)].map((m) => m[1])).filter((l) => !l.startsWith(' ')));
+  const anoLabel = [...alabels].filter((l) => !I18N.labelEn(l));
+  ok(alabels.size > 40 && anoLabel.length === 0, `ชื่อช่อง ${alabels.size} ชื่อ มีคำแปล (ใช้ใน "กรุณากรอก…" / "…ไม่ถูกต้อง" ฯลฯ)`, anoLabel);
+  const asamples = [['กรุณากรอกชื่อของรางวัล', 'Please enter the reward name'], ['ชื่อของรางวัล (อังกฤษ)ยาวเกิน 80 ตัวอักษร', 'English reward name is too long (max 80 characters)'],
+    ['แต้มต้อนรับต้องเป็นจำนวนเต็ม 0–100,000', 'Welcome points must be a whole number from 0 to 100,000'], ['ไม่พบกติกาแต้มพิเศษนี้', 'Bonus points rule not found'],
+    ['ระดับ "Gold" ยังใช้กับโปรโมชัน "ลดครึ่งราคา" อยู่ — เปลี่ยนระดับขั้นต่ำของรายการนั้นก่อน', 'Tier "Gold" is still used by promotion "ลดครึ่งราคา" — change that item\'s minimum tier first']];
+  const awrong = asamples.filter(([th, en]) => I18N.translate(th, 'en') !== en).map(([th]) => th + ' → ' + I18N.translate(th, 'en'));
+  ok(awrong.length === 0, 'ข้อความที่มีชื่อช่อง/ตัวเลข แปลถูก (ชื่อที่ร้านตั้งคงเดิม)', awrong);
+  ok(I18N.translate('กรุณากรอกชื่อของรางวัล', 'th') === 'กรุณากรอกชื่อของรางวัล', 'ภาษาไทย (ไม่ส่ง lang) ไม่เปลี่ยน');
+  const exp = read('api/_lib/admin.js').match(/columns = \[[^\]]+\]|columns\.push\('[^']+'\)/g).join(' ');
+  const cols = [...exp.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+  ok(cols.length > 15 && cols.every((c) => !THAI.test(I18N.exportText(c, 'en'))), `หัวคอลัมน์ Excel ${cols.length} หัว มีภาษาอังกฤษ`, cols.filter((c) => THAI.test(I18N.exportText(c, 'en'))));
+  ok(I18N.detailText('EARN', 'ซื้อสินค้า 250 บาท · วันพุธแต้ม 2 เท่า', 'en') === 'Purchase ฿250 · วันพุธแต้ม 2 เท่า' && I18N.detailText('REDEEM', 'แลก กาแฟ', 'en') === 'Redeemed กาแฟ' &&
+    I18N.detailText('ADJUST', 'แก้ยอดผิด', 'en') === 'แก้ยอดผิด', 'รายละเอียดรายการแต้มใน Excel: ที่ระบบเขียนแปล / ชื่อกติกาและหมายเหตุที่คนพิมพ์คงเดิม');
+
   console.log(`\nผล: ผ่าน ${pass} / ไม่ผ่าน ${fail}`);
   process.exit(fail ? 1 : 0);
 })().catch((e) => { console.error(e); process.exit(1); });

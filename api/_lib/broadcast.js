@@ -11,6 +11,7 @@
 'use strict';
 const { userError } = require('./errors');
 const U = require('./util');
+const I18N = require('./i18n'); // สถานะ LINE OA ในหน้าส่งข้อความแปลตามภาษาหลังบ้าน
 const T = require('./tiers');
 const { retryKey } = require('./lineoa');
 
@@ -383,7 +384,7 @@ async function adminBroadcastInfo(p, ctx) {
   } catch (e) {
     console.error('เชื่อม LINE OA ร้าน ' + ctx.shop.id + ' ไม่ได้: ' + (e && e.message ? e.message : e));
     const pr = oaProblem(e);
-    return { connected: false, problem: pr.code, problemText: pr.msg, history: items };
+    return { connected: false, problem: pr.code, problemText: I18N.translate(pr.msg, ctx.lang), history: items };
   }
 }
 

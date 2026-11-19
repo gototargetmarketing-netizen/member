@@ -8,11 +8,18 @@ import { createApi, createRetryKeeper } from './api.js';
 import { applyDevParams, mountDevBar } from './devbar.js';
 import { tierBanner } from './tier.js';
 import EN_TEXT from './i18n-en.js';
+// สองภาษา หลังบ้าน (ผู้ใช้ขอ 19 พ.ย. 2569 — จะขายระบบให้ร้านต่างชาติ): ข้อความทั้งหมดผ่าน tr() / คำแปลอยู่ใน i18n-admin-en.js
+// ใช้ชื่อ tr ไม่ใช่ t เพราะไฟล์นี้มีตัวแปรชื่อ t หลายที่ (ระดับ / รายการแต้ม / วันนี้)
+import { t as tBase, isEn, initLang, autoLang, save as saveLang, langSwitchHtml, extend as extendLang, monthNames, dateLocale } from './i18n.js';
+import ADMIN_EN from './i18n-admin-en.js';
+extendLang(ADMIN_EN);
+// ส่งคำเรียกแต้ม {u} มา → ใส่ {U} (ตัวแรกใหญ่ — ขึ้นต้นประโยคภาษาอังกฤษ) ให้เอง
+const tr = (s, v) => tBase(s, v && typeof v.u === 'string' && v.U === undefined ? { ...v, U: v.u.charAt(0).toUpperCase() + v.u.slice(1) } : v);
 import { esc, icon, toast, openModal, closeModal, fmtNum, fmtMoney, fmtDate, fmtDateTime, setBusy, showLoading, hideLoading, creditHtml, bootHtml, qrSvg, loadScript } from './ui.js';
 
 const ROLE_LABEL = { OWNER: 'เจ้าของร้าน', ADMIN: 'ผู้จัดการ', CASHIER: 'แคชเชียร์' };
 const TX_LABEL = { EARN: 'ยอดซื้อ', WELCOME: 'แต้มต้อนรับ', REDEEM: 'แลกรางวัล', ADJUST: 'ปรับแต้ม', CONSENT: 'รับข่าวสาร', DELETE: 'ลบบัญชี' };
-const COUPON_LABEL = { ACTIVE: 'ใช้ได้', USED: 'ใช้แล้ว', EXPIRED: 'หมดอายุ', CANCELLED: 'ยกเลิก' };
+const COUPON_LABEL = { ACTIVE: 'ใช้ได้', USED: 'ใช้แล้ว', EXPIRED: 'หมดอายุ', CANCELLED: 'ยกเลิกแล้ว' };
 const STAFF_STATUS_LABEL = { PENDING: 'รออนุมัติ', ACTIVE: 'ใช้งานได้', DISABLED: 'ปิดสิทธิ์' };
 const PAGES = [
   { id: 'overview', label: 'ภาพรวม', icon: 'chart' },
@@ -69,7 +76,8 @@ const S = {
 const withRequestId = createRetryKeeper();
 
 const cfg = () => S.shop.config;
-const unit = () => (cfg().texts && cfg().texts.pointUnit) || 'แต้ม';
+const unit = () => (isEn() ? (cfg().textsEn && cfg().textsEn.pointUnit) || 'points' : (cfg().texts && cfg().texts.pointUnit) || 'แต้ม');
+const unitOne = () => (isEn() ? unit().replace(/s$/i, '') : unit()); // "1 point" ไม่ใช่ "1 points"
 const isOwner = () => S.me && S.me.role === 'OWNER';
 
 /* แพ็กเกจหลายสาขา: เปิด/ปิดที่ shops/<ร้าน>/config.js → features.branches / features.maxBranches
@@ -97,7 +105,7 @@ const HAS_THAI = /[\u0E00-\u0E7F]/;
 // ช่องภาษาอังกฤษ: placeholder บอกว่าเว้นว่างแล้วลูกค้าเห็นอะไร
 function enField(label, name, value, max, opts = {}) {
   if (!englishFeature()) return '';
-  const ph = opts.placeholder || 'ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นภาษาไทย';
+  const ph = opts.placeholder || tr('ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นภาษาไทย');
   const attrs = `name="${name}" maxlength="${max}" placeholder="${esc(ph)}" lang="en"${opts.disabled ? ' disabled' : ''}`;
   return `<label class="field field-en"><span><b class="en-tag">EN</b> ${esc(label)}${opts.hint ? ` <small>${opts.hint}</small>` : ''}</span>
     ${opts.rows ? `<textarea ${attrs} rows="${opts.rows}">${esc(value || '')}</textarea>` : `<input ${attrs} value="${esc(value || '')}">`}</label>`;
@@ -112,7 +120,7 @@ function enValues(form, names) {
 const needsEn = (x, pairs) => pairs.some(([th, en]) => HAS_THAI.test(String(x[th] || '')) && !String(x[en] || '').trim());
 // ป้ายในตาราง: รายการที่ลูกค้าเห็น/กำลังจะเห็น แต่ยังไม่มีภาษาอังกฤษ
 const enChip = (x, pairs) => (englishFeature() && ['ACTIVE', 'SCHEDULED', 'SOLD_OUT'].includes(x.state) && needsEn(x, pairs)
-  ? ' <span class="chip chip-en">ยังไม่มี EN</span>' : '');
+  ? ` <span class="chip chip-en">${tr('ยังไม่มี EN')}</span>` : '');
 const REWARD_EN = [['name', 'nameEn'], ['description', 'descriptionEn']];
 const PROMO_EN = [['title', 'titleEn'], ['subtitle', 'subtitleEn'], ['tag', 'tagEn']];
 // การ์ดในหน้าภาพรวม → กดรายการที่ยังขาด แล้วเปิดฟอร์มของรายการนั้นให้เลย (หน้าโหลดเสร็จแล้วค่อยเปิด — ดู openPending)
@@ -152,16 +160,18 @@ main();
 async function main() {
   try {
     S.shop = await loadShop();
+    initLang(cfg(), { key: 'crm_admin_lang', always: true });
     applyDevParams(S.shop.id);
-    renderBoot('กำลังเข้าสู่ระบบ...');
+    renderBoot(tr('กำลังเข้าสู่ระบบ...'));
     S.line = await initLine(cfg().liffId);
+    autoLang(S.line.language); // เปิดในแอป LINE ที่ตั้งภาษาอังกฤษ → หลังบ้านเป็นอังกฤษเอง (ถ้ายังไม่เคยเลือก)
     S.api = createApi(S.shop, S.line, {
       // ลิงก์ (#หน้า) ติดไปกับการเข้าสู่ระบบใหม่อยู่แล้ว จึงไม่ต้องเก็บอะไรเพิ่ม
-      onRelogin: () => { closeModal(); renderBoot('กำลังเชื่อมต่อ LINE ใหม่...'); },
+      onRelogin: () => { closeModal(); renderBoot(tr('กำลังเชื่อมต่อ LINE ใหม่...')); },
       // ก่อนเข้าหลังบ้านได้ มีหน้าโหลดเต็มจออยู่แล้ว → ไม่ต้องขึ้นป๊อปอัปซ้อน
       // ใส่ไว้ในตารางเป็น null = ทำเบื้องหลัง ไม่บังจอ (เช่น เช็กการเชื่อม LINE OA ตอนเปิดหน้าส่งข้อความ)
-      loadingText: (action) => (!S.me ? null : Object.prototype.hasOwnProperty.call(LOADING_TEXT, action) ? LOADING_TEXT[action]
-        : SAVE_ACTIONS.includes(action) ? 'กำลังบันทึก...' : 'กำลังโหลด...')
+      loadingText: (action) => (!S.me ? null : Object.prototype.hasOwnProperty.call(LOADING_TEXT, action) ? LOADING_TEXT[action] && tr(LOADING_TEXT[action])
+        : SAVE_ACTIONS.includes(action) ? tr('กำลังบันทึก...') : tr('กำลังโหลด...'))
     });
     if (IS_LOCAL) mountDevBar(S.shop, S.api, { openNow: !S.api.overridden });
     // เปิดหน้าแรกเลย: ข้อมูลผู้ใช้มาพร้อมข้อมูลหน้านั้นในคำขอเดียว (ดู fetchView)
@@ -192,6 +202,7 @@ function onClick(e) {
     case 'export-confirm': doExport(id, el); break;
     case 'adjust-confirm': doAdjust(el); break;
     case 'reward-edit': openRewardEdit(id); break;
+    case 'lang': setAdminLang(el.dataset.lang); break;
     case 'en-go': S.openAfter = { kind: el.dataset.kind, id }; location.hash = '#' + (EN_PAGE[el.dataset.kind] || 'overview'); break;
     case 'brand-lang': S.previewLang = id; updateBrandPreview(); break;
     case 'promo-edit': openPromoEdit(id); break;
@@ -235,8 +246,8 @@ function onSubmit(e) {
     case 'range': {
       const from = f.from.value;
       const to = f.to.value;
-      if (!from || !to) return toast('กรุณาเลือกวันเริ่มและวันสิ้นสุด', 'err');
-      if (from > to) return toast('วันเริ่มต้องไม่หลังวันสิ้นสุด', 'err');
+      if (!from || !to) return toast(tr('กรุณาเลือกวันเริ่มและวันสิ้นสุด'), 'err');
+      if (from > to) return toast(tr('วันเริ่มต้องไม่หลังวันสิ้นสุด'), 'err');
       S.range = { preset: 'custom', from, to };
       saveRange();
       resetPages();
@@ -365,9 +376,9 @@ function setBranchFilter(id) {
 
 // ชื่อที่แสดงแทนรหัสสาขา (รหัสพิเศษ: ONLINE = สมัครเอง / ADMIN = ปรับจากหลังบ้าน / ว่าง = ก่อนเปิดใช้สาขา)
 function branchName(id) {
-  if (!id) return 'ไม่ระบุ';
-  if (id === 'ONLINE') return 'ออนไลน์';
-  if (id === 'ADMIN') return 'หลังบ้าน';
+  if (!id) return tr('ไม่ระบุ');
+  if (id === 'ONLINE') return tr('ออนไลน์');
+  if (id === 'ADMIN') return tr('หลังบ้าน');
   const b = S.branches.find(x => x.id === id);
   return b ? b.name : id;
 }
@@ -377,9 +388,9 @@ function branchSelect() {
   if (!hasBranches()) return '';
   return `
     <label class="branch-select ${S.branch ? 'on' : ''}">${icon('pin', 16)}
-      <select data-branch-filter aria-label="สาขา">
-        <option value="">ทุกสาขา</option>
-        ${S.branches.map(b => `<option value="${esc(b.id)}" ${S.branch === b.id ? 'selected' : ''}>${esc(b.name)}${b.status === 'ACTIVE' ? '' : ' (ปิดแล้ว)'}</option>`).join('')}
+      <select data-branch-filter aria-label="${tr('สาขา')}">
+        <option value="">${tr('ทุกสาขา')}</option>
+        ${S.branches.map(b => `<option value="${esc(b.id)}" ${S.branch === b.id ? 'selected' : ''}>${esc(b.name)}${b.status === 'ACTIVE' ? '' : tr(' (ปิดแล้ว)')}</option>`).join('')}
       </select></label>`;
 }
 
@@ -388,9 +399,11 @@ const branchNote = () => (S.branch ? ` · <b>${esc(branchName(S.branch))}</b>` :
 
 const rangeData = () => ({ from: S.range.from, to: S.range.to });
 const keyDate = k => new Date((k.length === 7 ? k + '-01' : k) + 'T00:00:00Z');
-const fmtDayShort = new Intl.DateTimeFormat('th-TH', { day: 'numeric', month: 'short', timeZone: 'UTC' });
-const fmtDayLong = new Intl.DateTimeFormat('th-TH', { day: 'numeric', month: 'short', year: '2-digit', timeZone: 'UTC' });
-const fmtMonth = new Intl.DateTimeFormat('th-TH', { month: 'short', year: '2-digit', timeZone: 'UTC' });
+const dtf = {};
+const dateFmt = (k, opt) => (dtf[k + dateLocale()] = dtf[k + dateLocale()] || new Intl.DateTimeFormat(dateLocale(), { ...opt, timeZone: 'UTC' }));
+const fmtDayShort = { format: d => dateFmt('ds', { day: 'numeric', month: 'short' }).format(d) };
+const fmtDayLong = { format: d => dateFmt('dl', { day: 'numeric', month: 'short', year: '2-digit' }).format(d) };
+const fmtMonth = { format: d => dateFmt('m', { month: 'short', year: '2-digit' }).format(d) };
 
 function rangeText() {
   const { from, to } = S.range;
@@ -404,14 +417,14 @@ function rangeBar() {
     <div class="range-bar">
       ${branchSelect()}
       <div class="chips-scroll">${PRESETS.map(p => `
-        <button type="button" class="chip-btn ${r.preset === p.id ? 'active' : ''}" data-act="preset" data-id="${p.id}">${p.label}</button>`).join('')}
+        <button type="button" class="chip-btn ${r.preset === p.id ? 'active' : ''}" data-act="preset" data-id="${p.id}">${tr(p.label)}</button>`).join('')}
       </div>
       ${r.preset === 'custom' ? `
         <form class="range-custom" data-form="range">
-          <input type="date" name="from" value="${esc(r.from)}" max="${t}" aria-label="วันเริ่ม">
-          <span class="muted">ถึง</span>
-          <input type="date" name="to" value="${esc(r.to)}" max="${t}" aria-label="วันสิ้นสุด">
-          <button class="btn btn-sm btn-primary" type="submit">ดูข้อมูล</button>
+          <input type="date" name="from" value="${esc(r.from)}" max="${t}" aria-label="${tr('วันเริ่ม')}">
+          <span class="muted">${tr('ถึง')}</span>
+          <input type="date" name="to" value="${esc(r.to)}" max="${t}" aria-label="${tr('วันสิ้นสุด')}">
+          <button class="btn btn-sm btn-primary" type="submit">${tr('ดูข้อมูล')}</button>
         </form>` : ''}
       <div class="range-label">${icon('clock', 14)} ${esc(rangeText())}</div>
     </div>`;
@@ -430,15 +443,15 @@ function renderFatal(e) {
   app.innerHTML = `
     <div class="state-page">
       <div class="state-icon">${icon(noAccess ? 'shield' : 'alert', 40)}</div>
-      <h1>${noAccess ? 'หน้านี้สำหรับเจ้าของร้านและผู้จัดการ' : 'เปิดหลังบ้านไม่สำเร็จ'}</h1>
+      <h1>${noAccess ? tr('หน้านี้สำหรับเจ้าของร้านและผู้จัดการ') : tr('เปิดหลังบ้านไม่สำเร็จ')}</h1>
       ${noAccess ? `
-        <p>บัญชี LINE นี้ยังไม่มีสิทธิ์เข้าหลังบ้าน</p>
-        <p class="muted small">ถ้าคุณเป็นเจ้าของร้าน ติดต่อผู้ดูแลระบบเพื่อเปิดสิทธิ์</p>`
-        : `<p>${esc((e && e.message) || 'เกิดข้อผิดพลาด')}</p>`}
+        <p>${tr('บัญชี LINE นี้ยังไม่มีสิทธิ์เข้าหลังบ้าน')}</p>
+        <p class="muted small">${tr('ถ้าคุณเป็นเจ้าของร้าน ติดต่อผู้ดูแลระบบเพื่อเปิดสิทธิ์')}</p>`
+        : `<p>${esc((e && e.message) || tr('เกิดข้อผิดพลาด'))}</p>`}
       ${IS_LOCAL && e && e.debug ? `<pre class="debug">${esc(e.debug)}</pre>` : ''}
       <div class="stack">
-        ${e && (e.code === 'TOKEN_INVALID' || e.code === 'NO_TOKEN') ? '<button class="btn btn-primary" data-act="relogin">เข้าสู่ระบบใหม่</button>' : ''}
-        <button class="btn" data-act="reload">ลองใหม่</button>
+        ${e && (e.code === 'TOKEN_INVALID' || e.code === 'NO_TOKEN') ? `<button class="btn btn-primary" data-act="relogin">${tr('เข้าสู่ระบบใหม่')}</button>` : ''}
+        <button class="btn" data-act="reload">${tr('ลองใหม่')}</button>
       </div>
     </div>`;
   if (IS_LOCAL && S.shop && !document.getElementById('devbar')) {
@@ -454,21 +467,49 @@ function logoHtml() {
     : `<div class="logo logo-sm logo-text">${esc(c.logoText || (c.name || '?').slice(0, 1))}</div>`;
 }
 
+// สลับภาษาหลังบ้าน: จำไว้ในเครื่อง แล้ววาดทั้งหน้าใหม่ (ข้อความจากตัวกลางของหน้านี้ก็เปลี่ยนภาษาตามคำขอถัดไป)
+function setAdminLang(l) {
+  saveLang(l);
+  closeModal();
+  if (!S.me) return;
+  renderShell();
+  markNav();
+  route();
+}
+
+// รายละเอียดที่ระบบเขียนลงประวัติเป็นภาษาไทย → แปลตอนแสดง (แบบเดียวกับ txDetail ในหน้าลูกค้า)
+// หมายเหตุที่พนักงานพิมพ์เอง (ปรับแต้ม) แสดงตามที่พิมพ์ — แก้ข้อความ detail ในตัวกลาง ต้องแก้รูปแบบที่นี่ด้วย
+function txDetail(tx) {
+  const d = String(tx.detail || '');
+  if (!isEn() || !d) return d;
+  if (d === 'แต้มต้อนรับสมาชิกใหม่' || d === 'แต้มรับข่าวสารจากร้าน') return tr(d);
+  if (d === 'ลบบัญชีสมาชิก') return tr(d + '@@ประวัติ');
+  let m = tx.type === 'REDEEM' && d.match(/^แลก:? (.+)$/);
+  if (m) return tr('แลก {name}', { name: m[1] });
+  m = tx.type === 'EARN' && d.match(/^ซื้อสินค้า ([\d,.]+) บาท( \(ไม่ถึงเกณฑ์รับแต้ม\))?(.*)$/);
+  if (m) return tr('ซื้อสินค้า ฿{amount}', { amount: m[1] }) + (m[2] ? tr(' (ไม่ถึงเกณฑ์รับแต้ม)') : '') + m[3];
+  return d;
+}
+
+// ผู้ทำรายการที่ระบบเขียนเอง: SYSTEM (แต้มต้อนรับ ฯลฯ) / ลูกค้า (แลกเอง ลบบัญชีเอง) → แปล / ชื่อพนักงานแสดงตามเดิม
+const staffLabel = n => (n === 'SYSTEM' ? tr('ระบบ') : n === 'ลูกค้า' ? tr('ลูกค้า@@ผู้ทำ') : n || '-');
+
 function renderShell() {
-  app.innerHTML = (S.testMode ? '<div class="test-banner">โหมดทดสอบ — ข้อมูลไม่ใช่ของจริง</div>' : '') + `
+  app.innerHTML = (S.testMode ? `<div class="test-banner">${tr('โหมดทดสอบ — ข้อมูลไม่ใช่ของจริง')}</div>` : '') + `
     <div class="adm">
       <aside class="adm-side">
         <div class="adm-brand">
           ${logoHtml()}
-          <div class="grow"><div class="adm-shop">${esc(cfg().name)}</div><div class="adm-sub">หลังบ้าน</div></div>
+          <div class="grow"><div class="adm-shop">${esc(cfg().name)}</div><div class="adm-sub">${tr('หลังบ้าน')}</div></div>
+          ${langSwitchHtml('adm-lang')}
         </div>
         <nav class="adm-nav">${visiblePages().map(p => `
-          <a href="#${p.id}" data-page="${p.id}">${icon(p.icon, 18)}<span>${p.label}</span></a>`).join('')}
+          <a href="#${p.id}" data-page="${p.id}">${icon(p.icon, 18)}<span>${tr(p.label)}</span></a>`).join('')}
         </nav>
         ${creditHtml('credit-side')}
         <div class="adm-me">
-          <div class="adm-me-name">${esc(S.me.name)} <span class="chip">${esc(ROLE_LABEL[S.me.role] || S.me.role)}</span></div>
-          <a class="adm-link" href="${esc(S.shop.pageUrl('staff'))}">${icon('scan', 16)} ไปหน้าพนักงาน</a>
+          <div class="adm-me-name">${esc(S.me.name)} <span class="chip">${esc(tr(ROLE_LABEL[S.me.role] || S.me.role))}</span></div>
+          <a class="adm-link" href="${esc(S.shop.pageUrl('staff'))}">${icon('scan', 16)} ${tr('ไปหน้าพนักงาน')}</a>
         </div>
       </aside>
       <div class="adm-col">
@@ -547,7 +588,7 @@ async function fetchView(action, data, render) {
     if (first) return renderFatal(e);
     document.getElementById('view').innerHTML = `
       <div class="card notice notice-err">${icon('alert', 20)}<div>${esc(e.message)}
-        <div><button class="link" data-act="refresh">${icon('refresh', 14)} ลองใหม่</button></div></div></div>`;
+        <div><button class="link" data-act="refresh">${icon('refresh', 14)} ${tr('ลองใหม่')}</button></div></div></div>`;
   } finally {
     const v = document.getElementById('view');
     if (seq === S.seq && v) v.classList.remove('is-loading');
@@ -563,16 +604,16 @@ function pageHead(title, sub, actions = '') {
 }
 
 function exportBtn(kind) {
-  return isOwner() && exportFeature() ? `<button class="btn btn-sm" data-act="export" data-id="${kind}">${icon('download', 16)} ส่งออก Excel (CSV)</button>` : '';
+  return isOwner() && exportFeature() ? `<button class="btn btn-sm" data-act="export" data-id="${kind}">${icon('download', 16)} ${tr('ส่งออก Excel (CSV)')}</button>` : '';
 }
 
 function pager(r, of) {
   if (r.pages <= 1) return '';
   return `
     <div class="pager">
-      <button class="btn btn-sm" data-act="page" data-of="${of}" data-page="${r.page - 1}" ${r.page <= 1 ? 'disabled' : ''}>${icon('left', 16)} ก่อนหน้า</button>
-      <span class="muted small">หน้า ${fmtNum(r.page)} / ${fmtNum(r.pages)}</span>
-      <button class="btn btn-sm" data-act="page" data-of="${of}" data-page="${r.page + 1}" ${r.page >= r.pages ? 'disabled' : ''}>ถัดไป ${icon('right', 16)}</button>
+      <button class="btn btn-sm" data-act="page" data-of="${of}" data-page="${r.page - 1}" ${r.page <= 1 ? 'disabled' : ''}>${icon('left', 16)} ${tr('ก่อนหน้า')}</button>
+      <span class="muted small">${tr('หน้า {n} / {n2}', { n: fmtNum(r.page), n2: fmtNum(r.pages) })}</span>
+      <button class="btn btn-sm" data-act="page" data-of="${of}" data-page="${r.page + 1}" ${r.page >= r.pages ? 'disabled' : ''}>${tr('ถัดไป')} ${icon('right', 16)}</button>
     </div>`;
 }
 
@@ -582,7 +623,8 @@ const ptsClass = n => (n > 0 ? 'plus' : n < 0 ? 'minus' : '');
 const statusChip = (status, label) => `<span class="status status-${esc(String(status).toLowerCase())}">${esc(label || status)}</span>`;
 // เบอร์ 10 หลักแสดงเป็น 086-111-0002 อ่านง่ายกว่า (เบอร์ที่ซ่อนแล้วแสดงตามเดิม)
 const fmtPhone = p => (/^0\d{9}$/.test(p || '') ? `${p.slice(0, 3)}-${p.slice(3, 6)}-${p.slice(6)}` : p || '');
-const memberLink = (id, name) => `<a href="#member/${encodeURIComponent(id)}">${esc(name || id)}</a>`;
+// "สมาชิกที่ลบแล้ว" ตัวกลางเขียนเป็นภาษาไทย (members.js DELETED_NAME) → แปลตามภาษาหลังบ้าน
+const memberLink = (id, name) => `<a href="#member/${encodeURIComponent(id)}">${esc(name === 'สมาชิกที่ลบแล้ว' ? tr(name) : name || id)}</a>`;
 
 /* =====================================================
  * ภาพรวม
@@ -594,10 +636,10 @@ function loadOverview() {
 // เทียบกับช่วงก่อนหน้าที่ยาวเท่ากัน — ใช้สีตัวอักษรปกติ เพราะ "เพิ่ม" ไม่ได้แปลว่าดีเสมอ (เช่นแต้มที่ถูกแลก)
 function delta(cur, prev) {
   if (!prev && !cur) return '';
-  if (!prev) return `<span class="kpi-delta">ช่วงก่อนหน้า 0</span>`;
+  if (!prev) return `<span class="kpi-delta">${tr('ช่วงก่อนหน้า 0')}</span>`;
   const pct = Math.round(((cur - prev) / prev) * 100);
-  if (pct === 0) return `<span class="kpi-delta">เท่ากับช่วงก่อนหน้า</span>`;
-  return `<span class="kpi-delta">${pct > 0 ? '▲' : '▼'} ${fmtNum(Math.abs(pct))}% จากช่วงก่อนหน้า</span>`;
+  if (pct === 0) return `<span class="kpi-delta">${tr('เท่ากับช่วงก่อนหน้า')}</span>`;
+  return `<span class="kpi-delta">${tr('{x} {n}% จากช่วงก่อนหน้า', { x: pct > 0 ? '▲' : '▼', n: fmtNum(Math.abs(pct)) })}</span>`;
 }
 
 // การ์ด "ข้อความภาษาอังกฤษของร้าน" (สองภาษา รอบ 2) — ตัวกลางนับของรางวัล/โปรโมชัน/แต้มพิเศษ/สาขา/ระดับ (englishStatus)
@@ -608,7 +650,7 @@ function englishCard(d) {
   const legal = c.legal || {};
   const e = { total: d.english.total, done: d.english.done, missing: (d.english.missing || []).slice() };
   const brand = [];
-  [['shopName', 'ชื่อร้าน', c.name, c.nameEn], ['policy', 'นโยบายความเป็นส่วนตัว', legal.privacyText, legal.privacyTextEn]].forEach(([kind, name, th, en]) => {
+  [['shopName', tr('ชื่อร้าน'), c.name, c.nameEn], ['policy', tr('นโยบายความเป็นส่วนตัว'), legal.privacyText, legal.privacyTextEn]].forEach(([kind, name, th, en]) => {
     if (!HAS_THAI.test(String(th || ''))) return;
     e.total += 1;
     if (String(en || '').trim()) e.done += 1; else brand.push({ kind, id: '', name, fields: [] });
@@ -618,16 +660,16 @@ function englishCard(d) {
   const SHOW = 12;
   return `
     <section class="card adm-card en-card">
-      <div class="card-head"><h2><b class="en-tag">EN</b> ข้อความภาษาอังกฤษ</h2></div>
-      <p class="en-count">กรอกแล้ว <b>${fmtNum(e.done)}</b> จาก ${fmtNum(e.total)} รายการ</p>
+      <div class="card-head"><h2>${tr('<b class="en-tag">EN</b> ข้อความภาษาอังกฤษ')}</h2></div>
+      <p class="en-count">${tr('กรอกแล้ว <b>{n}</b> จาก {n2} รายการ', { n: fmtNum(e.done), n2: fmtNum(e.total) })}</p>
       <div class="tier-bar"><i style="width:${pct}%"></i></div>
       ${e.missing.length ? `
       <details class="en-missing"${e.missing.length <= 5 ? ' open' : ''}>
-        <summary>ดูที่ยังขาด (${fmtNum(e.missing.length)})</summary>
-        <ul>${e.missing.slice(0, SHOW).map(m => `<li><button type="button" class="link" data-act="en-go" data-kind="${esc(m.kind)}" data-id="${esc(m.id)}">${esc(EN_KIND[m.kind] || '')}: ${esc(m.name)}</button>${m.fields.length ? ` <span class="muted small">ยังไม่มี ${esc(m.fields.join(', '))}</span>` : ''}</li>`).join('')}
-          ${e.missing.length > SHOW ? `<li class="muted small">และอีก ${fmtNum(e.missing.length - SHOW)} รายการ</li>` : ''}</ul>
-      </details>` : `<p class="small">${icon('check', 14)} ${e.total ? 'ครบแล้ว ลูกค้าที่เลือกภาษาอังกฤษเห็นข้อความของร้านเป็นภาษาอังกฤษทั้งหมด' : 'ยังไม่มีข้อความภาษาไทยที่ต้องแปล'}</p>`}
-      <p class="muted small">นับเฉพาะรายการที่ลูกค้าเห็นอยู่ และข้อความที่มีภาษาไทย (ชื่อที่เป็นภาษาอังกฤษอยู่แล้วไม่ต้องแปล) · ช่องที่ยังว่าง ลูกค้าที่เลือกภาษาอังกฤษเห็นภาษาไทยแทน</p>
+        <summary>${tr('ดูที่ยังขาด ({n})', { n: fmtNum(e.missing.length) })}</summary>
+        <ul>${e.missing.slice(0, SHOW).map(m => `<li><button type="button" class="link" data-act="en-go" data-kind="${esc(m.kind)}" data-id="${esc(m.id)}">${esc(tr(EN_KIND[m.kind] || ''))}: ${esc(m.kind === 'tierIntro' ? tr(m.name) : m.name)}</button>${m.fields.length ? ` <span class="muted small">${tr('ยังไม่มี {x}', { x: esc(m.fields.map(f => tr(f + '@@ช่อง')).join(', ')) })}</span>` : ''}</li>`).join('')}
+          ${e.missing.length > SHOW ? `<li class="muted small">${tr('และอีก {n} รายการ', { n: fmtNum(e.missing.length - SHOW) })}</li>` : ''}</ul>
+      </details>` : `<p class="small">${icon('check', 14)} ${e.total ? tr('ครบแล้ว ลูกค้าที่เลือกภาษาอังกฤษเห็นข้อความของร้านเป็นภาษาอังกฤษทั้งหมด') : tr('ยังไม่มีข้อความภาษาไทยที่ต้องแปล')}</p>`}
+      <p class="muted small">${tr('นับเฉพาะรายการที่ลูกค้าเห็นอยู่ และข้อความที่มีภาษาไทย (ชื่อที่เป็นภาษาอังกฤษอยู่แล้วไม่ต้องแปล) · ช่องที่ยังว่าง ลูกค้าที่เลือกภาษาอังกฤษเห็นภาษาไทยแทน')}</p>
     </section>`;
 }
 
@@ -637,18 +679,18 @@ function renderOverview(d) {
   const one = !!d.branch; // ดูสาขาเดียว
   const tiles = [
     one
-      ? { label: 'สมาชิกที่สมัครสาขานี้', value: fmtNum(d.totals.branchMembers), sub: `ทั้งร้าน ${fmtNum(d.totals.members)} คน` }
-      : { label: 'สมาชิกทั้งหมด', value: fmtNum(d.totals.members), sub: `${esc(unit())}คงค้างในระบบ ${fmtNum(d.totals.pointsOutstanding)}` },
-    { label: 'สมาชิกใหม่', value: fmtNum(c.newMembers), sub: delta(c.newMembers, p.newMembers) },
-    { label: 'ลูกค้าที่มาซื้อ', value: fmtNum(c.buyers), sub: delta(c.buyers, p.buyers) || 'คน (ไม่นับซ้ำ)' },
-    { label: 'ยอดซื้อรวม', value: '฿' + fmtMoney(c.sales), sub: delta(c.sales, p.sales) },
-    { label: 'จำนวนบิล', value: fmtNum(c.bills), sub: c.bills ? `เฉลี่ย ฿${fmtMoney(Math.round(c.sales / c.bills))} ต่อบิล` : delta(c.bills, p.bills) },
-    { label: `${unit()}ที่แจก`, value: fmtNum(c.pointsIssued), sub: delta(c.pointsIssued, p.pointsIssued) },
-    { label: `${unit()}ที่ถูกแลก`, value: fmtNum(c.pointsRedeemed), sub: delta(c.pointsRedeemed, p.pointsRedeemed) },
-    { label: one ? 'คูปองที่ใช้ที่สาขานี้' : 'คูปองที่ใช้ที่ร้าน', value: fmtNum(c.couponsUsed), sub: delta(c.couponsUsed, p.couponsUsed) || 'พนักงานสแกนแล้ว' }
+      ? { label: tr('สมาชิกที่สมัครสาขานี้'), value: fmtNum(d.totals.branchMembers), sub: `${tr('ทั้งร้าน {n} คน', { n: fmtNum(d.totals.members) })}` }
+      : { label: tr('สมาชิกทั้งหมด'), value: fmtNum(d.totals.members), sub: `${tr('{u}คงค้างในระบบ {n}', { u: esc(unit()), n: fmtNum(d.totals.pointsOutstanding) })}` },
+    { label: tr('สมาชิกใหม่'), value: fmtNum(c.newMembers), sub: delta(c.newMembers, p.newMembers) },
+    { label: tr('ลูกค้าที่มาซื้อ'), value: fmtNum(c.buyers), sub: delta(c.buyers, p.buyers) || tr('คน (ไม่นับซ้ำ)') },
+    { label: tr('ยอดซื้อรวม'), value: '฿' + fmtMoney(c.sales), sub: delta(c.sales, p.sales) },
+    { label: tr('จำนวนบิล'), value: fmtNum(c.bills), sub: c.bills ? `${tr('เฉลี่ย ฿{n} ต่อบิล', { n: fmtMoney(Math.round(c.sales / c.bills)) })}` : delta(c.bills, p.bills) },
+    { label: `${tr('{u}ที่แจก', { u: unit() })}`, value: fmtNum(c.pointsIssued), sub: delta(c.pointsIssued, p.pointsIssued) },
+    { label: `${tr('{u}ที่ถูกแลก', { u: unit() })}`, value: fmtNum(c.pointsRedeemed), sub: delta(c.pointsRedeemed, p.pointsRedeemed) },
+    { label: one ? tr('คูปองที่ใช้ที่สาขานี้') : tr('คูปองที่ใช้ที่ร้าน'), value: fmtNum(c.couponsUsed), sub: delta(c.couponsUsed, p.couponsUsed) || tr('พนักงานสแกนแล้ว') }
   ];
   document.getElementById('view').innerHTML = `
-    ${pageHead('ภาพรวม', 'ตัวเลขของช่วงที่เลือก เทียบกับช่วงก่อนหน้าที่ยาวเท่ากัน' + branchNote(), `<button class="btn btn-sm" data-act="refresh">${icon('refresh', 16)} รีเฟรช</button>`)}
+    ${pageHead(tr('ภาพรวม'), tr('ตัวเลขของช่วงที่เลือก เทียบกับช่วงก่อนหน้าที่ยาวเท่ากัน') + branchNote(), `<button class="btn btn-sm" data-act="refresh">${icon('refresh', 16)} ${tr('รีเฟรช')}</button>`)}
     ${rangeBar()}
     <div class="kpis">${tiles.map(t => `
       <div class="kpi"><div class="kpi-label">${esc(t.label)}</div><div class="kpi-value">${t.value}</div><div class="kpi-sub">${t.sub || ''}</div></div>`).join('')}
@@ -656,37 +698,37 @@ function renderOverview(d) {
     ${englishCard(d)}
     ${tierFeature() && (d.tiers || []).length ? `
     <section class="card adm-card">
-      <div class="card-head"><h2>สมาชิกแต่ละระดับ</h2><a class="link" href="#tiers">ตั้งค่าระดับ ${icon('right', 14)}</a></div>
-      <div class="tier-counts">${d.tiers.map(t => `<a class="tier-count" href="#members" data-act="tier-filter" data-id="${esc(t.id)}">${tierDot(t.color)}<b>${esc(t.name)}</b><span>${fmtNum(t.count)} คน</span></a>`).join('')}</div>
+      <div class="card-head"><h2>${tr('สมาชิกแต่ละระดับ')}</h2><a class="link" href="#tiers">${tr('ตั้งค่าระดับ')} ${icon('right', 14)}</a></div>
+      <div class="tier-counts">${d.tiers.map(t => `<a class="tier-count" href="#members" data-act="tier-filter" data-id="${esc(t.id)}">${tierDot(t.color)}<b>${esc(t.name)}</b><span>${tr('{n} คน', { n: fmtNum(t.count) })}</span></a>`).join('')}</div>
     </section>` : ''}
     <section class="card adm-card">
-      <div class="card-head"><h2>ยอดซื้อ${d.period.bucket === 'month' ? 'รายเดือน' : 'รายวัน'}</h2><span class="muted small">แตะหรือชี้ที่แท่งเพื่อดูตัวเลข</span></div>
+      <div class="card-head"><h2>${tr('ยอดซื้อ{x}', { x: d.period.bucket === 'month' ? tr('รายเดือน') : tr('รายวัน') })}</h2><span class="muted small">${tr('แตะหรือชี้ที่แท่งเพื่อดูตัวเลข')}</span></div>
       ${chartHtml(d)}
     </section>
     ${compareHtml(d)}
     <div class="adm-grid3">
       <section class="card adm-card">
-        <div class="card-head"><h2>${one ? 'ของรางวัลที่ใช้ที่สาขานี้' : 'ของรางวัลยอดนิยม'}</h2></div>
+        <div class="card-head"><h2>${one ? tr('ของรางวัลที่ใช้ที่สาขานี้') : tr('ของรางวัลยอดนิยม')}</h2></div>
         <div class="tbl-wrap"><table class="tbl">
-          <thead><tr><th>ของรางวัล</th>${one ? '' : '<th class="num">แลก</th>'}<th class="num">ใช้แล้ว</th></tr></thead>
+          <thead><tr><th>${tr('ของรางวัล')}</th>${one ? '' : `<th class="num">${tr('แลก')}</th>`}<th class="num">${tr('ใช้แล้ว')}</th></tr></thead>
           <tbody>${d.topRewards.length ? d.topRewards.map(r => `
-            <tr><td>${esc(r.name)}</td>${one ? '' : `<td class="num">${fmtNum(r.issued)}</td>`}<td class="num">${fmtNum(r.used)}</td></tr>`).join('') : emptyRow(3, one ? 'ยังไม่มีคูปองที่ใช้ที่สาขานี้ในช่วงนี้' : 'ยังไม่มีการแลกในช่วงนี้')}
+            <tr><td>${esc(r.name)}</td>${one ? '' : `<td class="num">${fmtNum(r.issued)}</td>`}<td class="num">${fmtNum(r.used)}</td></tr>`).join('') : emptyRow(3, one ? tr('ยังไม่มีคูปองที่ใช้ที่สาขานี้ในช่วงนี้') : tr('ยังไม่มีการแลกในช่วงนี้'))}
           </tbody></table></div>
       </section>
       <section class="card adm-card">
-        <div class="card-head"><h2>ลูกค้าซื้อมากสุด</h2></div>
+        <div class="card-head"><h2>${tr('ลูกค้าซื้อมากสุด')}</h2></div>
         <div class="tbl-wrap"><table class="tbl">
-          <thead><tr><th>สมาชิก</th><th class="num">บิล</th><th class="num">ยอดซื้อ</th></tr></thead>
+          <thead><tr><th>${tr('สมาชิก')}</th><th class="num">${tr('บิล')}</th><th class="num">${tr('ยอดซื้อ')}</th></tr></thead>
           <tbody>${d.topMembers.length ? d.topMembers.map(m => `
-            <tr class="row-link" data-act="member" data-id="${esc(m.memberId)}"><td>${memberLink(m.memberId, m.name)}</td><td class="num">${fmtNum(m.bills)}</td><td class="num">฿${fmtMoney(m.sales)}</td></tr>`).join('') : emptyRow(3, 'ยังไม่มียอดซื้อในช่วงนี้')}
+            <tr class="row-link" data-act="member" data-id="${esc(m.memberId)}"><td>${memberLink(m.memberId, m.name)}</td><td class="num">${fmtNum(m.bills)}</td><td class="num">฿${fmtMoney(m.sales)}</td></tr>`).join('') : emptyRow(3, tr('ยังไม่มียอดซื้อในช่วงนี้'))}
           </tbody></table></div>
       </section>
       <section class="card adm-card">
-        <div class="card-head"><h2>ตามพนักงาน</h2></div>
+        <div class="card-head"><h2>${tr('ตามพนักงาน')}</h2></div>
         <div class="tbl-wrap"><table class="tbl">
-          <thead><tr><th>พนักงาน</th><th class="num">บิล</th><th class="num">ยอดซื้อ</th><th class="num">คูปอง</th></tr></thead>
+          <thead><tr><th>${tr('พนักงาน')}</th><th class="num">${tr('บิล')}</th><th class="num">${tr('ยอดซื้อ')}</th><th class="num">${tr('คูปอง')}</th></tr></thead>
           <tbody>${d.byStaff.length ? d.byStaff.map(s => `
-            <tr><td>${esc(s.staff)}</td><td class="num">${fmtNum(s.bills)}</td><td class="num">฿${fmtMoney(s.sales)}</td><td class="num">${fmtNum(s.couponsUsed)}</td></tr>`).join('') : emptyRow(4, 'ยังไม่มีรายการในช่วงนี้')}
+            <tr><td>${esc(s.staff)}</td><td class="num">${fmtNum(s.bills)}</td><td class="num">฿${fmtMoney(s.sales)}</td><td class="num">${fmtNum(s.couponsUsed)}</td></tr>`).join('') : emptyRow(4, tr('ยังไม่มีรายการในช่วงนี้'))}
           </tbody></table></div>
       </section>
     </div>`;
@@ -701,15 +743,15 @@ function compareHtml(d) {
   const total = rows.reduce((a, r) => a + r.sales, 0);
   return `
     <section class="card adm-card flush">
-      <div class="card-head pad"><h2>${icon('pin', 18)} เทียบสาขา</h2><span class="muted small">กดชื่อสาขาเพื่อดูเฉพาะสาขานั้น</span></div>
+      <div class="card-head pad"><h2>${icon('pin', 18)} ${tr('เทียบสาขา')}</h2><span class="muted small">${tr('กดชื่อสาขาเพื่อดูเฉพาะสาขานั้น')}</span></div>
       <div class="tbl-wrap"><table class="tbl compare">
-        <thead><tr><th>สาขา</th><th class="num">ยอดซื้อ</th><th class="share-col">สัดส่วน</th><th class="num">บิล</th><th class="num">ลูกค้า</th><th class="num">${esc(unit())}ที่แจก</th><th class="num">คูปองที่ใช้</th><th class="num">สมาชิกใหม่</th></tr></thead>
+        <thead><tr><th>${tr('สาขา')}</th><th class="num">${tr('ยอดซื้อ')}</th><th class="share-col">${tr('สัดส่วน')}</th><th class="num">${tr('บิล')}</th><th class="num">${tr('ลูกค้า')}</th><th class="num">${tr('{u}ที่แจก', { u: esc(unit()) })}</th><th class="num">${tr('คูปองที่ใช้')}</th><th class="num">${tr('สมาชิกใหม่')}</th></tr></thead>
         <tbody>${rows.map(r => {
           const other = r.id === 'OTHER';
           const pct = total ? Math.round((r.sales / total) * 100) : 0;
           return `
           <tr class="${other ? 'muted-row' : 'row-link'}" ${other ? '' : `data-act="branch-filter" data-id="${esc(r.id)}"`}>
-            <td class="strong">${other ? 'ออนไลน์ / หลังบ้าน / ไม่ระบุ' : `<a href="#overview">${esc(r.name)}</a>${r.status === 'ACTIVE' ? '' : ' <span class="chip">ปิดแล้ว</span>'}`}</td>
+            <td class="strong">${other ? tr('ออนไลน์ / หลังบ้าน / ไม่ระบุ') : `<a href="#overview">${esc(r.name)}</a>${r.status === 'ACTIVE' ? '' : ` <span class="chip">${tr('ปิดแล้ว')}</span>`}`}</td>
             <td class="num">฿${fmtMoney(r.sales)}</td>
             <td class="share-col"><div class="share"><i style="width:${((r.sales / top) * 100).toFixed(1)}%"></i></div><span class="muted small">${fmtNum(pct)}%</span></td>
             <td class="num">${fmtNum(r.bills)}</td>
@@ -720,7 +762,7 @@ function compareHtml(d) {
           </tr>`;
         }).join('')}
         </tbody></table></div>
-      ${rows.some(r => r.id === 'OTHER') ? '<p class="muted small pad">แถวสุดท้ายคือรายการก่อนเพิ่มสาขา ลูกค้าที่สมัครเองโดยไม่ได้สแกน QR สาขา และการปรับแต้มจากหลังบ้าน</p>' : ''}
+      ${rows.some(r => r.id === 'OTHER') ? `<p class="muted small pad">${tr('แถวสุดท้ายคือรายการก่อนเพิ่มสาขา ลูกค้าที่สมัครเองโดยไม่ได้สแกน QR สาขา และการปรับแต้มจากหลังบ้าน')}</p>` : ''}
     </section>`;
 }
 
@@ -732,8 +774,8 @@ function niceMax(v) {
 }
 
 function shortBaht(n) {
-  if (n >= 1000000) return '฿' + (n / 1000000).toLocaleString('th-TH', { maximumFractionDigits: 1 }) + 'M';
-  if (n >= 10000) return '฿' + (n / 1000).toLocaleString('th-TH', { maximumFractionDigits: 1 }) + 'K';
+  if (n >= 1000000) return '฿' + (n / 1000000).toLocaleString('en-US', { maximumFractionDigits: 1 }) + 'M';
+  if (n >= 10000) return '฿' + (n / 1000).toLocaleString('en-US', { maximumFractionDigits: 1 }) + 'K';
   return '฿' + fmtNum(n);
 }
 
@@ -745,13 +787,13 @@ function chartHtml(d) {
   const label = k => (month ? fmtMonth : fmtDayShort).format(keyDate(k));
   const top = niceMax(Math.max(0, ...s.map(b => b.sales)));
   const every = Math.max(1, Math.ceil(s.length / 7)); // ป้ายวันที่ใต้กราฟไม่เกิน ~7 ป้าย ไม่ให้ตัวหนังสือชนกัน
-  if (!top) return `<div class="chart-empty muted">ยังไม่มียอดซื้อในช่วงนี้</div>`;
+  if (!top) return `<div class="chart-empty muted">${tr('ยังไม่มียอดซื้อในช่วงนี้')}</div>`;
   return `
     <div class="chart">
       <div class="chart-plot" id="chart-plot">
         ${[1, 0.5].map(f => `<div class="chart-grid" style="bottom:${f * 100}%"><span>${shortBaht(top * f)}</span></div>`).join('')}
         <div class="bars">${s.map((b, i) => `
-          <button type="button" class="bar-col" data-i="${i}" aria-label="${esc(label(b.key))}: ยอดซื้อ ${fmtMoney(b.sales)} บาท ${fmtNum(b.bills)} บิล">
+          <button type="button" class="bar-col" data-i="${i}" aria-label="${tr('{key}: ยอดซื้อ {n} บาท {n2} บิล', { key: esc(label(b.key)), n: fmtMoney(b.sales), n2: fmtNum(b.bills) })}">
             <i class="${b.sales > 0 ? 'has' : ''}" style="height:${((b.sales / top) * 100).toFixed(2)}%"></i>
           </button>`).join('')}
         </div>
@@ -760,9 +802,9 @@ function chartHtml(d) {
       <div class="chart-x">${s.map((b, i) => `<span>${i % every === 0 ? esc(label(b.key)) : ''}</span>`).join('')}</div>
     </div>
     <details class="chart-table">
-      <summary>ดูเป็นตาราง</summary>
+      <summary>${tr('ดูเป็นตาราง')}</summary>
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>${month ? 'เดือน' : 'วันที่'}</th><th class="num">ยอดซื้อ</th><th class="num">บิล</th><th class="num">สมาชิกใหม่</th></tr></thead>
+        <thead><tr><th>${month ? tr('เดือน') : tr('วันที่')}</th><th class="num">${tr('ยอดซื้อ')}</th><th class="num">${tr('บิล')}</th><th class="num">${tr('สมาชิกใหม่')}</th></tr></thead>
         <tbody>${s.slice().reverse().map(b => `
           <tr><td>${esc(month ? fmtMonth.format(keyDate(b.key)) : fmtDayLong.format(keyDate(b.key)))}</td><td class="num">฿${fmtMoney(b.sales)}</td><td class="num">${fmtNum(b.bills)}</td><td class="num">${fmtNum(b.newMembers)}</td></tr>`).join('')}
         </tbody></table></div>
@@ -780,7 +822,7 @@ function setupChart(d) {
     plot.querySelectorAll('.bar-col.on').forEach(x => x.classList.remove('on'));
     col.classList.add('on');
     tip.innerHTML = `<b>${esc(month ? fmtMonth.format(keyDate(b.key)) : fmtDayLong.format(keyDate(b.key)))}</b>
-      <div>ยอดซื้อ ฿${fmtMoney(b.sales)}</div><div>${fmtNum(b.bills)} บิล · สมาชิกใหม่ ${fmtNum(b.newMembers)}</div>`;
+      <div>${tr('ยอดซื้อ ฿{n}', { n: fmtMoney(b.sales) })}</div><div>${tr('{n} บิล · สมาชิกใหม่ {n2}', { n: fmtNum(b.bills), n2: fmtNum(b.newMembers) })}</div>`;
     tip.hidden = false;
     // วางกล่องตัวเลขเหนือแท่ง แต่ไม่ให้ล้นขอบกราฟ
     const pr = plot.getBoundingClientRect();
@@ -812,24 +854,24 @@ function renderMembers(r) {
   const opt = (value, label, cur) => `<option value="${value}" ${cur === value ? 'selected' : ''}>${label}</option>`;
   const owner = isOwner();
   document.getElementById('view').innerHTML = `
-    ${pageHead('สมาชิก', `${fmtNum(r.total)} คน${m.q || m.status || m.birth ? ' (ตามที่ค้นหา)' : ''}${S.branch ? ` · สมัครที่${branchNote()}` : ''}`, exportBtn('members'))}
+    ${pageHead(tr('สมาชิก'), `${tr('{n} คน{x}{x2}', { n: fmtNum(r.total), x: m.q || m.status || m.birth ? tr(' (ตามที่ค้นหา)') : '', x2: S.branch ? ` ${tr('· สมัครที่{x}', { x: branchNote() })}` : '' })}`, exportBtn('members'))}
     <form class="filters" data-form="members" autocomplete="off">
       ${branchSelect()}
-      <div class="search-box">${icon('search', 18)}<input name="q" value="${esc(m.q)}" placeholder="${owner ? 'ค้นชื่อ / รหัสสมาชิก / เบอร์โทร' : 'ค้นชื่อ / รหัสสมาชิก / เบอร์โทรเต็ม'}" enterkeyhint="search"></div>
-      <select name="sort" aria-label="เรียงตาม">
-        ${opt('joined', 'สมัครล่าสุด', m.sort)}${opt('lastVisit', 'มาล่าสุด', m.sort)}${opt('points', `${esc(unit())}มากสุด`, m.sort)}${opt('spend', 'ยอดซื้อมากสุด', m.sort)}${opt('name', 'ชื่อ ก–ฮ', m.sort)}
+      <div class="search-box">${icon('search', 18)}<input name="q" value="${esc(m.q)}" placeholder="${owner ? tr('ค้นชื่อ / รหัสสมาชิก / เบอร์โทร') : tr('ค้นชื่อ / รหัสสมาชิก / เบอร์โทรเต็ม')}" enterkeyhint="search"></div>
+      <select name="sort" aria-label="${tr('เรียงตาม')}">
+        ${opt('joined', tr('สมัครล่าสุด'), m.sort)}${opt('lastVisit', tr('มาล่าสุด'), m.sort)}${opt('points', `${tr('{u}มากสุด', { u: esc(unit()) })}`, m.sort)}${opt('spend', tr('ยอดซื้อมากสุด'), m.sort)}${opt('name', tr('ชื่อ ก–ฮ'), m.sort)}
       </select>
-      <select name="status" aria-label="สถานะ">
-        ${opt('', 'ทุกสถานะ', m.status)}${opt('ACTIVE', 'ใช้งานได้', m.status)}${opt('BLOCKED', 'ถูกระงับ', m.status)}
+      <select name="status" aria-label="${tr('สถานะ')}">
+        ${opt('', tr('ทุกสถานะ'), m.status)}${opt('ACTIVE', tr('ใช้งานได้'), m.status)}${opt('BLOCKED', tr('ถูกระงับ'), m.status)}
       </select>
-      ${owner ? `<select name="birth" aria-label="เดือนเกิด">${opt('', 'ทุกเดือนเกิด', m.birth)}${opt('this', '🎂 เกิดเดือนนี้', m.birth)}</select>` : ''}
-      ${tiersShown ? `<select name="tier" aria-label="ระดับ">${opt('', 'ทุกระดับ', m.tier)}${r.tiers.map(t => opt(esc(t.id), esc(t.name), m.tier)).join('')}</select>` : ''}
-      <button class="btn btn-sm btn-primary" type="submit">ค้นหา</button>
+      ${owner ? `<select name="birth" aria-label="${tr('เดือนเกิด')}">${opt('', tr('ทุกเดือนเกิด'), m.birth)}${opt('this', tr('🎂 เกิดเดือนนี้'), m.birth)}</select>` : ''}
+      ${tiersShown ? `<select name="tier" aria-label="${tr('ระดับ')}">${opt('', tr('ทุกระดับ'), m.tier)}${r.tiers.map(t => opt(esc(t.id), esc(t.name), m.tier)).join('')}</select>` : ''}
+      <button class="btn btn-sm btn-primary" type="submit">${tr('ค้นหา')}</button>
     </form>
-    ${owner ? '' : '<p class="muted small adm-note">ผู้จัดการเห็นเบอร์โทรแค่ 4 ตัวท้าย (เจ้าของร้านเห็นเต็ม)</p>'}
+    ${owner ? '' : `<p class="muted small adm-note">${tr('ผู้จัดการเห็นเบอร์โทรแค่ 4 ตัวท้าย (เจ้าของร้านเห็นเต็ม)')}</p>`}
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>ชื่อ</th><th>รหัสสมาชิก</th>${tiersShown ? '<th>ระดับ</th>' : ''}<th>เบอร์โทร</th><th class="num">${esc(unit())}</th><th class="num">ยอดซื้อรวม</th><th class="num">ครั้งที่มา</th><th>สมัครเมื่อ</th>${hasBranches() ? '<th>สมัครที่</th>' : ''}<th>มาล่าสุด</th><th>สถานะ</th></tr></thead>
+        <thead><tr><th>${tr('ชื่อ')}</th><th>${tr('รหัสสมาชิก')}</th>${tiersShown ? `<th>${tr('ระดับ')}</th>` : ''}<th>${tr('เบอร์โทร')}</th><th class="num">${esc(unit())}</th><th class="num">${tr('ยอดซื้อรวม')}</th><th class="num">${tr('ครั้งที่มา')}</th><th>${tr('สมัครเมื่อ')}</th>${hasBranches() ? `<th>${tr('สมัครที่')}</th>` : ''}<th>${tr('มาล่าสุด')}</th><th>${tr('สถานะ')}</th></tr></thead>
         <tbody>${r.items.length ? r.items.map(x => `
           <tr class="row-link" data-act="member" data-id="${esc(x.memberId)}">
             <td class="strong">${memberLink(x.memberId, x.name)}</td>
@@ -842,8 +884,8 @@ function renderMembers(r) {
             <td class="nowrap">${fmtDate(x.joinedAt)}</td>
             ${hasBranches() ? `<td class="nowrap">${esc(branchName(x.joinedBranch))}</td>` : ''}
             <td class="nowrap">${x.lastVisitAt ? fmtDate(x.lastVisitAt) : '-'}</td>
-            <td>${x.status === 'ACTIVE' ? statusChip('active', 'ใช้งานได้') : statusChip('blocked', 'ถูกระงับ')}</td>
-          </tr>`).join('') : emptyRow(11, m.q || S.branch || m.tier ? 'ไม่พบสมาชิกที่ค้นหา' : 'ยังไม่มีสมาชิก')}
+            <td>${x.status === 'ACTIVE' ? statusChip('active', tr('ใช้งานได้')) : statusChip('blocked', tr('ถูกระงับ'))}</td>
+          </tr>`).join('') : emptyRow(11, m.q || S.branch || m.tier ? tr('ไม่พบสมาชิกที่ค้นหา') : tr('ยังไม่มีสมาชิก'))}
         </tbody></table></div>
     </section>
     ${pager(r, 'members')}`;
@@ -853,7 +895,6 @@ function renderMembers(r) {
  * ส่งข้อความตามกลุ่ม — รอบ 1: คัดกลุ่มลูกค้า + ดูจำนวนคน (รอบ 2: เขียนข้อความ + ส่งผ่าน LINE OA ของร้าน)
  * ตัวกลางกรองคนที่ส่งได้ให้เอง (ยินยอมรับข่าวสาร + สมัครผ่าน LINE + ไม่ถูกระงับ) และไม่ส่ง LINE ID ของลูกค้ามาหน้าเว็บ
  * ===================================================== */
-const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 
 function loadBroadcast() {
   // เปิดลิงก์ #broadcast ตรงๆ ครั้งแรก: ถามว่าใครเข้าก่อน — ผู้จัดการจะได้กลับไปหน้าภาพรวม ไม่ใช่หน้า "ไม่มีสิทธิ์เข้าหลังบ้าน"
@@ -872,36 +913,36 @@ function renderBroadcast(r) {
     <label><input type="checkbox" name="${name}" value="${esc(x.id)}" ${(chosen || []).includes(x.id) ? 'checked' : ''}><span>${x.dot || ''}${esc(x.name)}</span></label>`).join('')}</div>`;
   const range = (key, label) => `
     <div class="field"><span>${label}</span>
-      <div class="aud-range"><input name="${key}Min" value="${val(key + 'Min')}" inputmode="numeric" placeholder="ตั้งแต่" aria-label="${label} ตั้งแต่">
-        <span class="muted">–</span><input name="${key}Max" value="${val(key + 'Max')}" inputmode="numeric" placeholder="ถึง" aria-label="${label} ถึง"></div></div>`;
+      <div class="aud-range"><input name="${key}Min" value="${val(key + 'Min')}" inputmode="numeric" placeholder="${tr('ตั้งแต่')}" aria-label="${tr('{label} ตั้งแต่', { label })}">
+        <span class="muted">–</span><input name="${key}Max" value="${val(key + 'Max')}" inputmode="numeric" placeholder="${tr('ถึง')}" aria-label="${tr('{label} ถึง', { label })}"></div></div>`;
   document.getElementById('view').innerHTML = `
-    ${pageHead('ส่งข้อความ', 'เลือกกลุ่มลูกค้า แล้วส่งข้อความหาเฉพาะกลุ่มนั้นผ่าน LINE OA ของร้าน')}
+    ${pageHead(tr('ส่งข้อความ'), tr('เลือกกลุ่มลูกค้า แล้วส่งข้อความหาเฉพาะกลุ่มนั้นผ่าน LINE OA ของร้าน'))}
     <div class="aud-layout">
       <section class="card adm-card">
-        <div class="card-head"><h2>1. เลือกกลุ่มลูกค้า</h2></div>
+        <div class="card-head"><h2>${tr('1. เลือกกลุ่มลูกค้า')}</h2></div>
         <form class="form" data-form="audience" autocomplete="off">
-          <p class="muted small">ใส่ได้หลายข้อ ลูกค้าต้องตรงทุกข้อ · เว้นว่าง = ไม่กรองข้อนั้น</p>
-          ${tiers.length ? `<div class="field"><span>ระดับสมาชิก <small>(ไม่เลือก = ทุกระดับ)</small></span>
+          <p class="muted small">${tr('ใส่ได้หลายข้อ ลูกค้าต้องตรงทุกข้อ · เว้นว่าง = ไม่กรองข้อนั้น')}</p>
+          ${tiers.length ? `<div class="field"><span>${tr('ระดับสมาชิก')} <small>${tr('(ไม่เลือก = ทุกระดับ)')}</small></span>
             ${picks('tiers', tiers.map(t => ({ id: t.id, name: t.name, dot: tierDot(t.color) })), f.tiers)}</div>` : ''}
-          ${hasBranches() ? `<div class="field"><span>สาขาที่สมัคร <small>(ไม่เลือก = ทุกสาขา)</small></span>
-            ${picks('branches', S.branches.map(b => ({ id: b.id, name: b.name + (b.status === 'ACTIVE' ? '' : ' (ปิดแล้ว)') })).concat([{ id: 'ONLINE', name: 'ออนไลน์' }]), f.branches)}</div>` : ''}
-          <label class="field"><span>เดือนเกิด</span>
-            <select name="birthMonth" class="select">${opt('', 'ทุกเดือน', f.birthMonth)}${TH_MONTHS.map((m, i) => opt(i + 1, m + (i + 1 === thisMonth ? ' (เดือนนี้)' : ''), f.birthMonth)).join('')}</select></label>
-          ${range('points', `${esc(unit())}คงเหลือ`)}
-          ${range('spend', 'ยอดซื้อรวม (บาท)')}
-          ${range('visits', 'จำนวนครั้งที่มาซื้อ')}
-          <div class="field"><span>มาซื้อครั้งล่าสุด</span>
+          ${hasBranches() ? `<div class="field"><span>${tr('สาขาที่สมัคร')} <small>${tr('(ไม่เลือก = ทุกสาขา)')}</small></span>
+            ${picks('branches', S.branches.map(b => ({ id: b.id, name: b.name + (b.status === 'ACTIVE' ? '' : tr(' (ปิดแล้ว)')) })).concat([{ id: 'ONLINE', name: tr('ออนไลน์') }]), f.branches)}</div>` : ''}
+          <label class="field"><span>${tr('เดือนเกิด')}</span>
+            <select name="birthMonth" class="select">${opt('', tr('ทุกเดือน'), f.birthMonth)}${monthNames().map((m, i) => opt(i + 1, m + (i + 1 === thisMonth ? tr(' (เดือนนี้)') : ''), f.birthMonth)).join('')}</select></label>
+          ${range('points', `${tr('{u}คงเหลือ', { u: esc(unit()) })}`)}
+          ${range('spend', tr('ยอดซื้อรวม (บาท)'))}
+          ${range('visits', tr('จำนวนครั้งที่มาซื้อ'))}
+          <div class="field"><span>${tr('มาซื้อครั้งล่าสุด')}</span>
             <div class="aud-days">
-              <select name="lastVisit" class="select" aria-label="มาซื้อครั้งล่าสุด">${opt('', 'ไม่กำหนด', f.lastVisit)}${opt('within', 'มาภายใน', f.lastVisit)}${opt('over', 'ไม่ได้มาเกิน', f.lastVisit)}</select>
-              <input name="lastVisitDays" value="${val('lastVisitDays')}" inputmode="numeric" placeholder="จำนวน" aria-label="จำนวนวัน"><span class="muted">วัน</span>
+              <select name="lastVisit" class="select" aria-label="${tr('มาซื้อครั้งล่าสุด')}">${opt('', tr('ไม่กำหนด'), f.lastVisit)}${opt('within', tr('มาภายใน'), f.lastVisit)}${opt('over', tr('ไม่ได้มาเกิน'), f.lastVisit)}</select>
+              <input name="lastVisitDays" value="${val('lastVisitDays')}" inputmode="numeric" placeholder="${tr('จำนวน')}" aria-label="${tr('จำนวนวัน')}"><span class="muted">${tr('วัน')}</span>
             </div>
-            <small>"ไม่ได้มาเกิน" รวมคนที่ยังไม่เคยซื้อ (นับจากวันสมัคร) — ใช้ชวนลูกค้าที่หายไปกลับมา</small></div>
-          <div class="field"><span>สมัครสมาชิกภายใน</span>
-            <div class="aud-days aud-days-1"><input name="joinedDays" value="${val('joinedDays')}" inputmode="numeric" placeholder="เช่น 30" aria-label="สมัครภายในกี่วัน"><span class="muted">วัน</span></div></div>
-          <div class="notice">${icon('shield', 18)}<span>ระบบเลือกให้เฉพาะลูกค้าที่<b>ยินยอมรับข่าวสาร</b> สมัครผ่าน LINE และไม่ถูกระงับ (ตามกฎหมายคุ้มครองข้อมูลส่วนบุคคล)</span></div>
+            <small>${tr('"ไม่ได้มาเกิน" รวมคนที่ยังไม่เคยซื้อ (นับจากวันสมัคร) — ใช้ชวนลูกค้าที่หายไปกลับมา')}</small></div>
+          <div class="field"><span>${tr('สมัครสมาชิกภายใน')}</span>
+            <div class="aud-days aud-days-1"><input name="joinedDays" value="${val('joinedDays')}" inputmode="numeric" placeholder="${tr('เช่น 30')}" aria-label="${tr('สมัครภายในกี่วัน')}"><span class="muted">${tr('วัน')}</span></div></div>
+          <div class="notice">${icon('shield', 18)}<span>${tr('ระบบเลือกให้เฉพาะลูกค้าที่<b>ยินยอมรับข่าวสาร</b> สมัครผ่าน LINE และไม่ถูกระงับ (ตามกฎหมายคุ้มครองข้อมูลส่วนบุคคล)')}</span></div>
           <div class="aud-actions">
-            <button class="btn" type="button" data-act="aud-clear">ล้างเงื่อนไข</button>
-            <button class="btn btn-primary" type="submit">${icon('users', 18)} ดูจำนวนคน</button>
+            <button class="btn" type="button" data-act="aud-clear">${tr('ล้างเงื่อนไข')}</button>
+            <button class="btn btn-primary" type="submit">${icon('users', 18)} ${tr('ดูจำนวนคน')}</button>
           </div>
         </form>
       </section>
@@ -919,18 +960,18 @@ function renderBroadcast(r) {
 
 function audResultHtml(r) {
   const ex = r.excluded || {};
-  const cut = [ex.noConsent ? `ไม่ยินยอมรับข่าวสาร ${fmtNum(ex.noConsent)}` : '', ex.blocked ? `ถูกระงับ ${fmtNum(ex.blocked)}` : '',
-    ex.noLine ? `ไม่ได้สมัครผ่าน LINE ${fmtNum(ex.noLine)}` : ''].filter(Boolean);
+  const cut = [ex.noConsent ? `${tr('ไม่ยินยอมรับข่าวสาร {n}', { n: fmtNum(ex.noConsent) })}` : '', ex.blocked ? `${tr('ถูกระงับ {n}', { n: fmtNum(ex.blocked) })}` : '',
+    ex.noLine ? `${tr('ไม่ได้สมัครผ่าน LINE {n}', { n: fmtNum(ex.noLine) })}` : ''].filter(Boolean);
   const tiers = tierFeature() && Array.isArray(r.tiers) && r.tiers.length > 1 ? r.tiers : [];
   const color = id => (tiers.find(t => t.id === id) || {}).color;
   return `
-    <div class="card-head"><h2>กลุ่มที่เลือก</h2></div>
-    <div class="aud-count"><span>ส่งได้</span><b>${fmtNum(r.sendable)}</b><span>คน</span></div>
-    <p class="muted small">ตรงเงื่อนไข ${fmtNum(r.matched)} คน${cut.length ? ` · ไม่นับ: ${cut.join(' · ')}` : ''}</p>
+    <div class="card-head"><h2>${tr('กลุ่มที่เลือก')}</h2></div>
+    <div class="aud-count"><span>${tr('ส่งได้')}</span><b>${fmtNum(r.sendable)}</b><span>${tr('คน')}</span></div>
+    <p class="muted small">${tr('ตรงเงื่อนไข {n} คน{n2}', { n: fmtNum(r.matched), n2: cut.length ? ` ${tr('· ไม่นับ: {x}', { x: cut.join(' · ') })}` : '' })}</p>
     ${reachHtml(r)}
     ${r.items.length ? `
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>ชื่อ</th>${tiers.length ? '<th>ระดับ</th>' : ''}<th class="num">${esc(unit())}</th><th class="num">ยอดซื้อรวม</th><th class="num">ครั้ง</th><th>มาล่าสุด</th></tr></thead>
+        <thead><tr><th>${tr('ชื่อ')}</th>${tiers.length ? `<th>${tr('ระดับ')}</th>` : ''}<th class="num">${esc(unit())}</th><th class="num">${tr('ยอดซื้อรวม')}</th><th class="num">${tr('ครั้ง')}</th><th>${tr('มาล่าสุด')}</th></tr></thead>
         <tbody>${r.items.map(x => `
           <tr class="row-link" data-act="member" data-id="${esc(x.memberId)}">
             <td class="strong">${memberLink(x.memberId, x.name)}</td>
@@ -941,8 +982,8 @@ function audResultHtml(r) {
             <td class="nowrap">${x.lastVisitAt ? fmtDate(x.lastVisitAt) : '-'}</td>
           </tr>`).join('')}
         </tbody></table></div>
-      <p class="muted small">${r.sendable > r.items.length ? `ตัวอย่าง ${fmtNum(r.items.length)} คนที่สมัครล่าสุด จากทั้งหมด ${fmtNum(r.sendable)} คน` : `แสดงครบทั้ง ${fmtNum(r.items.length)} คน`}</p>`
-    : `<div class="notice">${icon('alert', 18)}<span>ไม่มีลูกค้าที่ส่งได้ตามเงื่อนไขนี้ ลองลดเงื่อนไขลง</span></div>`}`;
+      <p class="muted small">${r.sendable > r.items.length ? `${tr('ตัวอย่าง {n} คนที่สมัครล่าสุด จากทั้งหมด {n2} คน', { n: fmtNum(r.items.length), n2: fmtNum(r.sendable) })}` : `${tr('แสดงครบทั้ง {n} คน', { n: fmtNum(r.items.length) })}`}</p>`
+    : `<div class="notice">${icon('alert', 18)}<span>${tr('ไม่มีลูกค้าที่ส่งได้ตามเงื่อนไขนี้ ลองลดเงื่อนไขลง')}</span></div>`}`;
 }
 
 // จำนวนของกลุ่มล่าสุด (ทุกที่ที่ได้ผลคัดกลุ่มต้องผ่านตรงนี้ — ไม่งั้นหน้ายืนยันใช้ตัวเลขของกลุ่มก่อนหน้า)
@@ -957,9 +998,9 @@ function setAudCount(r) {
 function reachHtml(r) {
   const x = r.reach;
   if (!x || !r.sendable) return '';
-  const parts = [`<b>ได้รับจริง ${fmtNum(x.friend)} คน</b> (เป็นเพื่อน LINE ของร้าน)`];
-  if (x.notFriend) parts.push(`ยังไม่เป็นเพื่อนหรือบล็อก ${fmtNum(x.notFriend)} คน — ไม่ได้รับ ไม่เสียโควตา`);
-  if (x.unknown) parts.push(`ยังไม่รู้สถานะ ${fmtNum(x.unknown)} คน (ยังไม่ได้เปิดบัตรสมาชิกตั้งแต่เริ่มนับ)`);
+  const parts = [`${tr('<b>ได้รับจริง {n} คน</b> (เป็นเพื่อน LINE ของร้าน)', { n: fmtNum(x.friend) })}`];
+  if (x.notFriend) parts.push(`${tr('ยังไม่เป็นเพื่อนหรือบล็อก {n} คน — ไม่ได้รับ ไม่เสียโควตา', { n: fmtNum(x.notFriend) })}`);
+  if (x.unknown) parts.push(`${tr('ยังไม่รู้สถานะ {n} คน (ยังไม่ได้เปิดบัตรสมาชิกตั้งแต่เริ่มนับ)', { n: fmtNum(x.unknown) })}`);
   return `<p class="aud-reach small">${parts.join('<br>')}</p>`;
 }
 
@@ -973,16 +1014,16 @@ function readAudience(form) {
     pointsMin: v('pointsMin'), pointsMax: v('pointsMax'), spendMin: v('spendMin'), spendMax: v('spendMax'),
     visitsMin: v('visitsMin'), visitsMax: v('visitsMax'), lastVisit: v('lastVisit'), lastVisitDays: v('lastVisitDays'), joinedDays: v('joinedDays')
   };
-  const pairs = [['points', `${unit()}คงเหลือ`], ['spend', 'ยอดซื้อรวม'], ['visits', 'จำนวนครั้งที่มาซื้อ']];
+  const pairs = [['points', `${tr('{u}คงเหลือ', { u: unit() })}`], ['spend', tr('ยอดซื้อรวม')], ['visits', tr('จำนวนครั้งที่มาซื้อ')]];
   for (const [k, label] of pairs) {
     const lo = filter[k + 'Min'], hi = filter[k + 'Max'];
-    if ((lo && !/^\d+$/.test(lo)) || (hi && !/^\d+$/.test(hi))) { toast(`${label}: ใส่เป็นตัวเลขจำนวนเต็ม`, 'err'); return null; }
-    if (lo && hi && Number(lo) > Number(hi)) { toast(`${label}: ค่าเริ่มต้องไม่มากกว่าค่าสิ้นสุด`, 'err'); return null; }
+    if ((lo && !/^\d+$/.test(lo)) || (hi && !/^\d+$/.test(hi))) { toast(`${tr('{label}: ใส่เป็นตัวเลขจำนวนเต็ม', { label })}`, 'err'); return null; }
+    if (lo && hi && Number(lo) > Number(hi)) { toast(`${tr('{label}: ค่าเริ่มต้องไม่มากกว่าค่าสิ้นสุด', { label })}`, 'err'); return null; }
   }
-  for (const [k, label] of [['lastVisitDays', 'มาซื้อครั้งล่าสุด'], ['joinedDays', 'สมัครสมาชิกภายใน']]) {
-    if (filter[k] && !(/^\d+$/.test(filter[k]) && Number(filter[k]) >= 1)) { toast(`${label}: ใส่จำนวนวันตั้งแต่ 1 ขึ้นไป`, 'err'); return null; }
+  for (const [k, label] of [['lastVisitDays', tr('มาซื้อครั้งล่าสุด')], ['joinedDays', tr('สมัครสมาชิกภายใน')]]) {
+    if (filter[k] && !(/^\d+$/.test(filter[k]) && Number(filter[k]) >= 1)) { toast(`${tr('{label}: ใส่จำนวนวันตั้งแต่ 1 ขึ้นไป', { label })}`, 'err'); return null; }
   }
-  if (filter.lastVisit && !filter.lastVisitDays) { toast('มาซื้อครั้งล่าสุด: ใส่จำนวนวันด้วย', 'err'); return null; }
+  if (filter.lastVisit && !filter.lastVisitDays) { toast(tr('มาซื้อครั้งล่าสุด: ใส่จำนวนวันด้วย'), 'err'); return null; }
   if (!filter.lastVisit) filter.lastVisitDays = '';
   return filter;
 }
@@ -1034,12 +1075,12 @@ async function loadBroadcastInfo() {
 
 function sendCardHtml() {
   const info = S.bc.info;
-  const head = '<div class="card-head"><h2>2. เขียนข้อความและส่ง</h2></div>';
-  if (!info) return head + '<p class="muted small"><span class="spin spin-dark"></span> กำลังเช็กการเชื่อม LINE OA...</p>';
+  const head = `<div class="card-head"><h2>${tr('2. เขียนข้อความและส่ง')}</h2></div>`;
+  if (!info) return head + `<p class="muted small"><span class="spin spin-dark"></span> ${tr('กำลังเช็กการเชื่อม LINE OA...')}</p>`;
   if (!info.connected) {
     const why = info.error || info.problemText;
-    return head + `<div class="notice">${icon('lock', 18)}<span>${why ? esc(why) : 'ใช้ได้เมื่อเชื่อม LINE OA ของร้านกับระบบแล้ว — ติดต่อผู้ดูแลระบบ'}</span></div>
-      ${why ? `<button type="button" class="link" data-act="bc-reload">${icon('refresh', 14)} ลองใหม่</button>` : ''}`;
+    return head + `<div class="notice">${icon('lock', 18)}<span>${why ? esc(why) : tr('ใช้ได้เมื่อเชื่อม LINE OA ของร้านกับระบบแล้ว — ติดต่อผู้ดูแลระบบ')}</span></div>
+      ${why ? `<button type="button" class="link" data-act="bc-reload">${icon('refresh', 14)} ${tr('ลองใหม่')}</button>` : ''}`;
   }
   const oa = info.oa || {};
   const q = info.quota || {};
@@ -1047,36 +1088,36 @@ function sendCardHtml() {
   return head + `
     <div class="bc-oa">
       <span class="bc-av">${oa.picture ? `<img src="${esc(oa.picture)}" alt="" referrerpolicy="no-referrer">` : icon('store', 18)}</span>
-      <div class="grow"><b>${esc(oa.name || 'LINE OA ของร้าน')}</b> <span class="muted small">${esc(oa.basicId || '')}</span></div>
-      <span class="chip">${q.limited ? `โควตาเดือนนี้เหลือ ${fmtNum(q.remaining)} / ${fmtNum(q.limit)}` : 'โควตาไม่จำกัด'}</span>
+      <div class="grow"><b>${esc(oa.name || tr('LINE OA ของร้าน'))}</b> <span class="muted small">${esc(oa.basicId || '')}</span></div>
+      <span class="chip">${q.limited ? `${tr('โควตาเดือนนี้เหลือ {n} / {n2}', { n: fmtNum(q.remaining), n2: fmtNum(q.limit) })}` : tr('โควตาไม่จำกัด')}</span>
     </div>
-    ${info.ownerIsFriend ? '' : `<div class="notice">${icon('alert', 18)}<span>บัญชี LINE ของคุณยังไม่ได้เพิ่ม <b>${esc(oa.name || 'OA ของร้าน')}</b> เป็นเพื่อน จึงส่งทดสอบหาตัวเองไม่ได้ (เพิ่มแล้วยังขึ้นข้อความนี้ แจ้งผู้ดูแลระบบ)</span></div>`}
+    ${info.ownerIsFriend ? '' : `<div class="notice">${icon('alert', 18)}<span>${tr('บัญชี LINE ของคุณยังไม่ได้เพิ่ม <b>{x}</b> เป็นเพื่อน จึงส่งทดสอบหาตัวเองไม่ได้ (เพิ่มแล้วยังขึ้นข้อความนี้ แจ้งผู้ดูแลระบบ)', { x: esc(oa.name || tr('OA ของร้าน')) })}</span></div>`}
     <form class="form" data-form="broadcast" autocomplete="off">
-      <label class="field"><span>ข้อความ</span>
-        <textarea name="text" rows="5" maxlength="${BC_MAX}" placeholder="เช่น สวัสดีค่ะ สมาชิกระดับ Gold รับส่วนลด 20% ทุกเมนู ถึงสิ้นเดือนนี้">${esc(d.text)}</textarea>
+      <label class="field"><span>${tr('ข้อความ')}</span>
+        <textarea name="text" rows="5" maxlength="${BC_MAX}" placeholder="${tr('เช่น สวัสดีค่ะ สมาชิกระดับ Gold รับส่วนลด 20% ทุกเมนู ถึงสิ้นเดือนนี้')}">${esc(d.text)}</textarea>
         <small class="bc-counter" id="bc-counter">${fmtNum([...d.text].length)} / ${fmtNum(BC_MAX)}</small></label>
-      <div class="field"><span>รูป <small>(ไม่บังคับ · ขึ้นเต็มความกว้างแชตแบบริชเมสเสจ)</small></span>
+      <div class="field"><span>${tr('รูป')} <small>${tr('(ไม่บังคับ · ขึ้นเต็มความกว้างแชตแบบริชเมสเสจ)')}</small></span>
         <div class="img-upload">
-          <label class="btn btn-sm upload-btn">${icon('upload', 16)} อัปโหลดรูป<input type="file" accept="image/jpeg,image/png,image/*" data-upload="image" hidden></label>
-          <button type="button" class="link" data-act="image-clear" data-id="image">ลบรูป</button>
+          <label class="btn btn-sm upload-btn">${icon('upload', 16)} ${tr('อัปโหลดรูป')}<input type="file" accept="image/jpeg,image/png,image/*" data-upload="image" hidden></label>
+          <button type="button" class="link" data-act="image-clear" data-id="image">${tr('ลบรูป')}</button>
         </div>
-        <small class="hint img-size">ขนาดแนะนำ <b>1040 × 1040 px</b> (สี่เหลี่ยมจัตุรัส) · ใช้ได้ตั้งแต่แนวนอน 2:1 ถึงแนวตั้ง 2:3 · ระบบไม่ตัดรูปให้</small>
+        <small class="hint img-size">${tr('ขนาดแนะนำ <b>1040 × 1040 px</b> (สี่เหลี่ยมจัตุรัส) · ใช้ได้ตั้งแต่แนวนอน 2:1 ถึงแนวตั้ง 2:3 · ระบบไม่ตัดรูปให้')}</small>
         <input type="hidden" name="image" value="${esc(d.image)}"><input type="hidden" name="imageHeight" value="${esc(d.imageHeight)}"></div>
       <!-- ริชเมสเสจต้องมีจุดแตะ (LINE บังคับ) และลูกค้าแตะเพื่อขยายรูปไม่ได้ → ให้ร้านเลือกว่าแตะแล้วไปไหน -->
-      <label class="field" id="bc-link-field" ${d.image ? '' : 'hidden'}><span>แตะรูปแล้วเปิด <small>(เว้นว่าง = บัตรสมาชิกของร้าน)</small></span>
+      <label class="field" id="bc-link-field" ${d.image ? '' : 'hidden'}><span>${tr('แตะรูปแล้วเปิด')} <small>${tr('(เว้นว่าง = บัตรสมาชิกของร้าน)')}</small></span>
         <input name="link" type="url" inputmode="url" maxlength="1000" placeholder="https://..." value="${esc(d.link)}"></label>
-      <div class="field"><span>ตัวอย่างในแชต LINE</span><div class="bc-preview" id="bc-preview">${bcPreviewHtml()}</div></div>
-      <p class="muted small">ลูกค้าที่ยังไม่ได้เพิ่ม OA เป็นเพื่อน หรือบล็อก OA ไว้ จะไม่ได้รับข้อความ</p>
+      <div class="field"><span>${tr('ตัวอย่างในแชต LINE')}</span><div class="bc-preview" id="bc-preview">${bcPreviewHtml()}</div></div>
+      <p class="muted small">${tr('ลูกค้าที่ยังไม่ได้เพิ่ม OA เป็นเพื่อน หรือบล็อก OA ไว้ จะไม่ได้รับข้อความ')}</p>
       <div class="aud-actions">
-        <button type="button" class="btn" data-act="bc-test" ${info.ownerIsFriend ? '' : 'disabled'}>${icon('user', 16)} ส่งทดสอบหาตัวเอง</button>
-        <button type="button" class="btn btn-primary" data-act="bc-send" id="bc-send-btn">${icon('send', 16)} ส่ง</button>
+        <button type="button" class="btn" data-act="bc-test" ${info.ownerIsFriend ? '' : 'disabled'}>${icon('user', 16)} ${tr('ส่งทดสอบหาตัวเอง')}</button>
+        <button type="button" class="btn btn-primary" data-act="bc-send" id="bc-send-btn">${icon('send', 16)} ${tr('ส่ง')}</button>
       </div>
     </form>`;
 }
 
 function bcPreviewHtml(draft = S.bc.draft) {
   const oa = (S.bc.info && S.bc.info.oa) || {};
-  if (!draft.text && !draft.image) return '<p class="muted small">พิมพ์ข้อความหรือใส่รูป แล้วตัวอย่างจะขึ้นที่นี่</p>';
+  if (!draft.text && !draft.image) return `<p class="muted small">${tr('พิมพ์ข้อความหรือใส่รูป แล้วตัวอย่างจะขึ้นที่นี่')}</p>`;
   // ริชเมสเสจกว้างกว่ากล่องข้อความในแชตจริง → กล่องตัวอย่างกว้างขึ้นเมื่อมีรูป / จองที่ตามสัดส่วนไว้ก่อนรูปโหลดเสร็จ (ตัวอย่างไม่กระตุก)
   const h = Math.round(Number(draft.imageHeight)) || 1040;
   return `
@@ -1114,7 +1155,7 @@ function updateSendState() {
   if (!btn || btn.querySelector('.spin')) return;
   const d = S.bc.draft;
   const n = S.bc.count || 0;
-  const label = S.aud.dirty ? 'กด "ดูจำนวนคน" ก่อนส่ง' : !n ? 'ไม่มีลูกค้าในกลุ่มนี้' : `ส่งให้ ${fmtNum(n)} คน`;
+  const label = S.aud.dirty ? tr('กด "ดูจำนวนคน" ก่อนส่ง') : !n ? tr('ไม่มีลูกค้าในกลุ่มนี้') : `${tr('ส่งให้ {n} คน', { n: fmtNum(n) })}`;
   btn.innerHTML = `${icon('send', 16)} ${esc(label)}`;
   btn.disabled = S.aud.dirty || !n || (!d.text.trim() && !d.image);
 }
@@ -1122,13 +1163,13 @@ function updateSendState() {
 function readDraft() {
   const src = S.bc.draft;
   const d = { text: src.text.trim(), image: src.image };
-  if (!d.text && !d.image) { toast('พิมพ์ข้อความหรือใส่รูปก่อน', 'err'); return null; }
-  if ([...d.text].length > BC_MAX) { toast(`ข้อความยาวได้ไม่เกิน ${fmtNum(BC_MAX)} ตัวอักษร`, 'err'); return null; }
+  if (!d.text && !d.image) { toast(tr('พิมพ์ข้อความหรือใส่รูปก่อน'), 'err'); return null; }
+  if ([...d.text].length > BC_MAX) { toast(`${tr('ข้อความยาวได้ไม่เกิน {n} ตัวอักษร', { n: fmtNum(BC_MAX) })}`, 'err'); return null; }
   if (d.image) {
     d.imageHeight = Number(src.imageHeight);
     d.link = src.link.trim();
     // ตัวกลางตรวจซ้ำอยู่แล้ว — ที่นี่บอกก่อนกดส่ง ไม่ต้องรอคำตอบ
-    if (d.link && !/^https:\/\/\S+$/i.test(d.link)) { toast('ลิงก์เมื่อแตะรูปต้องขึ้นต้นด้วย https:// (เว้นว่าง = เปิดบัตรสมาชิกของร้าน)', 'err'); return null; }
+    if (d.link && !/^https:\/\/\S+$/i.test(d.link)) { toast(tr('ลิงก์เมื่อแตะรูปต้องขึ้นต้นด้วย https:// (เว้นว่าง = เปิดบัตรสมาชิกของร้าน)'), 'err'); return null; }
   }
   return d;
 }
@@ -1136,10 +1177,10 @@ function readDraft() {
 async function bcTest(btn) {
   const draft = readDraft();
   if (!draft) return;
-  setBusy(btn, true, 'กำลังส่ง...');
+  setBusy(btn, true, tr('กำลังส่ง...'));
   try {
     await withRequestId('bctest|' + JSON.stringify(draft), rid => S.api.call('adminBroadcastTest', { draft, requestId: rid }));
-    toast('ส่งทดสอบแล้ว เปิดแชต LINE ของคุณดูได้เลย', 'ok');
+    toast(tr('ส่งทดสอบแล้ว เปิดแชต LINE ของคุณดูได้เลย'), 'ok');
     loadBroadcastInfo(); // โควตาลดไป 1
   } catch (e) {
     toast(e.message, 'err');
@@ -1151,23 +1192,23 @@ async function bcTest(btn) {
 function confirmBroadcast() {
   const draft = readDraft();
   if (!draft) return;
-  if (S.aud.dirty) return toast('กด "ดูจำนวนคน" ก่อน เพื่อยืนยันกลุ่มที่จะส่ง', 'err');
+  if (S.aud.dirty) return toast(tr('กด "ดูจำนวนคน" ก่อน เพื่อยืนยันกลุ่มที่จะส่ง'), 'err');
   const n = S.bc.count || 0;
-  if (!n) return toast('ไม่มีลูกค้าที่ส่งได้ในกลุ่มนี้', 'err');
+  if (!n) return toast(tr('ไม่มีลูกค้าที่ส่งได้ในกลุ่มนี้'), 'err');
   const q = (S.bc.info && S.bc.info.quota) || {};
   const need = S.bc.need == null ? n : S.bc.need;
   const short = q.limited && q.remaining < need;
   S.bc.pending = { draft, filter: S.aud.filter, expect: n };
   openModal(`
-    <div class="modal-head"><h2>ยืนยันส่งข้อความ</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tr('ยืนยันส่งข้อความ')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <div class="form">
-      <div class="aud-count"><span>ส่งให้</span><b>${fmtNum(n)}</b><span>คน</span></div>
-      ${q.limited ? `<p class="small ${short ? 'text-danger' : 'muted'}">โควตาข้อความเดือนนี้ของ LINE OA เหลือ ${fmtNum(q.remaining)} ข้อความ${short ? ` ไม่พอส่ง ${fmtNum(need)} คน — ลดกลุ่มลง หรือเพิ่มแพ็กเกจ LINE OA` : ` (ครั้งนี้ใช้ไม่เกิน ${fmtNum(need)})`}</p>` : ''}
+      <div class="aud-count"><span>${tr('ส่งให้')}</span><b>${fmtNum(n)}</b><span>${tr('คน')}</span></div>
+      ${q.limited ? `<p class="small ${short ? 'text-danger' : 'muted'}">${tr('โควตาข้อความเดือนนี้ของ LINE OA เหลือ {n} ข้อความ{n2}', { n: fmtNum(q.remaining), n2: short ? ` ${tr('ไม่พอส่ง {n} คน — ลดกลุ่มลง หรือเพิ่มแพ็กเกจ LINE OA', { n: fmtNum(need) })}` : ` ${tr('(ครั้งนี้ใช้ไม่เกิน {n})', { n: fmtNum(need) })}` })}</p>` : ''}
       <div class="bc-preview">${bcPreviewHtml(draft)}</div>
-      <div class="notice">${icon('alert', 18)}<span>ส่งแล้ว<b>ยกเลิกหรือแก้ไขไม่ได้</b> ตรวจข้อความและกลุ่มลูกค้าให้เรียบร้อยก่อน</span></div>
+      <div class="notice">${icon('alert', 18)}<span>${tr('ส่งแล้ว<b>ยกเลิกหรือแก้ไขไม่ได้</b> ตรวจข้อความและกลุ่มลูกค้าให้เรียบร้อยก่อน')}</span></div>
       <div class="modal-actions">
-        <button class="btn" type="button" data-act="close">ยกเลิก</button>
-        <button class="btn btn-primary" type="button" data-act="bc-send-confirm" ${short ? 'disabled' : ''}>${icon('send', 16)} ส่งเลย ${fmtNum(n)} คน</button>
+        <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+        <button class="btn btn-primary" type="button" data-act="bc-send-confirm" ${short ? 'disabled' : ''}>${icon('send', 16)} ${tr('ส่งเลย {n} คน', { n: fmtNum(n) })}</button>
       </div>
     </div>`);
 }
@@ -1175,7 +1216,7 @@ function confirmBroadcast() {
 async function doBroadcast(btn) {
   const p = S.bc.pending;
   if (!p) return;
-  setBusy(btn, true, 'กำลังส่ง...');
+  setBusy(btn, true, tr('กำลังส่ง...'));
   try {
     // รหัสคำขอเดิมถ้าเน็ตหลุดแล้วกดใหม่ → ตัวกลางคืนการส่งเดิม ลูกค้าไม่ได้ซ้ำ
     const r = await withRequestId('bcsend|' + JSON.stringify(p), rid => S.api.call('adminBroadcastSend', { ...p, requestId: rid }));
@@ -1183,10 +1224,10 @@ async function doBroadcast(btn) {
     S.bc.pending = null;
     const b = r.broadcast;
     if (b.status === 'DONE') {
-      toast(`ส่งแล้ว ${fmtNum(b.sent)} คน`, 'ok');
+      toast(`${tr('ส่งแล้ว {n} คน', { n: fmtNum(b.sent) })}`, 'ok');
       S.bc.draft = BC_EMPTY(); // ล้างข้อความ กันเผลอกดส่งซ้ำ
     } else {
-      toast(`ส่งได้ ${fmtNum(b.sent)} จาก ${fmtNum(b.total)} คน — กด "ส่งต่อ" ในประวัติการส่ง`, 'err');
+      toast(`${tr('ส่งได้ {n} จาก {n2} คน — กด "ส่งต่อ" ในประวัติการส่ง', { n: fmtNum(b.sent), n2: fmtNum(b.total) })}`, 'err');
     }
     S.bc.info = null;
     document.getElementById('bc-send').innerHTML = sendCardHtml();
@@ -1200,11 +1241,11 @@ async function doBroadcast(btn) {
 }
 
 async function bcResume(id, btn) {
-  setBusy(btn, true, 'กำลังส่ง...');
+  setBusy(btn, true, tr('กำลังส่ง...'));
   try {
     const r = await S.api.call('adminBroadcastResume', { id });
     const b = r.broadcast;
-    toast(b.status === 'DONE' ? `ส่งครบแล้ว ${fmtNum(b.sent)} คน` : `ส่งได้ ${fmtNum(b.sent)} จาก ${fmtNum(b.total)} คน`, b.status === 'DONE' ? 'ok' : 'err');
+    toast(b.status === 'DONE' ? `${tr('ส่งครบแล้ว {n} คน', { n: fmtNum(b.sent) })}` : `${tr('ส่งได้ {n} จาก {n2} คน', { n: fmtNum(b.sent), n2: fmtNum(b.total) })}`, b.status === 'DONE' ? 'ok' : 'err');
   } catch (e) {
     toast(e.message, 'err');
   } finally {
@@ -1216,23 +1257,23 @@ async function bcResume(id, btn) {
 function historyHtml() {
   const items = (S.bc.info && S.bc.info.history) || [];
   return `
-    <div class="card-head"><h2>ประวัติการส่ง</h2></div>
-    ${!S.bc.info ? '<p class="muted small">กำลังโหลด...</p>' : !items.length ? '<p class="muted small">ยังไม่เคยส่งข้อความ</p>' : `
+    <div class="card-head"><h2>${tr('ประวัติการส่ง')}</h2></div>
+    ${!S.bc.info ? `<p class="muted small">${tr('กำลังโหลด...')}</p>` : !items.length ? `<p class="muted small">${tr('ยังไม่เคยส่งข้อความ')}</p>` : `
     <div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th>วันเวลา</th><th>ข้อความ</th><th class="num">ส่งแล้ว</th><th>สถานะ</th><th></th></tr></thead>
+      <thead><tr><th>${tr('วันเวลา')}</th><th>${tr('ข้อความ')}</th><th class="num">${tr('ส่งแล้ว')}</th><th>${tr('สถานะ')}</th><th></th></tr></thead>
       <tbody>${items.map(x => {
-        const [label, cls] = BC_STATUS[x.status] || [x.status, 'inactive'];
+        const [label, cls] = (BC_STATUS[x.status] || [x.status, 'inactive']).map((v, i) => (i === 0 ? tr(v) : v));
         return `
         <tr>
           <td class="nowrap">${fmtDateTime(x.createdAt)}<div class="muted small">${esc(x.by)}</div></td>
-          <td class="bc-text">${x.image ? `${icon('upload', 14)} รูป · ` : ''}${esc(x.text || '')}</td>
+          <td class="bc-text">${x.image ? `${icon('upload', 14)} ${tr('รูป ·')} ` : ''}${esc(x.text || '')}</td>
           <td class="num nowrap">${fmtNum(x.sent)} / ${fmtNum(x.total)}</td>
-          <td>${statusChip(cls, label)}${x.error && BC_ERROR[x.error] ? `<div class="muted small">${esc(BC_ERROR[x.error])}</div>` : ''}</td>
-          <td>${x.canResume ? `<button type="button" class="btn btn-sm" data-act="bc-resume" data-id="${esc(x.id)}">${icon('refresh', 14)} ส่งต่อ</button>` : ''}</td>
+          <td>${statusChip(cls, label)}${x.error && BC_ERROR[x.error] ? `<div class="muted small">${esc(tr(BC_ERROR[x.error]))}</div>` : ''}</td>
+          <td>${x.canResume ? `<button type="button" class="btn btn-sm" data-act="bc-resume" data-id="${esc(x.id)}">${icon('refresh', 14)} ${tr('ส่งต่อ')}</button>` : ''}</td>
         </tr>`;
       }).join('')}
       </tbody></table></div>
-    <p class="muted small">"ส่งต่อ" = ส่งเฉพาะคนที่ยังไม่ได้รับ ไม่ส่งซ้ำคนที่ได้ไปแล้ว</p>`}`;
+    <p class="muted small">${tr('"ส่งต่อ" = ส่งเฉพาะคนที่ยังไม่ได้รับ ไม่ส่งซ้ำคนที่ได้ไปแล้ว')}</p>`}`;
 }
 
 /* =====================================================
@@ -1249,95 +1290,95 @@ function renderMember(r) {
   const owner = isOwner();
   const deleted = m.deleted === true; // ลบบัญชีแล้ว (PDPA): เหลือแต่ประวัติแบบไม่มีชื่อ — แก้/ระงับ/ปรับแต้มไม่ได้
   document.getElementById('view').innerHTML = `
-    <a class="back-link" href="#members">${icon('left', 16)} รายชื่อสมาชิก</a>
+    <a class="back-link" href="#members">${icon('left', 16)} ${tr('รายชื่อสมาชิก')}</a>
     <section class="card adm-card member-head">
       <div class="avatar">${m.picture ? `<img src="${esc(m.picture)}" alt="" referrerpolicy="no-referrer">` : icon('user', 26)}</div>
       <div class="grow">
         <div class="m-name">${esc(m.name)}</div>
         <div class="m-sub mono">${esc(m.memberId)}</div>
       </div>
-      ${deleted ? statusChip('blocked', 'ลบบัญชีแล้ว') : m.status === 'ACTIVE' ? statusChip('active', 'ใช้งานได้') : statusChip('blocked', 'ถูกระงับ')}
+      ${deleted ? statusChip('blocked', tr('ลบบัญชีแล้ว')) : m.status === 'ACTIVE' ? statusChip('active', tr('ใช้งานได้')) : statusChip('blocked', tr('ถูกระงับ'))}
     </section>
     <div class="kpis kpis-3">
-      <div class="kpi"><div class="kpi-label">${esc(unit())}คงเหลือ</div><div class="kpi-value">${fmtNum(m.points)}</div></div>
-      <div class="kpi"><div class="kpi-label">ยอดซื้อรวม</div><div class="kpi-value">฿${fmtMoney(m.totalSpend)}</div></div>
-      <div class="kpi"><div class="kpi-label">จำนวนครั้งที่มา</div><div class="kpi-value">${fmtNum(m.visitCount)}</div></div>
+      <div class="kpi"><div class="kpi-label">${tr('{u}คงเหลือ', { u: esc(unit()) })}</div><div class="kpi-value">${fmtNum(m.points)}</div></div>
+      <div class="kpi"><div class="kpi-label">${tr('ยอดซื้อรวม')}</div><div class="kpi-value">฿${fmtMoney(m.totalSpend)}</div></div>
+      <div class="kpi"><div class="kpi-label">${tr('จำนวนครั้งที่มา')}</div><div class="kpi-value">${fmtNum(m.visitCount)}</div></div>
     </div>
-    ${deleted ? `<p class="notice">${icon('shield', 18)}<span>ลบบัญชีสมาชิกแล้วเมื่อ ${fmtDateTime(m.deletedAt)} — ชื่อ เบอร์ วันเกิด และบัญชี LINE ถูกลบตามคำขอ เหลือเฉพาะประวัติยอดซื้อแบบไม่มีชื่อ</span></p>` : memberTierHtml(m, owner)}
+    ${deleted ? `<p class="notice">${icon('shield', 18)}<span>${tr('ลบบัญชีสมาชิกแล้วเมื่อ {date} — ชื่อ เบอร์ วันเกิด และบัญชี LINE ถูกลบตามคำขอ เหลือเฉพาะประวัติยอดซื้อแบบไม่มีชื่อ', { date: fmtDateTime(m.deletedAt) })}</span></p>` : memberTierHtml(m, owner)}
     ${deleted ? '' : `<div class="adm-grid2">
       <section class="card adm-card">
-        <div class="card-head"><h2>ข้อมูลสมาชิก</h2></div>
+        <div class="card-head"><h2>${tr('ข้อมูลสมาชิก')}</h2></div>
         <dl class="kv">
-          ${m.firstName ? `<dt>ชื่อ</dt><dd>${esc(m.firstName)}</dd><dt>นามสกุล</dt><dd>${esc(m.lastName || '-')}</dd>` : ''}
-          <dt>เบอร์โทร</dt><dd>${esc(fmtPhone(m.phone) || m.phoneMasked || '-')}</dd>
-          ${owner ? `<dt>วันเกิด</dt><dd>${m.birthDate ? fmtDate(m.birthDate + 'T00:00:00+07:00') : '-'}${m.birthSelfEdits ? ' <span class="muted small">(ลูกค้าแก้เองครบแล้ว)</span>' : ''}</dd>` : ''}
-          <dt>สมัครเมื่อ</dt><dd>${fmtDateTime(m.joinedAt)}</dd>
-          ${hasBranches() ? `<dt>สมัครที่สาขา</dt><dd>${esc(branchName(m.joinedBranch))}</dd>
-          <dt>มาบ่อยที่สุด</dt><dd>${m.topBranch ? `${esc(branchName(m.topBranch))} <span class="muted small">(${fmtNum(m.topBranchVisits)} บิลล่าสุด)</span>` : '-'}</dd>` : ''}
-          <dt>มาล่าสุด</dt><dd>${m.lastVisitAt ? fmtDateTime(m.lastVisitAt) : '-'}</dd>
-          <dt>ยอมรับนโยบาย</dt><dd>${m.consentAt ? `ฉบับที่ ${esc(m.consentVersion || '-')} · ${fmtDate(m.consentAt)}` : '-'}</dd>
-          <dt>รับข่าวสาร</dt><dd>${m.marketingConsent ? 'ยินยอม' : 'ไม่ยินยอม'}</dd>
-          <dt>บัญชี LINE</dt><dd>${m.lineLinked ? 'เชื่อมแล้ว' : 'ยังไม่เชื่อม'}</dd>
-          ${m.note ? `<dt>หมายเหตุ</dt><dd>${esc(m.note)}</dd>` : ''}
+          ${m.firstName ? `<dt>${tr('ชื่อ')}</dt><dd>${esc(m.firstName)}</dd><dt>${tr('นามสกุล')}</dt><dd>${esc(m.lastName || '-')}</dd>` : ''}
+          <dt>${tr('เบอร์โทร')}</dt><dd>${esc(fmtPhone(m.phone) || m.phoneMasked || '-')}</dd>
+          ${owner ? `<dt>${tr('วันเกิด')}</dt><dd>${m.birthDate ? fmtDate(m.birthDate + 'T00:00:00+07:00') : '-'}${m.birthSelfEdits ? ` <span class="muted small">${tr('(ลูกค้าแก้เองครบแล้ว)')}</span>` : ''}</dd>` : ''}
+          <dt>${tr('สมัครเมื่อ')}</dt><dd>${fmtDateTime(m.joinedAt)}</dd>
+          ${hasBranches() ? `<dt>${tr('สมัครที่สาขา')}</dt><dd>${esc(branchName(m.joinedBranch))}</dd>
+          <dt>${tr('มาบ่อยที่สุด')}</dt><dd>${m.topBranch ? `${esc(branchName(m.topBranch))} <span class="muted small">${tr('({n} บิลล่าสุด)', { n: fmtNum(m.topBranchVisits) })}</span>` : '-'}</dd>` : ''}
+          <dt>${tr('มาล่าสุด')}</dt><dd>${m.lastVisitAt ? fmtDateTime(m.lastVisitAt) : '-'}</dd>
+          <dt>${tr('ยอมรับนโยบาย')}</dt><dd>${m.consentAt ? `${tr('ฉบับที่ {x} · {date}', { x: esc(m.consentVersion || '-'), date: fmtDate(m.consentAt) })}` : '-'}</dd>
+          <dt>${tr('รับข่าวสาร')}</dt><dd>${m.marketingConsent ? tr('ยินยอม') : tr('ไม่ยินยอม')}</dd>
+          <dt>${tr('บัญชี LINE')}</dt><dd>${m.lineLinked ? tr('เชื่อมแล้ว') : tr('ยังไม่เชื่อม')}</dd>
+          ${m.note ? `<dt>${tr('หมายเหตุ')}</dt><dd>${esc(m.note)}</dd>` : ''}
         </dl>
         <div class="member-status-row">
-          ${owner ? `<button class="btn btn-sm" data-act="member-edit">${icon('edit', 16)} แก้ไขข้อมูล</button>` : ''}
+          ${owner ? `<button class="btn btn-sm" data-act="member-edit">${icon('edit', 16)} ${tr('แก้ไขข้อมูล')}</button>` : ''}
           ${m.status === 'ACTIVE'
-            ? `<button class="btn btn-sm btn-danger-outline" data-act="member-status">${icon('shield', 16)} ระงับสมาชิก</button>`
-            : `<button class="btn btn-sm btn-primary" data-act="member-status">${icon('check', 16)} เปิดใช้อีกครั้ง</button>`}
-          ${owner && r.canDelete ? `<button class="btn btn-sm btn-danger-outline" data-act="member-delete">${icon('x', 16)} ลบข้อมูลสมาชิก</button>` : ''}
+            ? `<button class="btn btn-sm btn-danger-outline" data-act="member-status">${icon('shield', 16)} ${tr('ระงับสมาชิก')}</button>`
+            : `<button class="btn btn-sm btn-primary" data-act="member-status">${icon('check', 16)} ${tr('เปิดใช้อีกครั้ง')}</button>`}
+          ${owner && r.canDelete ? `<button class="btn btn-sm btn-danger-outline" data-act="member-delete">${icon('x', 16)} ${tr('ลบข้อมูลสมาชิก')}</button>` : ''}
         </div>
-        ${owner ? '' : '<p class="muted small">ผู้จัดการไม่เห็นเบอร์เต็มและวันเกิด (เจ้าของร้านเห็น)</p>'}
+        ${owner ? '' : `<p class="muted small">${tr('ผู้จัดการไม่เห็นเบอร์เต็มและวันเกิด (เจ้าของร้านเห็น)')}</p>`}
       </section>
       <section class="card adm-card">
-        <div class="card-head"><h2>${icon('coins', 18)} ปรับ${esc(unit())}</h2></div>
+        <div class="card-head"><h2>${icon('coins', 18)} ${tr('ปรับ{u}', { u: esc(unit()) })}</h2></div>
         <form class="form" data-form="adjust" autocomplete="off">
-          <label class="field"><span>จำนวน (+ เพิ่ม / − ลด)</span><input name="points" inputmode="numeric" placeholder="เช่น 50 หรือ -20"></label>
-          <label class="field"><span>เหตุผล <em>*</em></span><input name="reason" maxlength="150" placeholder="เช่น แก้ยอดที่บันทึกผิด"></label>
-          <button class="btn btn-primary" type="submit">ปรับ${esc(unit())}</button>
-          <p class="muted small">ทุกการปรับจะบันทึกชื่อคุณและเหตุผลไว้ในประวัติ</p>
+          <label class="field"><span>${tr('จำนวน (+ เพิ่ม / − ลด)')}</span><input name="points" inputmode="numeric" placeholder="${tr('เช่น 50 หรือ -20')}"></label>
+          <label class="field"><span>${tr('เหตุผล <em>*</em>')}</span><input name="reason" maxlength="150" placeholder="${tr('เช่น แก้ยอดที่บันทึกผิด')}"></label>
+          <button class="btn btn-primary" type="submit">${tr('ปรับ{u}', { u: esc(unit()) })}</button>
+          <p class="muted small">${tr('ทุกการปรับจะบันทึกชื่อคุณและเหตุผลไว้ในประวัติ')}</p>
         </form>
       </section>
     </div>`}
     <section class="card adm-card flush">
-      <div class="card-head pad"><h2>ประวัติ${esc(unit())}</h2><span class="muted small">${fmtNum(r.history.length)} รายการล่าสุด</span></div>
+      <div class="card-head pad"><h2>${tr('ประวัติ{u}', { u: esc(unit()) })}</h2><span class="muted small">${tr('{n} รายการล่าสุด', { n: fmtNum(r.history.length) })}</span></div>
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>วันเวลา</th><th>ประเภท</th><th>รายละเอียด</th><th class="num">ยอดซื้อ</th><th class="num">${esc(unit())}</th><th class="num">คงเหลือ</th><th>พนักงาน</th>${hasBranches() ? '<th>สาขา</th>' : ''}</tr></thead>
+        <thead><tr><th>${tr('วันเวลา')}</th><th>${tr('ประเภท')}</th><th>${tr('รายละเอียด')}</th><th class="num">${tr('ยอดซื้อ')}</th><th class="num">${esc(unit())}</th><th class="num">${tr('คงเหลือ')}</th><th>${tr('พนักงาน')}</th>${hasBranches() ? `<th>${tr('สาขา')}</th>` : ''}</tr></thead>
         <tbody>${r.history.length ? r.history.map(t => `
           <tr>
             <td class="nowrap">${fmtDateTime(t.date)}</td>
-            <td class="nowrap">${esc(TX_LABEL[t.type] || t.type)}</td>
-            <td>${esc(t.detail)}</td>
+            <td class="nowrap">${esc(tr(TX_LABEL[t.type] || t.type))}</td>
+            <td>${esc(txDetail(t))}</td>
             <td class="num">${t.type === 'EARN' ? '฿' + fmtMoney(t.amount) : ''}</td>
             <td class="num tx-points ${ptsClass(t.points)}">${signed(t.points)}</td>
             <td class="num">${fmtNum(t.balance)}</td>
-            <td>${esc(t.staff === 'SYSTEM' ? 'ระบบ' : t.staff || '-')}</td>
+            <td>${esc(staffLabel(t.staff))}</td>
             ${hasBranches() ? `<td class="nowrap">${esc(t.type === 'REDEEM' || t.type === 'WELCOME' || t.type === 'CONSENT' ? '-' : branchName(t.branch))}</td>` : ''}
-          </tr>`).join('') : emptyRow(8, 'ยังไม่มีรายการ')}
+          </tr>`).join('') : emptyRow(8, tr('ยังไม่มีรายการ'))}
         </tbody></table></div>
     </section>
     ${(m.profileLog || []).length ? `
     <section class="card adm-card flush">
-      <div class="card-head pad"><h2>ประวัติการแก้ข้อมูล</h2><span class="muted small">จดเฉพาะช่องที่แก้ ไม่เก็บค่าเดิม</span></div>
+      <div class="card-head pad"><h2>${tr('ประวัติการแก้ข้อมูล')}</h2><span class="muted small">${tr('จดเฉพาะช่องที่แก้ ไม่เก็บค่าเดิม')}</span></div>
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>วันเวลา</th><th>แก้ช่อง</th><th>โดย</th></tr></thead>
+        <thead><tr><th>${tr('วันเวลา')}</th><th>${tr('แก้ช่อง')}</th><th>${tr('โดย')}</th></tr></thead>
         <tbody>${m.profileLog.map(l => `
           <tr><td class="nowrap">${fmtDateTime(l.date)}</td><td>${esc(l.changed)}</td><td>${esc(l.by)}</td></tr>`).join('')}
         </tbody></table></div>
     </section>` : ''}
     <section class="card adm-card flush">
-      <div class="card-head pad"><h2>คูปอง</h2><span class="muted small">${fmtNum(r.coupons.length)} ใบ</span></div>
+      <div class="card-head pad"><h2>${tr('คูปอง')}</h2><span class="muted small">${tr('{n} ใบ', { n: fmtNum(r.coupons.length) })}</span></div>
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>ของรางวัล</th><th>รหัสคูปอง</th><th>สถานะ</th><th>แลกเมื่อ</th><th>ใช้ได้ถึง</th><th>ใช้เมื่อ</th></tr></thead>
+        <thead><tr><th>${tr('ของรางวัล')}</th><th>${tr('รหัสคูปอง')}</th><th>${tr('สถานะ')}</th><th>${tr('แลกเมื่อ')}</th><th>${tr('ใช้ได้ถึง')}</th><th>${tr('ใช้เมื่อ')}</th></tr></thead>
         <tbody>${r.coupons.length ? r.coupons.map(c => `
           <tr>
             <td>${esc(c.name)}</td>
             <td class="mono">${esc(c.code)}</td>
-            <td>${statusChip(c.status, COUPON_LABEL[c.status])}</td>
+            <td>${statusChip(c.status, tr(COUPON_LABEL[c.status] || c.status))}</td>
             <td class="nowrap">${fmtDateTime(c.issuedAt)}</td>
             <td class="nowrap">${fmtDate(c.expiresAt)}</td>
             <td class="nowrap">${c.usedAt ? fmtDateTime(c.usedAt) + (c.usedBy ? ' · ' + esc(c.usedBy) : '') + (hasBranches() && c.usedBranch ? ' · ' + esc(branchName(c.usedBranch)) : '') : '-'}</td>
-          </tr>`).join('') : emptyRow(6, 'ยังไม่เคยแลกรางวัล')}
+          </tr>`).join('') : emptyRow(6, tr('ยังไม่เคยแลกรางวัล'))}
         </tbody></table></div>
     </section>`;
 }
@@ -1347,18 +1388,18 @@ function onAdjustSubmit(form) {
   if (!m) return;
   const points = Number(String(form.points.value).replace(/[,\s]/g, '').replace('−', '-'));
   const reason = form.reason.value.trim();
-  if (!Number.isInteger(points) || points === 0) return toast('ใส่จำนวนเป็นจำนวนเต็ม เช่น 50 หรือ -20', 'err');
-  if (reason.length < 3) return toast('กรุณาใส่เหตุผล', 'err');
-  if (m.points + points < 0) return toast(`ลดได้ไม่เกิน ${fmtNum(m.points)} ${unit()}`, 'err');
+  if (!Number.isInteger(points) || points === 0) return toast(tr('ใส่จำนวนเป็นจำนวนเต็ม เช่น 50 หรือ -20'), 'err');
+  if (reason.length < 3) return toast(tr('กรุณาใส่เหตุผล'), 'err');
+  if (m.points + points < 0) return toast(`${tr('ลดได้ไม่เกิน {n} {u}', { n: fmtNum(m.points), u: unit() })}`, 'err');
   S.pendingAdjust = { memberId: m.memberId, points, reason };
   openModal(`
-    <div class="modal-head"><h2>ยืนยันปรับ${esc(unit())}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tr('ยืนยันปรับ{u}', { u: esc(unit()) })}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <div class="confirm-cost"><b>${signed(points)}</b><span>${esc(unit())} · ${esc(m.name)}</span>
-      <div class="muted">คงเหลือ ${fmtNum(m.points)} → ${fmtNum(m.points + points)}</div></div>
-    <p class="muted">เหตุผล: ${esc(reason)}</p>
+      <div class="muted">${tr('คงเหลือ {n} → {n2}', { n: fmtNum(m.points), n2: fmtNum(m.points + points) })}</div></div>
+    <p class="muted">${tr('เหตุผล: {reason}', { reason: esc(reason) })}</p>
     <div class="modal-actions">
-      <button class="btn" data-act="close">ยกเลิก</button>
-      <button class="btn btn-primary" data-act="adjust-confirm">ยืนยัน</button>
+      <button class="btn" data-act="close">${tr('ยกเลิก')}</button>
+      <button class="btn btn-primary" data-act="adjust-confirm">${tr('ยืนยัน')}</button>
     </div>`);
 }
 
@@ -1371,11 +1412,11 @@ async function doAdjust(btn) {
     const r = await withRequestId(key, rid => S.api.call('adjustPoints', { ...p, requestId: rid }));
     closeModal();
     S.pendingAdjust = null;
-    toast(r.duplicate ? 'รายการนี้บันทึกไปแล้ว (ระบบไม่บันทึกซ้ำ)' : `ปรับแล้ว · คงเหลือ ${fmtNum(r.balance)} ${unit()}`, 'ok');
+    toast(r.duplicate ? tr('รายการนี้บันทึกไปแล้ว (ระบบไม่บันทึกซ้ำ)') : `${tr('ปรับแล้ว · คงเหลือ {n} {u}', { n: fmtNum(r.balance), u: unit() })}`, 'ok');
     loadMember(p.memberId);
   } catch (e) {
     setBusy(btn, false);
-    toast(e.code === 'NETWORK' ? e.message + ' (กดยืนยันอีกครั้งได้ ระบบจะไม่บันทึกซ้ำ)' : e.message, 'err');
+    toast(e.code === 'NETWORK' ? e.message + tr(' (กดยืนยันอีกครั้งได้ ระบบจะไม่บันทึกซ้ำ)') : e.message, 'err');
   }
 }
 
@@ -1387,19 +1428,19 @@ function openMemberEdit() {
   const m = S.member;
   if (!m || !isOwner()) return;
   openModal(`
-    <div class="modal-head"><h2>แก้ไขข้อมูลสมาชิก</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tr('แก้ไขข้อมูลสมาชิก')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <p class="muted small mono">${esc(m.memberId)}</p>
     <form class="form" data-form="member-edit" autocomplete="off">
       <div class="form-grid">
-        <label class="field"><span>ชื่อ <em>*</em></span><input name="firstName" value="${esc(m.firstName || m.name)}" maxlength="40"></label>
-        <label class="field"><span>นามสกุล <em>*</em></span><input name="lastName" value="${esc(m.firstName ? m.lastName : '')}" maxlength="40"></label>
-        <label class="field"><span>เบอร์มือถือ <em>*</em></span><input name="phone" value="${esc(m.phone || '')}" inputmode="numeric" maxlength="10" placeholder="08xxxxxxxx"></label>
-        <label class="field"><span>วันเกิด <em>*</em></span><input type="date" name="birthDate" value="${esc(m.birthDate || '')}" max="${todayKey()}"></label>
+        <label class="field"><span>${tr('ชื่อ <em>*</em>')}</span><input name="firstName" value="${esc(m.firstName || m.name)}" maxlength="40"></label>
+        <label class="field"><span>${tr('นามสกุล <em>*</em>')}</span><input name="lastName" value="${esc(m.firstName ? m.lastName : '')}" maxlength="40"></label>
+        <label class="field"><span>${tr('เบอร์มือถือ <em>*</em>')}</span><input name="phone" value="${esc(m.phone || '')}" inputmode="numeric" maxlength="10" placeholder="08xxxxxxxx"></label>
+        <label class="field"><span>${tr('วันเกิด <em>*</em>')}</span><input type="date" name="birthDate" value="${esc(m.birthDate || '')}" max="${todayKey()}"></label>
       </div>
-      <p class="muted small">ทุกการแก้จะจดไว้ในประวัติ (ช่องที่แก้ + ชื่อคุณ) · การรับข่าวสารลูกค้าต้องเปิด-ปิดเองในหน้าข้อมูลของฉัน</p>
+      <p class="muted small">${tr('ทุกการแก้จะจดไว้ในประวัติ (ช่องที่แก้ + ชื่อคุณ) · การรับข่าวสารลูกค้าต้องเปิด-ปิดเองในหน้าข้อมูลของฉัน')}</p>
       <div class="modal-actions">
-        <button class="btn" type="button" data-act="close">ยกเลิก</button>
-        <button class="btn btn-primary" type="submit">บันทึก</button>
+        <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+        <button class="btn btn-primary" type="submit">${tr('บันทึก')}</button>
       </div>
     </form>`);
 }
@@ -1408,15 +1449,15 @@ async function saveMemberEdit(form) {
   const m = S.member;
   const v = formValues(form, ['firstName', 'lastName', 'phone', 'birthDate']);
   v.phone = v.phone.replace(/\D/g, '');
-  if (!v.firstName || !v.lastName) return toast('กรุณากรอกชื่อและนามสกุล', 'err');
-  if (!/^0[689]\d{8}$/.test(v.phone)) return toast('กรุณากรอกเบอร์มือถือ 10 หลัก', 'err');
-  if (!v.birthDate) return toast('กรุณาเลือกวันเกิด', 'err');
+  if (!v.firstName || !v.lastName) return toast(tr('กรุณากรอกชื่อและนามสกุล'), 'err');
+  if (!/^0[689]\d{8}$/.test(v.phone)) return toast(tr('กรุณากรอกเบอร์มือถือ 10 หลัก'), 'err');
+  if (!v.birthDate) return toast(tr('กรุณาเลือกวันเกิด'), 'err');
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
   try {
     const r = await S.api.call('adminMemberUpdate', { memberId: m.memberId, ...v });
     closeModal();
-    toast(r.changed ? 'บันทึกข้อมูลสมาชิกแล้ว' : 'ข้อมูลเหมือนเดิม ไม่มีอะไรเปลี่ยน', 'ok');
+    toast(r.changed ? tr('บันทึกข้อมูลสมาชิกแล้ว') : tr('ข้อมูลเหมือนเดิม ไม่มีอะไรเปลี่ยน'), 'ok');
     loadMember(m.memberId);
   } catch (e) {
     setBusy(btn, false);
@@ -1432,16 +1473,16 @@ function openMemberStatus() {
   if (!m) return;
   const blocking = m.status === 'ACTIVE';
   openModal(`
-    <div class="modal-head"><h2>${blocking ? 'ระงับสมาชิก' : 'เปิดใช้สมาชิกอีกครั้ง'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${blocking ? tr('ระงับสมาชิก') : tr('เปิดใช้สมาชิกอีกครั้ง')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <p><b>${esc(m.name)}</b> <span class="muted mono">${esc(m.memberId)}</span></p>
     <form class="form" data-form="member-status" autocomplete="off">
       ${blocking ? `
-        <p class="notice">${icon('alert', 18)}<span>ระงับแล้ว ลูกค้าจะสะสม${esc(unit())} แลกรางวัล และใช้คูปองไม่ได้ จนกว่าจะเปิดใช้อีกครั้ง (${esc(unit())}ที่มีอยู่ไม่หาย)</span></p>
-        <label class="field"><span>เหตุผล <em>*</em></span><input name="reason" maxlength="150" placeholder="เช่น ใช้บัญชีร่วมกันหลายคน"></label>`
-        : `<label class="field"><span>หมายเหตุ <small>(ไม่บังคับ)</small></span><input name="reason" maxlength="150"></label>`}
+        <p class="notice">${icon('alert', 18)}<span>${tr('ระงับแล้ว ลูกค้าจะสะสม{u} แลกรางวัล และใช้คูปองไม่ได้ จนกว่าจะเปิดใช้อีกครั้ง ({u2}ที่มีอยู่ไม่หาย)', { u: esc(unit()), u2: esc(unit()) })}</span></p>
+        <label class="field"><span>${tr('เหตุผล <em>*</em>')}</span><input name="reason" maxlength="150" placeholder="${tr('เช่น ใช้บัญชีร่วมกันหลายคน')}"></label>`
+        : `<label class="field"><span>${tr('หมายเหตุ')} <small>${tr('(ไม่บังคับ)')}</small></span><input name="reason" maxlength="150"></label>`}
       <div class="modal-actions">
-        <button class="btn" type="button" data-act="close">ยกเลิก</button>
-        <button class="btn ${blocking ? 'btn-danger' : 'btn-primary'}" type="submit">${blocking ? 'ระงับ' : 'เปิดใช้'}</button>
+        <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+        <button class="btn ${blocking ? 'btn-danger' : 'btn-primary'}" type="submit">${blocking ? tr('ระงับ') : tr('เปิดใช้')}</button>
       </div>
     </form>`);
 }
@@ -1453,16 +1494,16 @@ function openMemberDelete() {
   const m = S.member;
   if (!m || !isOwner()) return;
   openModal(`
-    <div class="modal-head"><h2>ลบข้อมูลสมาชิก</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tr('ลบข้อมูลสมาชิก')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <p><b>${esc(m.name)}</b> <span class="muted mono">${esc(m.memberId)}</span></p>
     <form class="form" data-form="member-delete" autocomplete="off">
-      <p class="notice notice-danger">${icon('alert', 18)}<span>ลบแล้วกู้คืนไม่ได้: ชื่อ เบอร์ วันเกิด และบัญชี LINE จะถูกลบ ${esc(unit())}คงเหลือ ${fmtNum(m.points)} เป็น 0 และคูปองที่ยังไม่ใช้ถูกยกเลิก ประวัติยอดซื้อเหลือแบบไม่มีชื่อ</span></p>
-      <label class="field"><span>เหตุผล <em>*</em></span><input name="reason" maxlength="150" placeholder="เช่น ลูกค้าขอลบที่หน้าร้าน">
-        <small class="hint">ห้ามใส่ชื่อหรือเบอร์ลูกค้า (เหตุผลถูกเก็บไว้ในประวัติ)</small></label>
-      <label class="field"><span>พิมพ์คำว่า <b>ลบ</b> เพื่อยืนยัน <em>*</em></span><input name="confirm" maxlength="10"></label>
+      <p class="notice notice-danger">${icon('alert', 18)}<span>${tr('ลบแล้วกู้คืนไม่ได้: ชื่อ เบอร์ วันเกิด และบัญชี LINE จะถูกลบ {u}คงเหลือ {n} เป็น 0 และคูปองที่ยังไม่ใช้ถูกยกเลิก ประวัติยอดซื้อเหลือแบบไม่มีชื่อ', { u: esc(unit()), n: fmtNum(m.points) })}</span></p>
+      <label class="field"><span>${tr('เหตุผล <em>*</em>')}</span><input name="reason" maxlength="150" placeholder="${tr('เช่น ลูกค้าขอลบที่หน้าร้าน')}">
+        <small class="hint">${tr('ห้ามใส่ชื่อหรือเบอร์ลูกค้า (เหตุผลถูกเก็บไว้ในประวัติ)')}</small></label>
+      <label class="field"><span>${tr('พิมพ์คำว่า <b>ลบ</b> เพื่อยืนยัน <em>*</em>')}</span><input name="confirm" maxlength="10"></label>
       <div class="modal-actions">
-        <button class="btn" type="button" data-act="close">ยกเลิก</button>
-        <button class="btn btn-danger" type="submit">ลบข้อมูล</button>
+        <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+        <button class="btn btn-danger" type="submit">${tr('ลบข้อมูล')}</button>
       </div>
     </form>`);
 }
@@ -1470,14 +1511,15 @@ function openMemberDelete() {
 async function saveMemberDelete(form) {
   const m = S.member;
   const reason = form.elements.reason.value.trim();
-  if (reason.length < 3) return toast('กรุณาใส่เหตุผลที่ลบ', 'err');
-  if (form.elements.confirm.value.trim() !== 'ลบ') return toast('กรุณาพิมพ์คำว่า "ลบ" เพื่อยืนยัน', 'err');
+  if (reason.length < 3) return toast(tr('กรุณาใส่เหตุผลที่ลบ'), 'err');
+  const word = form.elements.confirm.value.trim();
+  if (word !== 'ลบ' && !(isEn() && word.toUpperCase() === 'DELETE')) return toast(tr('กรุณาพิมพ์คำว่า "ลบ" เพื่อยืนยัน'), 'err');
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
   try {
     await withRequestId('mdel|' + m.memberId, rid => S.api.call('adminMemberDelete', { memberId: m.memberId, reason, confirm: 'ลบ', requestId: rid }));
     closeModal();
-    toast('ลบข้อมูลสมาชิกแล้ว', 'ok');
+    toast(tr('ลบข้อมูลสมาชิกแล้ว'), 'ok');
     resetPages();
     window.location.hash = 'members';
   } catch (e) {
@@ -1490,13 +1532,13 @@ async function saveMemberStatus(form) {
   const m = S.member;
   const blocking = m.status === 'ACTIVE';
   const reason = form.elements.reason.value.trim();
-  if (blocking && reason.length < 3) return toast('กรุณาใส่เหตุผลที่ระงับ', 'err');
+  if (blocking && reason.length < 3) return toast(tr('กรุณาใส่เหตุผลที่ระงับ'), 'err');
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
   try {
     await S.api.call('adminMemberStatus', { memberId: m.memberId, status: blocking ? 'BLOCKED' : 'ACTIVE', reason });
     closeModal();
-    toast(blocking ? 'ระงับสมาชิกแล้ว' : 'เปิดใช้สมาชิกแล้ว', 'ok');
+    toast(blocking ? tr('ระงับสมาชิกแล้ว') : tr('เปิดใช้สมาชิกแล้ว'), 'ok');
     loadMember(m.memberId);
   } catch (e) {
     setBusy(btn, false);
@@ -1528,11 +1570,11 @@ const CROP_WARN = 0.4;
 
 function previewHtml(url, kind = 'reward') {
   const src = driveImage(url);
-  if (!src) return '<span class="muted small">ยังไม่มีรูป</span>';
-  if (!/^https:\/\/[^\s"'<>]+$/i.test(src)) return '<span class="form-error small">ลิงก์ต้องขึ้นต้นด้วย https://</span>';
+  if (!src) return `<span class="muted small">${tr('ยังไม่มีรูป')}</span>`;
+  if (!/^https:\/\/[^\s"'<>]+$/i.test(src)) return `<span class="form-error small">${tr('ลิงก์ต้องขึ้นต้นด้วย https://')}</span>`;
   // กรอบทรงเดียวกับที่ลูกค้าเห็น → เจ้าของร้านรู้ทันทีว่ารูปถูกตัดตรงไหน
   return `<div class="img-frame img-frame-${esc(kind)}"><img src="${esc(src)}" alt="" referrerpolicy="no-referrer" data-kind="${esc(kind)}"></div>
-    <span class="muted small img-note">ตัวอย่างนี้ตัดขอบแบบเดียวกับหน้าลูกค้า · ถ้าไม่เห็นรูป ลองอัปโหลดใหม่ หรือใช้ลิงก์รูปอื่น</span>
+    <span class="muted small img-note">${tr('ตัวอย่างนี้ตัดขอบแบบเดียวกับหน้าลูกค้า · ถ้าไม่เห็นรูป ลองอัปโหลดใหม่ หรือใช้ลิงก์รูปอื่น')}</span>
     <span class="img-warn small" hidden></span>`;
 }
 
@@ -1546,9 +1588,9 @@ document.addEventListener('load', e => {
   if (!warn || !spec || !img.naturalWidth || !img.naturalHeight) return;
   const r = img.naturalWidth / img.naturalHeight;
   const cut = 1 - Math.min(r, spec.ratio) / Math.max(r, spec.ratio);
-  const shape = r < 0.9 ? 'แนวตั้ง' : r > 1.1 ? 'แนวนอน' : 'จัตุรัส';
+  const shape = r < 0.9 ? tr('แนวตั้ง') : r > 1.1 ? tr('แนวนอน') : tr('จัตุรัส');
   warn.hidden = cut < CROP_WARN;
-  warn.textContent = warn.hidden ? '' : `⚠️ รูปนี้เป็น${shape} (${img.naturalWidth} × ${img.naturalHeight} px) จะถูกตัดออกประมาณ ${Math.round(cut * 100)}% ดูกรอบตัวอย่างด้านบน — แนะนำ ${spec.w} × ${spec.h} px (${spec.shape}) · ใช้รูปนี้ต่อก็ได้`;
+  warn.textContent = warn.hidden ? '' : `${tr('⚠️ รูปนี้เป็น{shape} ({naturalWidth} × {naturalHeight} px) จะถูกตัดออกประมาณ {n}% ดูกรอบตัวอย่างด้านบน — แนะนำ {w} × {h} px ({shape2}) · ใช้รูปนี้ต่อก็ได้', { shape, naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight, n: Math.round(cut * 100), w: spec.w, h: spec.h, shape2: spec.shape })}`;
 }, true);
 
 const imageHint = 'วางลิงก์รูปที่ขึ้นต้นด้วย https://';
@@ -1556,13 +1598,13 @@ const imageHint = 'วางลิงก์รูปที่ขึ้นต้�
 function periodText(start, end) {
   const d = k => fmtDayLong.format(keyDate(k));
   if (start && end) return `${d(start)} – ${d(end)}`;
-  if (start) return `ตั้งแต่ ${d(start)}`;
-  if (end) return `ถึง ${d(end)}`;
-  return 'ไม่จำกัด';
+  if (start) return `${tr('ตั้งแต่ {start}', { start: d(start) })}`;
+  if (end) return `${tr('ถึง {end}', { end: d(end) })}`;
+  return tr('ไม่จำกัด');
 }
 
 function stateChip(state) {
-  return statusChip(state === 'ACTIVE' ? 'active' : `state-${state.toLowerCase()}`, STATE_LABEL[state] || state);
+  return statusChip(state === 'ACTIVE' ? 'active' : `state-${state.toLowerCase()}`, tr(STATE_LABEL[state] || state));
 }
 
 function thumb(url, wide) {
@@ -1579,27 +1621,27 @@ function renderRewards(r) {
   S.tierList = tierFeature() ? r.tiers || [] : [];
   S.canDelete.reward = !!r.canDelete;
   document.getElementById('view').innerHTML = `
-    ${pageHead('ของรางวัล', `ลูกค้าเห็นอยู่ ${fmtNum(r.items.filter(x => x.state === 'ACTIVE').length)} จาก ${fmtNum(r.items.length)} รายการ`,
-      `<button class="btn btn-sm btn-primary" data-act="reward-edit" data-id="">+ เพิ่มของรางวัล</button>`)}
+    ${pageHead(tr('ของรางวัล'), `${tr('ลูกค้าเห็นอยู่ {n} จาก {n2} รายการ', { n: fmtNum(r.items.filter(x => x.state === 'ACTIVE').length), n2: fmtNum(r.items.length) })}`,
+      `<button class="btn btn-sm btn-primary" data-act="reward-edit" data-id="">${tr('+ เพิ่มของรางวัล')}</button>`)}
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th></th><th>ของรางวัล</th><th class="num">ใช้${esc(unit())}</th><th class="num">แลกแล้ว / ทั้งหมด</th><th class="num">ต่อคน</th><th>ช่วงเวลา</th><th>สถานะ</th><th></th></tr></thead>
+        <thead><tr><th></th><th>${tr('ของรางวัล')}</th><th class="num">${tr('ใช้{u}', { u: esc(unit()) })}</th><th class="num">${tr('แลกแล้ว / ทั้งหมด')}</th><th class="num">${tr('ต่อคน')}</th><th>${tr('ช่วงเวลา')}</th><th>${tr('สถานะ')}</th><th></th></tr></thead>
         <tbody>${r.items.length ? r.items.map(x => `
           <tr>
             <td class="thumb-cell">${thumb(x.imageUrl)}</td>
-            <td><b>${esc(x.name)}</b>${x.type === 'BIRTHDAY' ? ' <span class="chip chip-bday">🎂 ของขวัญวันเกิด</span>' : ''}${minTierChip(x)}${enChip(x, REWARD_EN)}${x.description ? `<div class="m-sub">${esc(x.description)}</div>` : ''}<div class="m-sub mono">${esc(x.id)}</div></td>
-            <td class="num">${x.points ? fmtNum(x.points) : 'ฟรี'}</td>
-            <td class="num">${fmtNum(x.issued)} / ${x.quota ? fmtNum(x.quota) : 'ไม่จำกัด'}</td>
+            <td><b>${esc(x.name)}</b>${x.type === 'BIRTHDAY' ? ` <span class="chip chip-bday">${tr('🎂 ของขวัญวันเกิด')}</span>` : ''}${minTierChip(x)}${enChip(x, REWARD_EN)}${x.description ? `<div class="m-sub">${esc(x.description)}</div>` : ''}<div class="m-sub mono">${esc(x.id)}</div></td>
+            <td class="num">${x.points ? fmtNum(x.points) : tr('ฟรี')}</td>
+            <td class="num">${fmtNum(x.issued)} / ${x.quota ? fmtNum(x.quota) : tr('ไม่จำกัด')}</td>
             <td class="num">${x.limitPerMember ? fmtNum(x.limitPerMember) : '-'}</td>
             <td class="nowrap">${esc(periodText(x.startDate, x.endDate))}</td>
             <td>${stateChip(x.state)}</td>
-            <td class="actions"><button class="btn btn-sm" data-act="reward-edit" data-id="${esc(x.id)}">${icon('edit', 16)} แก้ไข</button></td>
-          </tr>`).join('') : emptyRow(8, 'ยังไม่มีของรางวัล กด "เพิ่มของรางวัล" ได้เลย')}
+            <td class="actions"><button class="btn btn-sm" data-act="reward-edit" data-id="${esc(x.id)}">${icon('edit', 16)} ${tr('แก้ไข')}</button></td>
+          </tr>`).join('') : emptyRow(8, tr('ยังไม่มีของรางวัล กด "เพิ่มของรางวัล" ได้เลย'))}
         </tbody></table></div>
     </section>
     <p class="muted small">${S.canDelete.reward
-      ? 'ของรางวัลที่ไม่ใช้แล้ว กดแก้ไข → ลบ (คูปองที่ลูกค้าแลกไปแล้วยังใช้ที่ร้านได้ตามปกติ) · ถ้าแค่พักไว้ชั่วคราว เลือก "ปิด" แทน'
-      : 'ของรางวัลที่ไม่ใช้แล้วให้กดแก้ไขแล้วเลือก "ปิด" (ไม่ลบ เพราะคูปองที่ลูกค้าแลกไปแล้วยังอ้างถึงอยู่)'}</p>`;
+      ? tr('ของรางวัลที่ไม่ใช้แล้ว กดแก้ไข → ลบ (คูปองที่ลูกค้าแลกไปแล้วยังใช้ที่ร้านได้ตามปกติ) · ถ้าแค่พักไว้ชั่วคราว เลือก "ปิด" แทน')
+      : tr('ของรางวัลที่ไม่ใช้แล้วให้กดแก้ไขแล้วเลือก "ปิด" (ไม่ลบ เพราะคูปองที่ลูกค้าแลกไปแล้วยังอ้างถึงอยู่)')}</p>`;
   openPending('reward', openRewardEdit);
 }
 
@@ -1609,58 +1651,58 @@ function openRewardEdit(id) {
   const v = x || { name: '', description: '', points: '', image: '', validDays: '', quota: '', limitPerMember: '', startDate: '', endDate: '', sort: '', status: 'ACTIVE', issued: 0, type: '' };
   const bday = v.type === 'BIRTHDAY';
   openModal(`
-    <div class="modal-head"><h2>${x ? 'แก้ไขของรางวัล' : 'เพิ่มของรางวัล'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${x ? tr('แก้ไขของรางวัล') : tr('เพิ่มของรางวัล')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <form class="form" data-form="reward" data-id="${esc(x ? x.id : '')}" autocomplete="off">
-      <label class="field"><span>ชื่อของรางวัล <em>*</em></span><input name="name" value="${esc(v.name)}" maxlength="80" placeholder="เช่น เครื่องดื่มฟรี 1 แก้ว"></label>
-      ${enField('ชื่อของรางวัล', 'nameEn', v.nameEn, 80)}
-      <label class="field"><span>รายละเอียด <small>(ไม่บังคับ)</small></span><textarea name="description" maxlength="300" rows="2" placeholder="เช่น เลือกเครื่องดื่มเย็นที่ร่วมรายการ">${esc(v.description)}</textarea></label>
-      ${enField('รายละเอียด', 'descriptionEn', v.descriptionEn, 300, { rows: 2 })}
-      <div class="field"><span>ประเภท</span>
+      <label class="field"><span>${tr('ชื่อของรางวัล <em>*</em>')}</span><input name="name" value="${esc(v.name)}" maxlength="80" placeholder="${tr('เช่น เครื่องดื่มฟรี 1 แก้ว')}"></label>
+      ${enField(tr('ชื่อของรางวัล'), 'nameEn', v.nameEn, 80)}
+      <label class="field"><span>${tr('รายละเอียด')} <small>${tr('(ไม่บังคับ)')}</small></span><textarea name="description" maxlength="300" rows="2" placeholder="${tr('เช่น เลือกเครื่องดื่มเย็นที่ร่วมรายการ')}">${esc(v.description)}</textarea></label>
+      ${enField(tr('รายละเอียด'), 'descriptionEn', v.descriptionEn, 300, { rows: 2 })}
+      <div class="field"><span>${tr('ประเภท')}</span>
         <div class="pick-row">
-          <label class="pick"><input type="radio" name="type" value="" ${bday ? '' : 'checked'}><span>แลกด้วย${esc(unit())}</span></label>
-          <label class="pick"><input type="radio" name="type" value="BIRTHDAY" ${bday ? 'checked' : ''}><span>🎂 ของขวัญวันเกิด</span></label>
+          <label class="pick"><input type="radio" name="type" value="" ${bday ? '' : 'checked'}><span>${tr('แลกด้วย{u}', { u: esc(unit()) })}</span></label>
+          <label class="pick"><input type="radio" name="type" value="BIRTHDAY" ${bday ? 'checked' : ''}><span>${tr('🎂 ของขวัญวันเกิด')}</span></label>
         </div>
-        <small class="hint" id="bday-hint" ${bday ? '' : 'hidden'}>ลูกค้าเห็นและกดรับได้เฉพาะเดือนเกิด ปีละ 1 ครั้ง · ต้องเป็นสมาชิกอย่างน้อย 30 วัน · ระบบตรวจเดือนเกิดให้ พนักงานแค่สแกนคูปอง</small></div>
+        <small class="hint" id="bday-hint" ${bday ? '' : 'hidden'}>${tr('ลูกค้าเห็นและกดรับได้เฉพาะเดือนเกิด ปีละ 1 ครั้ง · ต้องเป็นสมาชิกอย่างน้อย 30 วัน · ระบบตรวจเดือนเกิดให้ พนักงานแค่สแกนคูปอง')}</small></div>
       <div class="form-grid">
-        <label class="field"><span>ใช้กี่${esc(unit())}แลก <em id="points-req" ${bday ? 'hidden' : ''}>*</em></span><input name="points" value="${esc(bday && !v.points ? '' : v.points)}" inputmode="numeric" placeholder="${bday ? 'ว่าง = ฟรี' : 'เช่น 80'}"></label>
-        <label class="field"><span>คูปองใช้ได้กี่วัน</span><input name="validDays" value="${esc(v.validDays)}" inputmode="numeric" placeholder="${bday ? 'ว่าง = ถึงสิ้นเดือนเกิด' : `ว่าง = ${fmtNum(S.couponDays)} วัน (ค่าร้าน)`}"></label>
-        <label class="field"><span>วันเริ่ม</span><input type="date" name="startDate" value="${esc(v.startDate)}"></label>
-        <label class="field"><span>วันสิ้นสุด</span><input type="date" name="endDate" value="${esc(v.endDate)}"></label>
-        <label class="field"><span>จำนวนทั้งหมด</span><input name="quota" value="${esc(v.quota)}" inputmode="numeric" placeholder="ว่าง = ไม่จำกัด">${x ? `<small>แลกไปแล้ว ${fmtNum(x.issued)}</small>` : ''}
-          <small class="hint" id="quota-hint" ${bday ? '' : 'hidden'}>ว่าง = แจกทุกคนที่เกิดเดือนนั้น (แนะนำ) · ครบจำนวนแล้วลูกค้าคนอื่นจะไม่เห็นการ์ด</small></label>
+        <label class="field"><span>${tr('ใช้กี่{u}แลก', { u: esc(unit()) })} <em id="points-req" ${bday ? 'hidden' : ''}>*</em></span><input name="points" value="${esc(bday && !v.points ? '' : v.points)}" inputmode="numeric" placeholder="${bday ? tr('ว่าง = ฟรี') : tr('เช่น 80')}"></label>
+        <label class="field"><span>${tr('คูปองใช้ได้กี่วัน')}</span><input name="validDays" value="${esc(v.validDays)}" inputmode="numeric" placeholder="${bday ? tr('ว่าง = ถึงสิ้นเดือนเกิด') : `${tr('ว่าง = {n} วัน (ค่าร้าน)', { n: fmtNum(S.couponDays) })}`}"></label>
+        <label class="field"><span>${tr('วันเริ่ม')}</span><input type="date" name="startDate" value="${esc(v.startDate)}"></label>
+        <label class="field"><span>${tr('วันสิ้นสุด')}</span><input type="date" name="endDate" value="${esc(v.endDate)}"></label>
+        <label class="field"><span>${tr('จำนวนทั้งหมด')}</span><input name="quota" value="${esc(v.quota)}" inputmode="numeric" placeholder="${tr('ว่าง = ไม่จำกัด')}">${x ? `<small>${tr('แลกไปแล้ว {n}', { n: fmtNum(x.issued) })}</small>` : ''}
+          <small class="hint" id="quota-hint" ${bday ? '' : 'hidden'}>${tr('ว่าง = แจกทุกคนที่เกิดเดือนนั้น (แนะนำ) · ครบจำนวนแล้วลูกค้าคนอื่นจะไม่เห็นการ์ด')}</small></label>
         ${/* ของขวัญวันเกิดจำกัดปีละครั้งต่อคนอยู่แล้ว ช่องนี้ไม่มีผล → ซ่อน กันเจ้าของร้านสับสน */ ''}
-        <label class="field" id="limit-field" ${bday ? 'hidden' : ''}><span>จำกัดต่อคน</span><input name="limitPerMember" value="${esc(v.limitPerMember)}" inputmode="numeric" placeholder="ว่าง = ไม่จำกัด"></label>
+        <label class="field" id="limit-field" ${bday ? 'hidden' : ''}><span>${tr('จำกัดต่อคน')}</span><input name="limitPerMember" value="${esc(v.limitPerMember)}" inputmode="numeric" placeholder="${tr('ว่าง = ไม่จำกัด')}"></label>
       </div>
-      ${tierSelect(v.minTierId, 'แลกได้')}
+      ${tierSelect(v.minTierId, tr('แลกได้'))}
       ${imageField(v.image, 'reward-preview')}
       <div class="form-grid">
-        <label class="field"><span>ลำดับที่แสดง</span><input name="sort" value="${esc(v.sort)}" inputmode="numeric" placeholder="เลขน้อยขึ้นก่อน"></label>
-        ${statusField(v.status, 'เปิดให้ลูกค้าแลก')}
+        <label class="field"><span>${tr('ลำดับที่แสดง')}</span><input name="sort" value="${esc(v.sort)}" inputmode="numeric" placeholder="${tr('เลขน้อยขึ้นก่อน')}"></label>
+        ${statusField(v.status, tr('เปิดให้ลูกค้าแลก'))}
       </div>
       <div class="modal-actions">
-        <button class="btn" type="button" data-act="close">ยกเลิก</button>
-        <button class="btn btn-primary" type="submit">บันทึก</button>
+        <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+        <button class="btn btn-primary" type="submit">${tr('บันทึก')}</button>
       </div>
       ${deleteButton('reward', x)}
     </form>`);
 }
 
 // kind = promo / reward / logo → ขนาดแนะนำ + ทรงกรอบตัวอย่าง (IMAGE_SPECS)
-function imageField(value, previewId, name = 'image', label = 'รูป', disabled = false, kind = 'reward') {
+function imageField(value, previewId, name = 'image', label = tr('รูป'), disabled = false, kind = 'reward') {
   const spec = IMAGE_SPECS[kind] || IMAGE_SPECS.reward;
   return `
-    <div class="field"><span>${esc(label)} <small>(ไม่บังคับ)</small></span>
+    <div class="field"><span>${esc(label)} <small>${tr('(ไม่บังคับ)')}</small></span>
       ${disabled ? '' : `<div class="img-upload">
-        <label class="btn btn-sm upload-btn">${icon('upload', 16)} อัปโหลดรูป
+        <label class="btn btn-sm upload-btn">${icon('upload', 16)} ${tr('อัปโหลดรูป')}
           <input type="file" accept="image/jpeg,image/png,image/webp,image/*" data-upload="${name}" hidden></label>
-        <button type="button" class="link" data-act="image-clear" data-id="${name}">ลบรูป</button>
+        <button type="button" class="link" data-act="image-clear" data-id="${name}">${tr('ลบรูป')}</button>
       </div>
-      <small class="hint img-size">ขนาดแนะนำ <b>${spec.w} × ${spec.h} px</b> (${esc(spec.shape)}) · ${esc(spec.tip)}</small>`}
+      <small class="hint img-size">${tr('ขนาดแนะนำ <b>{w} × {h} px</b> ({shape}) · {tip}', { w: spec.w, h: spec.h, shape: esc(tr(spec.shape)), tip: esc(tr(spec.tip)) })}</small>`}
       <!-- ลิงก์ของรูปที่อัปโหลดไม่ต้องโชว์ (เจ้าของร้านไม่ต้องรู้ว่ารูปเก็บที่ไหน) — ซ่อนไว้ในหัวข้อพับได้ ใช้เมื่ออยากใช้รูปจากเว็บอื่น -->
       <details class="img-link">
-        <summary>ใช้ลิงก์รูปจากเว็บอื่นแทน</summary>
-        <input name="${name}" value="${esc(value)}" placeholder="https://..." data-preview="${previewId}" aria-label="ลิงก์รูป" ${disabled ? 'disabled' : ''}>
-        <small>${esc(imageHint)}</small>
+        <summary>${tr('ใช้ลิงก์รูปจากเว็บอื่นแทน')}</summary>
+        <input name="${name}" value="${esc(value)}" placeholder="https://..." data-preview="${previewId}" aria-label="${tr('ลิงก์รูป')}" ${disabled ? 'disabled' : ''}>
+        <small>${esc(tr(imageHint))}</small>
       </details></div>
     <div class="img-preview" id="${previewId}" data-kind="${esc(kind)}">${previewHtml(value, kind)}</div>`;
 }
@@ -1685,7 +1727,7 @@ async function uploadImage(input) {
   input.value = ''; // เลือกไฟล์เดิมซ้ำได้
   if (!file || !form) return;
   if (form.dataset.form === 'broadcast') return uploadRichImage(file, form);
-  showLoading('กำลังเตรียมรูป...');
+  showLoading(tr('กำลังเตรียมรูป...'));
   try {
     const { blob, mime } = await shrinkImage(file);
     const data = await blobToBase64(blob);
@@ -1694,7 +1736,7 @@ async function uploadImage(input) {
     const target = form.elements[input.dataset.upload || 'image'];
     target.value = r.url;
     target.dispatchEvent(new Event('input', { bubbles: true }));
-    toast('อัปโหลดรูปแล้ว กดบันทึกเพื่อใช้รูปนี้', 'ok');
+    toast(tr('อัปโหลดรูปแล้ว กดบันทึกเพื่อใช้รูปนี้'), 'ok');
   } catch (e) {
     toast(e.message, 'err');
   } finally {
@@ -1709,14 +1751,14 @@ const RICH_WIDTHS = [1040, 700, 460, 300, 240];
 const RICH_FILE = 1024 * 1024;
 
 async function uploadRichImage(file, form) {
-  showLoading('กำลังเตรียมรูป...');
+  showLoading(tr('กำลังเตรียมรูป...'));
   try {
     const { images } = await richSizes(file);
     const r = await S.api.call('adminUploadRichImage', { images });
     form.elements.imageHeight.value = r.height;
     form.elements.image.value = r.image;
     form.elements.image.dispatchEvent(new Event('input', { bubbles: true }));
-    toast('ใส่รูปแล้ว', 'ok');
+    toast(tr('ใส่รูปแล้ว'), 'ok');
   } catch (e) {
     toast(e.message, 'err');
   } finally {
@@ -1725,17 +1767,17 @@ async function uploadRichImage(file, form) {
 }
 
 async function richSizes(file) {
-  if (file.size > 30 * 1024 * 1024) throw new Error('ไฟล์ใหญ่เกินไป (เกิน 30MB)');
+  if (file.size > 30 * 1024 * 1024) throw new Error(tr('ไฟล์ใหญ่เกินไป (เกิน 30MB)'));
   let img;
   try {
     img = await decodeImage(file);
   } catch (e) {
-    throw new Error('เปิดไฟล์รูปนี้ไม่ได้ (เช่นไฟล์ HEIC จาก iPhone ที่โอนมาไว้ในคอม) กรุณาใช้รูป JPG หรือ PNG');
+    throw new Error(tr('เปิดไฟล์รูปนี้ไม่ได้ (เช่นไฟล์ HEIC จาก iPhone ที่โอนมาไว้ในคอม) กรุณาใช้รูป JPG หรือ PNG'));
   }
   const H = Math.round(1040 * img.height / img.width);
   try {
     if (H < 520 || H > 1560) {
-      throw new Error(`รูปนี้ (${fmtNum(img.width)} × ${fmtNum(img.height)} px) ${H < 520 ? 'กว้างเกินไป' : 'สูงเกินไป'} — ใช้รูปตั้งแต่แนวนอน 2:1 ถึงแนวตั้ง 2:3 (แนะนำ 1040 × 1040 px)`);
+      throw new Error(`${tr('รูปนี้ ({n} × {n2} px) {x} — ใช้รูปตั้งแต่แนวนอน 2:1 ถึงแนวตั้ง 2:3 (แนะนำ 1040 × 1040 px)', { n: fmtNum(img.width), n2: fmtNum(img.height), x: H < 520 ? tr('กว้างเกินไป') : tr('สูงเกินไป') })}`);
     }
     const images = {};
     let src = img;
@@ -1755,7 +1797,7 @@ async function richSizes(file) {
         blob = await canvasBlob(canvas, 'image/jpeg', q);
         if (blob.size <= RICH_FILE) break;
       }
-      if (blob.size > RICH_FILE) throw new Error('รูปใหญ่เกิน 1MB แม้ย่อแล้ว ลองใช้รูปอื่น');
+      if (blob.size > RICH_FILE) throw new Error(tr('รูปใหญ่เกิน 1MB แม้ย่อแล้ว ลองใช้รูปอื่น'));
       images[w] = await blobToBase64(blob);
       src = canvas;
     }
@@ -1766,12 +1808,12 @@ async function richSizes(file) {
 }
 
 async function shrinkImage(file, limit = MAX_UPLOAD) {
-  if (file.size > 30 * 1024 * 1024) throw new Error('ไฟล์ใหญ่เกินไป (เกิน 30MB)');
+  if (file.size > 30 * 1024 * 1024) throw new Error(tr('ไฟล์ใหญ่เกินไป (เกิน 30MB)'));
   let img;
   try {
     img = await decodeImage(file);
   } catch (e) {
-    throw new Error('เปิดไฟล์รูปนี้ไม่ได้ (เช่นไฟล์ HEIC จาก iPhone ที่โอนมาไว้ในคอม) กรุณาใช้รูป JPG หรือ PNG');
+    throw new Error(tr('เปิดไฟล์รูปนี้ไม่ได้ (เช่นไฟล์ HEIC จาก iPhone ที่โอนมาไว้ในคอม) กรุณาใช้รูป JPG หรือ PNG'));
   }
   const scale = Math.min(1, MAX_SIDE / Math.max(img.width, img.height));
   const w = Math.max(1, Math.round(img.width * scale));
@@ -1795,7 +1837,7 @@ async function shrinkImage(file, limit = MAX_UPLOAD) {
     blob = await canvasBlob(canvas, mime, 0.7);
   }
   if (img.close) img.close();
-  if (blob.size > limit) throw new Error('รูปใหญ่เกิน ' + Math.round(limit / 1024 / 1024) + 'MB แม้ย่อแล้ว ลองใช้รูปอื่น');
+  if (blob.size > limit) throw new Error(tr('รูปใหญ่เกิน {n}MB แม้ย่อแล้ว ลองใช้รูปอื่น', { n: Math.round(limit / 1024 / 1024) }));
   return { blob, mime };
 }
 
@@ -1815,23 +1857,23 @@ async function decodeImage(file) {
 }
 
 function canvasBlob(canvas, mime, quality) {
-  return new Promise((resolve, reject) => canvas.toBlob(b => (b ? resolve(b) : reject(new Error('แปลงรูปไม่สำเร็จ'))), mime, quality));
+  return new Promise((resolve, reject) => canvas.toBlob(b => (b ? resolve(b) : reject(new Error(tr('แปลงรูปไม่สำเร็จ')))), mime, quality));
 }
 
 function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
-    reader.onerror = () => reject(new Error('อ่านไฟล์รูปไม่สำเร็จ'));
+    reader.onerror = () => reject(new Error(tr('อ่านไฟล์รูปไม่สำเร็จ')));
     reader.readAsDataURL(blob);
   });
 }
 
 function statusField(value, onLabel) {
-  return `<label class="field"><span>สถานะ</span>
+  return `<label class="field"><span>${tr('สถานะ')}</span>
     <select name="status" class="select">
       <option value="ACTIVE" ${value === 'ACTIVE' ? 'selected' : ''}>${esc(onLabel)}</option>
-      <option value="INACTIVE" ${value !== 'ACTIVE' ? 'selected' : ''}>ปิด (ลูกค้าไม่เห็น)</option>
+      <option value="INACTIVE" ${value !== 'ACTIVE' ? 'selected' : ''}>${tr('ปิด (ลูกค้าไม่เห็น)')}</option>
     </select></label>`;
 }
 
@@ -1850,8 +1892,8 @@ function onRewardType(radio) {
   form.querySelector('#quota-hint').hidden = !bday;
   form.querySelector('#limit-field').hidden = bday;
   form.querySelector('#points-req').hidden = bday;
-  form.elements.points.placeholder = bday ? 'ว่าง = ฟรี' : 'เช่น 80';
-  form.elements.validDays.placeholder = bday ? 'ว่าง = ถึงสิ้นเดือนเกิด' : `ว่าง = ${fmtNum(S.couponDays)} วัน (ค่าร้าน)`;
+  form.elements.points.placeholder = bday ? tr('ว่าง = ฟรี') : tr('เช่น 80');
+  form.elements.validDays.placeholder = bday ? tr('ว่าง = ถึงสิ้นเดือนเกิด') : `${tr('ว่าง = {n} วัน (ค่าร้าน)', { n: fmtNum(S.couponDays) })}`;
 }
 
 async function saveReward(form) {
@@ -1861,14 +1903,14 @@ async function saveReward(form) {
   Object.assign(reward, enValues(form, ['nameEn', 'descriptionEn']));
   if (form.elements.minTierId) reward.minTierId = form.elements.minTierId.value;
   if (reward.type === 'BIRTHDAY') reward.limitPerMember = ''; // ช่องถูกซ่อน ไม่ส่งค่าเก่าที่ค้างอยู่
-  if (!reward.name) return toast('กรุณากรอกชื่อของรางวัล', 'err');
-  if (!reward.points && reward.type !== 'BIRTHDAY') return toast(`กรุณากรอกจำนวน${unit()}ที่ใช้แลก`, 'err');
+  if (!reward.name) return toast(tr('กรุณากรอกชื่อของรางวัล'), 'err');
+  if (!reward.points && reward.type !== 'BIRTHDAY') return toast(`${tr('กรุณากรอกจำนวน{u}ที่ใช้แลก', { u: unit() })}`, 'err');
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
   try {
     const r = await withRequestId('reward|' + JSON.stringify(reward), rid => S.api.call('adminRewardSave', { reward, requestId: rid }));
     closeModal();
-    toast(`${r.created ? 'เพิ่ม' : 'บันทึก'} "${r.reward.name}" แล้ว · ${STATE_LABEL[r.reward.state]}`, 'ok');
+    toast(`${tr('{x} "{name}" แล้ว · {x2}', { x: r.created ? tr('เพิ่ม') : tr('บันทึก'), name: r.reward.name, x2: tr(STATE_LABEL[r.reward.state] || '') })}`, 'ok');
     loadRewards();
   } catch (e) {
     setBusy(btn, false);
@@ -1885,11 +1927,11 @@ function renderPromos(r) {
   S.tierList = tierFeature() ? r.tiers || [] : [];
   S.canDelete.promo = !!r.canDelete;
   document.getElementById('view').innerHTML = `
-    ${pageHead('โปรโมชัน', `แบนเนอร์หน้าแรกของลูกค้า · แสดงอยู่ ${fmtNum(r.items.filter(x => x.state === 'ACTIVE').length)} จาก ${fmtNum(r.items.length)} รายการ`,
-      `<button class="btn btn-sm btn-primary" data-act="promo-edit" data-id="">+ เพิ่มโปรโมชัน</button>`)}
+    ${pageHead(tr('โปรโมชัน'), `${tr('แบนเนอร์หน้าแรกของลูกค้า · แสดงอยู่ {n} จาก {n2} รายการ', { n: fmtNum(r.items.filter(x => x.state === 'ACTIVE').length), n2: fmtNum(r.items.length) })}`,
+      `<button class="btn btn-sm btn-primary" data-act="promo-edit" data-id="">${tr('+ เพิ่มโปรโมชัน')}</button>`)}
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th></th><th>โปรโมชัน</th><th>ป้าย</th><th>ลิงก์</th><th>ช่วงเวลา</th><th>สถานะ</th><th></th></tr></thead>
+        <thead><tr><th></th><th>${tr('โปรโมชัน')}</th><th>${tr('ป้าย')}</th><th>${tr('ลิงก์')}</th><th>${tr('ช่วงเวลา')}</th><th>${tr('สถานะ')}</th><th></th></tr></thead>
         <tbody>${r.items.length ? r.items.map(x => `
           <tr>
             <td class="thumb-cell">${thumb(x.imageUrl, true)}</td>
@@ -1898,8 +1940,8 @@ function renderPromos(r) {
             <td class="link-cell">${x.link ? `<a href="${esc(x.link)}" target="_blank" rel="noopener">${esc(x.link.replace(/^https:\/\//, ''))}</a>` : '-'}</td>
             <td class="nowrap">${esc(periodText(x.startDate, x.endDate))}</td>
             <td>${stateChip(x.state)}</td>
-            <td class="actions"><button class="btn btn-sm" data-act="promo-edit" data-id="${esc(x.id)}">${icon('edit', 16)} แก้ไข</button></td>
-          </tr>`).join('') : emptyRow(7, 'ยังไม่มีโปรโมชัน')}
+            <td class="actions"><button class="btn btn-sm" data-act="promo-edit" data-id="${esc(x.id)}">${icon('edit', 16)} ${tr('แก้ไข')}</button></td>
+          </tr>`).join('') : emptyRow(7, tr('ยังไม่มีโปรโมชัน'))}
         </tbody></table></div>
     </section>`;
   openPending('promo', openPromoEdit);
@@ -1910,28 +1952,28 @@ function openPromoEdit(id) {
   if (id && !x) return;
   const v = x || { title: '', subtitle: '', tag: '', image: '', link: '', startDate: '', endDate: '', sort: '', status: 'ACTIVE' };
   openModal(`
-    <div class="modal-head"><h2>${x ? 'แก้ไขโปรโมชัน' : 'เพิ่มโปรโมชัน'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${x ? tr('แก้ไขโปรโมชัน') : tr('เพิ่มโปรโมชัน')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <form class="form" data-form="promo" data-id="${esc(x ? x.id : '')}" autocomplete="off">
-      <label class="field"><span>หัวข้อ <em>*</em></span><input name="title" value="${esc(v.title)}" maxlength="80" placeholder="เช่น แต้ม x2 ทุกวันพุธ"></label>
-      ${enField('หัวข้อ', 'titleEn', v.titleEn, 80)}
-      <label class="field"><span>ข้อความรอง <small>(ไม่บังคับ)</small></span><input name="subtitle" value="${esc(v.subtitle)}" maxlength="150"></label>
-      ${enField('ข้อความรอง', 'subtitleEn', v.subtitleEn, 150)}
-      <label class="field"><span>ป้ายเล็ก <small>(ไม่บังคับ)</small></span><input name="tag" value="${esc(v.tag)}" maxlength="30" placeholder="เช่น โปรประจำเดือน"></label>
-      ${enField('ป้ายเล็ก', 'tagEn', v.tagEn, 30)}
+      <label class="field"><span>${tr('หัวข้อ <em>*</em>')}</span><input name="title" value="${esc(v.title)}" maxlength="80" placeholder="${tr('เช่น แต้ม x2 ทุกวันพุธ')}"></label>
+      ${enField(tr('หัวข้อ'), 'titleEn', v.titleEn, 80)}
+      <label class="field"><span>${tr('ข้อความรอง')} <small>${tr('(ไม่บังคับ)')}</small></span><input name="subtitle" value="${esc(v.subtitle)}" maxlength="150"></label>
+      ${enField(tr('ข้อความรอง'), 'subtitleEn', v.subtitleEn, 150)}
+      <label class="field"><span>${tr('ป้ายเล็ก')} <small>${tr('(ไม่บังคับ)')}</small></span><input name="tag" value="${esc(v.tag)}" maxlength="30" placeholder="${tr('เช่น โปรประจำเดือน')}"></label>
+      ${enField(tr('ป้ายเล็ก'), 'tagEn', v.tagEn, 30)}
       <div class="form-grid">
-        <label class="field"><span>ลิงก์เมื่อกด <small>(ไม่บังคับ)</small></span><input name="link" value="${esc(v.link)}" placeholder="https://..."></label>
-        <label class="field"><span>วันเริ่ม</span><input type="date" name="startDate" value="${esc(v.startDate)}"></label>
-        <label class="field"><span>วันสิ้นสุด</span><input type="date" name="endDate" value="${esc(v.endDate)}"></label>
+        <label class="field"><span>${tr('ลิงก์เมื่อกด')} <small>${tr('(ไม่บังคับ)')}</small></span><input name="link" value="${esc(v.link)}" placeholder="https://..."></label>
+        <label class="field"><span>${tr('วันเริ่ม')}</span><input type="date" name="startDate" value="${esc(v.startDate)}"></label>
+        <label class="field"><span>${tr('วันสิ้นสุด')}</span><input type="date" name="endDate" value="${esc(v.endDate)}"></label>
       </div>
-      ${tierSelect(v.minTierId, 'เห็นสิทธิ์')}
-      ${imageField(v.image, 'promo-preview', 'image', 'รูป', false, 'promo')}
+      ${tierSelect(v.minTierId, tr('เห็นสิทธิ์'))}
+      ${imageField(v.image, 'promo-preview', 'image', tr('รูป'), false, 'promo')}
       <div class="form-grid">
-        <label class="field"><span>ลำดับที่แสดง</span><input name="sort" value="${esc(v.sort)}" inputmode="numeric" placeholder="เลขน้อยขึ้นก่อน"></label>
-        ${statusField(v.status, 'แสดงให้ลูกค้าเห็น')}
+        <label class="field"><span>${tr('ลำดับที่แสดง')}</span><input name="sort" value="${esc(v.sort)}" inputmode="numeric" placeholder="${tr('เลขน้อยขึ้นก่อน')}"></label>
+        ${statusField(v.status, tr('แสดงให้ลูกค้าเห็น'))}
       </div>
       <div class="modal-actions">
-        <button class="btn" type="button" data-act="close">ยกเลิก</button>
-        <button class="btn btn-primary" type="submit">บันทึก</button>
+        <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+        <button class="btn btn-primary" type="submit">${tr('บันทึก')}</button>
       </div>
       ${deleteButton('promo', x)}
     </form>`);
@@ -1942,13 +1984,13 @@ async function savePromo(form) {
   promo.id = form.dataset.id;
   Object.assign(promo, enValues(form, ['titleEn', 'subtitleEn', 'tagEn']));
   if (form.elements.minTierId) promo.minTierId = form.elements.minTierId.value;
-  if (!promo.title) return toast('กรุณากรอกหัวข้อ', 'err');
+  if (!promo.title) return toast(tr('กรุณากรอกหัวข้อ'), 'err');
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
   try {
     const r = await withRequestId('promo|' + JSON.stringify(promo), rid => S.api.call('adminPromoSave', { promo, requestId: rid }));
     closeModal();
-    toast(`${r.created ? 'เพิ่ม' : 'บันทึก'} "${r.promo.title}" แล้ว · ${STATE_LABEL[r.promo.state]}`, 'ok');
+    toast(`${tr('{x} "{title}" แล้ว · {x2}', { x: r.created ? tr('เพิ่ม') : tr('บันทึก'), title: r.promo.title, x2: tr(STATE_LABEL[r.promo.state] || '') })}`, 'ok');
     loadPromos();
   } catch (e) {
     setBusy(btn, false);
@@ -1967,7 +2009,7 @@ function loadRules() {
   fetchView('adminRules', {}, renderRules);
 }
 
-const daysHtml = on => `<div class="days">${DAYS.map(([k, t]) => `<span class="${on.includes(k) ? 'on' : ''}" title="${t}">${t}</span>`).join('')}</div>`;
+const daysHtml = on => `<div class="days">${DAYS.map(([k, t]) => `<span class="${on.includes(k) ? 'on' : ''}" title="${tr(t + '@@วัน')}">${tr(t + '@@วัน')}</span>`).join('')}</div>`;
 
 function renderRules(r) {
   S.rules = r.items;
@@ -1975,23 +2017,23 @@ function renderRules(r) {
   S.canDelete.rule = !!r.canDelete;
   const owner = isOwner();
   document.getElementById('view').innerHTML = `
-    ${pageHead('แต้มพิเศษ', 'กติกาให้แต้มเพิ่ม ระบบคิดให้เองตอนพนักงานบันทึกยอด · ตรงหลายกติกาพร้อมกัน ใช้อันที่ให้แต้มมากสุดอันเดียว',
-      owner ? `<button class="btn btn-sm btn-primary" data-act="rule-edit" data-id="">+ เพิ่มกติกา</button>` : '')}
+    ${pageHead(tr('แต้มพิเศษ'), tr('กติกาให้แต้มเพิ่ม ระบบคิดให้เองตอนพนักงานบันทึกยอด · ตรงหลายกติกาพร้อมกัน ใช้อันที่ให้แต้มมากสุดอันเดียว'),
+      owner ? `<button class="btn btn-sm btn-primary" data-act="rule-edit" data-id="">${tr('+ เพิ่มกติกา')}</button>` : '')}
     <section class="card adm-card flush"><div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th>กติกา</th><th>ได้แต้ม</th><th>วัน</th><th>ช่วงวันที่</th>${hasBranches() ? '<th>สาขา</th>' : ''}<th class="num">ยอดขั้นต่ำ</th><th>สถานะ</th><th></th></tr></thead>
+      <thead><tr><th>${tr('กติกา')}</th><th>${tr('ได้แต้ม')}</th><th>${tr('วัน')}</th><th>${tr('ช่วงวันที่')}</th>${hasBranches() ? `<th>${tr('สาขา')}</th>` : ''}<th class="num">${tr('ยอดขั้นต่ำ')}</th><th>${tr('สถานะ')}</th><th></th></tr></thead>
       <tbody>${r.items.length ? r.items.map(x => `
         <tr>
-          <td><b>${esc(x.name)}</b>${minTierChip(x)}${x.showBadge ? '<div class="m-sub">แสดงป้ายที่หน้าลูกค้า</div>' : ''}</td>
+          <td><b>${esc(x.name)}</b>${minTierChip(x)}${x.showBadge ? `<div class="m-sub">${tr('แสดงป้ายที่หน้าลูกค้า')}</div>` : ''}</td>
           <td><span class="mult">×${x.multiplier}</span></td>
           <td>${daysHtml(x.days)}</td>
           <td class="nowrap">${esc(periodText(x.startDate, x.endDate))}</td>
-          ${hasBranches() ? `<td>${x.branch ? esc(branchName(x.branch)) : 'ทุกสาขา'}</td>` : ''}
+          ${hasBranches() ? `<td>${x.branch ? esc(branchName(x.branch)) : tr('ทุกสาขา')}</td>` : ''}
           <td class="num">${x.minAmount ? '฿' + fmtMoney(x.minAmount) : '-'}</td>
-          <td>${statusChip(...(RULE_STATE[x.state] || ['inactive', x.state]))}</td>
-          <td class="actions">${owner ? `<button class="btn btn-sm" data-act="rule-edit" data-id="${esc(x.id)}">${icon('edit', 16)} แก้ไข</button>` : ''}</td>
-        </tr>`).join('') : emptyRow(8, owner ? 'ยังไม่มีกติกา กด "เพิ่มกติกา" เช่น แต้ม x2 ทุกวันพุธ' : 'ยังไม่มีกติกา')}
+          <td>${statusChip(...(RULE_STATE[x.state] || ['inactive', x.state]).map((v, i) => (i === 1 ? tr(v) : v)))}</td>
+          <td class="actions">${owner ? `<button class="btn btn-sm" data-act="rule-edit" data-id="${esc(x.id)}">${icon('edit', 16)} ${tr('แก้ไข')}</button>` : ''}</td>
+        </tr>`).join('') : emptyRow(8, owner ? tr('ยังไม่มีกติกา กด "เพิ่มกติกา" เช่น แต้ม x2 ทุกวันพุธ') : tr('ยังไม่มีกติกา'))}
       </tbody></table></div></section>
-    <p class="muted small">ตัวอย่าง: บิลที่ปกติได้ 20 ${esc(unit())} วันที่มีกติกา ×2 จะได้ 40 (คูณจาก${esc(unit())}ปกติแล้วปัดเศษลง) · กติกาที่ไม่ใช้แล้ว กดแก้ไข${S.canDelete.rule ? ' → ลบ (แต้มที่ลูกค้าได้ไปแล้วไม่เปลี่ยน)' : 'แล้วเลือก "ปิด"'}${owner ? '' : ' · เจ้าของร้านเป็นคนตั้งกติกา'}</p>`;
+    <p class="muted small">${tr('ตัวอย่าง: บิลที่ปกติได้ 20 {u} วันที่มีกติกา ×2 จะได้ 40 (คูณจาก{u2}ปกติแล้วปัดเศษลง) · กติกาที่ไม่ใช้แล้ว กดแก้ไข{x}{x2}', { u: esc(unit()), u2: esc(unit()), x: S.canDelete.rule ? tr(' → ลบ (แต้มที่ลูกค้าได้ไปแล้วไม่เปลี่ยน)') : tr('แล้วเลือก "ปิด"'), x2: owner ? '' : tr(' · เจ้าของร้านเป็นคนตั้งกติกา') })}</p>`;
   openPending('rule', openRuleEdit);
 }
 
@@ -2002,26 +2044,26 @@ function openRuleEdit(id) {
   // กติกาใหม่ยังไม่เลือกวัน ให้เจ้าของร้านเลือกเอง (ผู้ใช้ขอ 4 พ.ย. 2569 — กันเผลอได้แต้มพิเศษทุกวัน)
   const v = x || { name: '', multiplier: 2, days: [], startDate: '', endDate: '', branch: '', minAmount: '', showBadge: true, status: 'ACTIVE' };
   openModal(`
-    <div class="modal-head"><h2>${x ? 'แก้ไขกติกาแต้มพิเศษ' : 'เพิ่มกติกาแต้มพิเศษ'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${x ? tr('แก้ไขกติกาแต้มพิเศษ') : tr('เพิ่มกติกาแต้มพิเศษ')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <form class="form" data-form="rule" data-id="${esc(x ? x.id : '')}" autocomplete="off">
-      <label class="field"><span>ชื่อกติกา <em>*</em> <small>(ลูกค้าเห็นในประวัติ${esc(unit())})</small></span><input name="name" value="${esc(v.name)}" maxlength="60" placeholder="เช่น แต้ม x2 ทุกวันพุธ"></label>
-      ${enField('ชื่อกติกา', 'nameEn', v.nameEn, 60, { hint: '(ลูกค้าเห็นในป้ายแต้มพิเศษ)' })}
-      <div class="field"><span>ได้${esc(unit())}กี่เท่า</span>
+      <label class="field"><span>${tr('ชื่อกติกา <em>*</em>')} <small>${tr('(ลูกค้าเห็นในประวัติ{u})', { u: esc(unit()) })}</small></span><input name="name" value="${esc(v.name)}" maxlength="60" placeholder="${tr('เช่น แต้ม x2 ทุกวันพุธ')}"></label>
+      ${enField(tr('ชื่อกติกา'), 'nameEn', v.nameEn, 60, { hint: tr('(ลูกค้าเห็นในป้ายแต้มพิเศษ)') })}
+      <div class="field"><span>${tr('ได้{u}กี่เท่า', { u: esc(unit()) })}</span>
         <div class="pick-row">${MULTS.map(m => `<label class="pick"><input type="radio" name="multiplier" value="${m}" ${Number(v.multiplier) === m ? 'checked' : ''}><span>×${m}</span></label>`).join('')}</div></div>
-      <div class="field"><span>วันที่มีผล</span>
-        <div class="day-picks">${DAYS.map(([k, t]) => `<label><input type="checkbox" name="days" value="${k}" ${v.days.includes(k) ? 'checked' : ''}><span>${t}</span></label>`).join('')}</div></div>
+      <div class="field"><span>${tr('วันที่มีผล')}</span>
+        <div class="day-picks">${DAYS.map(([k, t]) => `<label><input type="checkbox" name="days" value="${k}" ${v.days.includes(k) ? 'checked' : ''}><span>${tr(t + '@@วัน')}</span></label>`).join('')}</div></div>
       <div class="form-grid">
-        <label class="field"><span>วันเริ่ม</span><input type="date" name="startDate" value="${esc(v.startDate)}"></label>
-        <label class="field"><span>วันสิ้นสุด</span><input type="date" name="endDate" value="${esc(v.endDate)}"></label>
-        <label class="field"><span>ยอดขั้นต่ำต่อบิล (บาท)</span><input name="minAmount" value="${esc(v.minAmount || '')}" inputmode="decimal" placeholder="ว่าง = ทุกบิล"></label>
-        ${hasBranches() ? `<label class="field"><span>สาขา</span><select name="branch" class="select"><option value="">ทุกสาขา</option>${S.branches.filter(b => b.status === 'ACTIVE' || b.id === v.branch).map(b => `<option value="${esc(b.id)}" ${b.id === v.branch ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select></label>` : ''}
+        <label class="field"><span>${tr('วันเริ่ม')}</span><input type="date" name="startDate" value="${esc(v.startDate)}"></label>
+        <label class="field"><span>${tr('วันสิ้นสุด')}</span><input type="date" name="endDate" value="${esc(v.endDate)}"></label>
+        <label class="field"><span>${tr('ยอดขั้นต่ำต่อบิล (บาท)')}</span><input name="minAmount" value="${esc(v.minAmount || '')}" inputmode="decimal" placeholder="${tr('ว่าง = ทุกบิล')}"></label>
+        ${hasBranches() ? `<label class="field"><span>${tr('สาขา')}</span><select name="branch" class="select"><option value="">${tr('ทุกสาขา')}</option>${S.branches.filter(b => b.status === 'ACTIVE' || b.id === v.branch).map(b => `<option value="${esc(b.id)}" ${b.id === v.branch ? 'selected' : ''}>${esc(b.name)}</option>`).join('')}</select></label>` : ''}
       </div>
-      ${tierSelect(v.minTierId, 'ได้แต้มพิเศษ')}
-      <label class="check"><input type="checkbox" name="showBadge" ${v.showBadge ? 'checked' : ''}><span>แสดงป้าย "วันนี้ …" ที่หน้าลูกค้า เฉพาะวันที่มีผล</span></label>
-      ${statusField(v.status, 'เปิดใช้')}
+      ${tierSelect(v.minTierId, tr('ได้แต้มพิเศษ'))}
+      <label class="check"><input type="checkbox" name="showBadge" ${v.showBadge ? 'checked' : ''}><span>${tr('แสดงป้าย "วันนี้ …" ที่หน้าลูกค้า เฉพาะวันที่มีผล')}</span></label>
+      ${statusField(v.status, tr('เปิดใช้'))}
       <div class="modal-actions">
-        <button class="btn" type="button" data-act="close">ยกเลิก</button>
-        <button class="btn btn-primary" type="submit">บันทึก</button>
+        <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+        <button class="btn btn-primary" type="submit">${tr('บันทึก')}</button>
       </div>
       ${deleteButton('rule', x)}
     </form>`);
@@ -2037,14 +2079,14 @@ async function saveRule(form) {
     ...enValues(form, ['nameEn'])
   };
   if (f.minTierId) rule.minTierId = f.minTierId.value;
-  if (!rule.name) return toast('กรุณากรอกชื่อกติกา', 'err');
-  if (!rule.days.length) return toast('เลือกวันที่มีผลอย่างน้อย 1 วัน', 'err');
+  if (!rule.name) return toast(tr('กรุณากรอกชื่อกติกา'), 'err');
+  if (!rule.days.length) return toast(tr('เลือกวันที่มีผลอย่างน้อย 1 วัน'), 'err');
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
   try {
     const r = await withRequestId('rule|' + JSON.stringify(rule), rid => S.api.call('adminRuleSave', { rule, requestId: rid }));
     closeModal();
-    toast(`${r.created ? 'เพิ่ม' : 'บันทึก'} "${r.rule.name}" แล้ว · ${(RULE_STATE[r.rule.state] || [])[1] || ''}`, 'ok');
+    toast(`${tr('{x} "{name}" แล้ว · {x2}', { x: r.created ? tr('เพิ่ม') : tr('บันทึก'), name: r.rule.name, x2: tr((RULE_STATE[r.rule.state] || [])[1] || '') })}`, 'ok');
     loadRules();
   } catch (e) {
     setBusy(btn, false);
@@ -2057,14 +2099,14 @@ async function saveRule(form) {
  * ลบแล้วหายจากทุกหน้า แต่ประวัติยังอยู่: คูปองที่แลกไปแล้วใช้ได้ต่อ / แต้มที่ได้ไปแล้วไม่เปลี่ยน
  * ===================================================== */
 const DELETE_KIND = {
-  reward: { action: 'adminRewardDelete', label: 'ของรางวัล', list: () => S.rewards, name: x => x.name, after: 'คูปองที่ลูกค้าแลกไปแล้วยังใช้ที่ร้านได้ตามปกติ', reload: () => loadRewards() },
-  promo: { action: 'adminPromoDelete', label: 'โปรโมชัน', list: () => S.promos, name: x => x.title, after: 'ลูกค้าจะไม่เห็นแบนเนอร์นี้อีก', reload: () => loadPromos() },
-  rule: { action: 'adminRuleDelete', label: 'กติกาแต้มพิเศษ', list: () => S.rules, name: x => x.name, after: 'บิลถัดไปจะไม่ได้แต้มพิเศษจากกติกานี้ · แต้มที่ลูกค้าได้ไปแล้วไม่เปลี่ยน', reload: () => loadRules() }
+  reward: { action: 'adminRewardDelete', label: 'ของรางวัล@@รายการ', list: () => S.rewards, name: x => x.name, after: 'คูปองที่ลูกค้าแลกไปแล้วยังใช้ที่ร้านได้ตามปกติ', reload: () => loadRewards() },
+  promo: { action: 'adminPromoDelete', label: 'โปรโมชัน@@รายการ', list: () => S.promos, name: x => x.title, after: 'ลูกค้าจะไม่เห็นแบนเนอร์นี้อีก', reload: () => loadPromos() },
+  rule: { action: 'adminRuleDelete', label: 'กติกาแต้มพิเศษ@@รายการ', list: () => S.rules, name: x => x.name, after: 'บิลถัดไปจะไม่ได้แต้มพิเศษจากกติกานี้ · แต้มที่ลูกค้าได้ไปแล้วไม่เปลี่ยน', reload: () => loadRules() }
 };
 
 function deleteButton(kind, x) {
   if (!x || !S.canDelete[kind]) return '';
-  return `<div class="modal-delete"><button type="button" class="link link-danger" data-act="item-delete" data-kind="${kind}" data-id="${esc(x.id)}">${icon('x', 14)} ลบ${esc(DELETE_KIND[kind].label)}นี้</button></div>`;
+  return `<div class="modal-delete"><button type="button" class="link link-danger" data-act="item-delete" data-kind="${kind}" data-id="${esc(x.id)}">${icon('x', 14)} ${tr('ลบ{label}นี้', { label: esc(tr(DELETE_KIND[kind].label)) })}</button></div>`;
 }
 
 function confirmDelete(kind, id) {
@@ -2072,16 +2114,16 @@ function confirmDelete(kind, id) {
   const x = k && (k.list() || []).find(r => r.id === id);
   if (!x) return;
   openModal(`
-    <div class="modal-head"><h2>ลบ${esc(k.label)}?</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tr('ลบ{label}?', { label: esc(tr(k.label)) })}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <p><b>${esc(k.name(x))}</b></p>
     <ul class="muted small">
-      <li>หายจากหลังบ้านและหน้าลูกค้าทันที</li>
-      <li>${esc(k.after)}</li>
-      <li>ลบแล้วกู้คืนเองไม่ได้ (ถ้าแค่พักไว้ ให้กดแก้ไขแล้วเลือก "ปิด" แทน)</li>
+      <li>${tr('หายจากหลังบ้านและหน้าลูกค้าทันที')}</li>
+      <li>${esc(tr(k.after))}</li>
+      <li>${tr('ลบแล้วกู้คืนเองไม่ได้ (ถ้าแค่พักไว้ ให้กดแก้ไขแล้วเลือก "ปิด" แทน)')}</li>
     </ul>
     <div class="modal-actions">
-      <button class="btn" type="button" data-act="close">ยกเลิก</button>
-      <button class="btn btn-danger" type="button" data-act="item-delete-confirm" data-kind="${kind}" data-id="${esc(id)}">ลบ</button>
+      <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+      <button class="btn btn-danger" type="button" data-act="item-delete-confirm" data-kind="${kind}" data-id="${esc(id)}">${tr('ลบ')}</button>
     </div>`);
 }
 
@@ -2092,7 +2134,7 @@ async function doDelete(kind, id, btn) {
   try {
     const r = await withRequestId('delete|' + kind + '|' + id, rid => S.api.call(k.action, { id, requestId: rid }));
     closeModal();
-    toast(`ลบ "${r.name}" แล้ว`, 'ok');
+    toast(`${tr('ลบ "{name}" แล้ว', { name: r.name })}`, 'ok');
     k.reload();
   } catch (e) {
     setBusy(btn, false);
@@ -2110,29 +2152,29 @@ async function doDelete(kind, id, btn) {
 function minTierChip(x) {
   if (!x.minTierName) return '';
   const t = (S.tierList || []).find(t => t.id === x.minTierId) || {};
-  return ` <span class="chip chip-tier">${tierDot(t.color)}${esc(x.minTierName)} ขึ้นไป</span>`;
+  return ` <span class="chip chip-tier">${tr('{color}{minTierName} ขึ้นไป', { color: tierDot(t.color), minTierName: esc(x.minTierName) })}</span>`;
 }
 
 // ช่องเลือกระดับขั้นต่ำในฟอร์ม — ร้านที่ไม่ได้ใช้ระดับไม่มีช่องนี้ (บันทึกแล้วจึงไม่ส่ง minTierId = ไม่แก้ค่าเดิม)
 function tierSelect(cur, verb) {
   const list = S.tierList || [];
   if (list.length < 2) return '';
-  return `<label class="field"><span>สมาชิกที่${esc(verb)}</span>
+  return `<label class="field"><span>${tr('สมาชิกที่{verb}', { verb: esc(verb) })}</span>
     <select name="minTierId" class="select">
-      <option value="">ทุกระดับ</option>
-      ${list.slice(1).map(t => `<option value="${esc(t.id)}" ${t.id === cur ? 'selected' : ''}>ระดับ ${esc(t.name)} ขึ้นไป</option>`).join('')}
+      <option value="">${tr('ทุกระดับ')}</option>
+      ${list.slice(1).map(t => `<option value="${esc(t.id)}" ${t.id === cur ? 'selected' : ''}>${tr('ระดับ {name} ขึ้นไป', { name: esc(t.name) })}</option>`).join('')}
     </select>
-    <small class="muted">ลูกค้าที่ระดับไม่ถึง จะเห็นแต่ใช้สิทธิ์ไม่ได้ (มีป้ายบอกว่าต้องถึงระดับไหน)</small></label>`;
+    <small class="muted">${tr('ลูกค้าที่ระดับไม่ถึง จะเห็นแต่ใช้สิทธิ์ไม่ได้ (มีป้ายบอกว่าต้องถึงระดับไหน)')}</small></label>`;
 }
 
 function loadTierPage() {
   fetchView('adminTiers', {}, renderTierPage);
 }
 
-const bahtFor = pts => (S.tierPage && Number(pts) > 0 ? `≈ ยอดซื้อ ฿${fmtMoney(Number(pts) * S.tierPage.pointRate)}` : '');
+const bahtFor = pts => (S.tierPage && Number(pts) > 0 ? `${tr('≈ ยอดซื้อ ฿{n}', { n: fmtMoney(Number(pts) * S.tierPage.pointRate) })}` : '');
 // ตัวอย่างบัตรแบบที่ลูกค้าเห็นเมื่อไม่ใส่รูป (วาดจากสีของระดับ)
-const autoBanner = t => (t.image ? '' : `<small class="muted">ไม่ใส่รูป ลูกค้าจะเห็นบัตรแบบนี้</small>
-  ${tierBanner({ name: t.name || 'ชื่อระดับ', color: t.color, multiplier: Number(t.multiplier) || 1 }, { logo: logoHtml(), shopName: cfg().name, unit: unit() })}`);
+const autoBanner = t => (t.image ? '' : `<small class="muted">${tr('ไม่ใส่รูป ลูกค้าจะเห็นบัตรแบบนี้')}</small>
+  ${tierBanner({ name: t.name || tr('ชื่อระดับ'), color: t.color, multiplier: Number(t.multiplier) || 1 }, { logo: logoHtml(), shopName: cfg().name, unit: unit() })}`);
 
 function renderTierPage(r) {
   S.tierPage = r;
@@ -2142,19 +2184,19 @@ function renderTierPage(r) {
   const owner = isOwner();
   const u = esc(unit());
   document.getElementById('view').innerHTML = `
-    ${pageHead('ระดับสมาชิก', `ระดับคิดจาก${u}ที่ได้จากการซื้อ ${fmtNum(r.keepMonths)} เดือนล่าสุด · ถึงเกณฑ์ขึ้นทันที แล้วคงระดับ ${fmtNum(r.keepMonths)} เดือน · ครบกำหนดแล้วไม่ถึง ลดลง 1 ระดับ`,
-      owner && r.enabled ? `<button class="btn btn-sm btn-danger-outline" data-act="tiers-off">ปิดใช้ระดับสมาชิก</button>` : '')}
+    ${pageHead(tr('ระดับสมาชิก'), `${tr('ระดับคิดจาก{u}ที่ได้จากการซื้อ {n} เดือนล่าสุด · ถึงเกณฑ์ขึ้นทันที แล้วคงระดับ {n2} เดือน · ครบกำหนดแล้วไม่ถึง ลดลง 1 ระดับ', { u, n: fmtNum(r.keepMonths), n2: fmtNum(r.keepMonths) })}`,
+      owner && r.enabled ? `<button class="btn btn-sm btn-danger-outline" data-act="tiers-off">${tr('ปิดใช้ระดับสมาชิก')}</button>` : '')}
     <div id="tier-edit">${tierEditHtml()}</div>
     <section class="card adm-card">
-      <div class="card-head"><h2>กติกา</h2></div>
+      <div class="card-head"><h2>${tr('กติกา')}</h2></div>
       <ul class="muted small tier-rules">
-        <li>นับเฉพาะ${u}ปกติจากบิลซื้อ (ตอนนี้ ${fmtMoney(r.pointRate)} บาท = 1 ${u}) — ไม่นับ${u}พิเศษ ตัวคูณของระดับ ${u}ต้อนรับ และ${u}ที่ร้านปรับให้ · ลูกค้าแลกของรางวัลแล้วไม่ลด</li>
-        <li>เปลี่ยนอัตรา${u}ภายหลัง: บิลเก่านับตามอัตราเดิม บิลใหม่นับตามอัตราใหม่</li>
-        <li>สมาชิกทุกคนอย่างน้อยอยู่ระดับแรก (เริ่มที่ 0 ${u}) ระดับแรกไม่มีวันหมดอายุ</li>
-        <li>ตัวคูณ${u}ของระดับ ไม่ซ้อนกับ${u}พิเศษ ระบบใช้ตัวที่ให้มากกว่า</li>
-        <li>ของรางวัล / โปรโมชัน / ${u}พิเศษ ตั้ง "ระดับ X ขึ้นไป" ได้ในหน้าแก้ไขของแต่ละรายการ (หน้าสิทธิ์สมาชิกของลูกค้าแสดงให้เอง)</li>
-        <li>ของขวัญวันเกิด: ลูกค้าได้ชิ้นของระดับสูงสุดที่ตัวเองถึง</li>
-        <li>เพิ่มเกณฑ์: สมาชิกเดิมไม่ลดทันที คงระดับจนครบกำหนด · ลดเกณฑ์: คนที่ถึงแล้วขึ้นทันที</li>
+        <li>${tr('นับเฉพาะ{u}ปกติจากบิลซื้อ (ตอนนี้ {n} บาท = 1 {u2}) — ไม่นับ{u3}พิเศษ ตัวคูณของระดับ {u4}ต้อนรับ และ{u5}ที่ร้านปรับให้ · ลูกค้าแลกของรางวัลแล้วไม่ลด', { u, n: fmtMoney(r.pointRate), u2: u, u3: u, u4: u, u5: u })}</li>
+        <li>${tr('เปลี่ยนอัตรา{u}ภายหลัง: บิลเก่านับตามอัตราเดิม บิลใหม่นับตามอัตราใหม่', { u })}</li>
+        <li>${tr('สมาชิกทุกคนอย่างน้อยอยู่ระดับแรก (เริ่มที่ 0 {u}) ระดับแรกไม่มีวันหมดอายุ', { u })}</li>
+        <li>${tr('ตัวคูณ{u}ของระดับ ไม่ซ้อนกับ{u2}พิเศษ ระบบใช้ตัวที่ให้มากกว่า', { u, u2: u })}</li>
+        <li>${tr('ของรางวัล / โปรโมชัน / {u}พิเศษ ตั้ง "ระดับ X ขึ้นไป" ได้ในหน้าแก้ไขของแต่ละรายการ (หน้าสิทธิ์สมาชิกของลูกค้าแสดงให้เอง)', { u })}</li>
+        <li>${tr('ของขวัญวันเกิด: ลูกค้าได้ชิ้นของระดับสูงสุดที่ตัวเองถึง')}</li>
+        <li>${tr('เพิ่มเกณฑ์: สมาชิกเดิมไม่ลดทันที คงระดับจนครบกำหนด · ลดเกณฑ์: คนที่ถึงแล้วขึ้นทันที')}</li>
       </ul>
     </section>`;
   // มาจากการ์ดภาษาอังกฤษในหน้าภาพรวม → ไปที่ช่องภาษาอังกฤษของระดับนั้น
@@ -2169,63 +2211,63 @@ function tierEditHtml() {
   const u = esc(unit());
   if (!d) {
     return `<section class="card adm-card tier-intro">
-      <h2>ร้านยังไม่ได้เปิดใช้ระดับสมาชิก</h2>
-      <p class="muted">แบ่งลูกค้าเป็น ${fmtNum(r.minTiers)}–${fmtNum(r.maxTiers)} ระดับตาม${u}ที่สะสมจากการซื้อ เช่น Member / Silver / Gold ให้ลูกค้าประจำได้${u}มากขึ้นและสิทธิ์พิเศษ</p>
-      ${owner ? `<button class="btn btn-primary" data-act="tier-add" data-id="start">เริ่มตั้งระดับสมาชิก</button>` : '<p class="muted small">เจ้าของร้านเป็นคนตั้งระดับ</p>'}
+      <h2>${tr('ร้านยังไม่ได้เปิดใช้ระดับสมาชิก')}</h2>
+      <p class="muted">${tr('แบ่งลูกค้าเป็น {n}–{n2} ระดับตาม{u}ที่สะสมจากการซื้อ เช่น Member / Silver / Gold ให้ลูกค้าประจำได้{u2}มากขึ้นและสิทธิ์พิเศษ', { n: fmtNum(r.minTiers), n2: fmtNum(r.maxTiers), u, u2: u })}</p>
+      ${owner ? `<button class="btn btn-primary" data-act="tier-add" data-id="start">${tr('เริ่มตั้งระดับสมาชิก')}</button>` : `<p class="muted small">${tr('เจ้าของร้านเป็นคนตั้งระดับ')}</p>`}
     </section>`;
   }
   if (!owner) {
     return `<section class="card adm-card flush"><div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th>ระดับ</th><th class="num">${u}จากการซื้อ ${fmtNum(r.keepMonths)} เดือน ตั้งแต่</th><th>ได้${u}</th><th>สิทธิพิเศษเพิ่มเติม</th><th class="num">สมาชิก</th></tr></thead>
+      <thead><tr><th>${tr('ระดับ')}</th><th class="num">${tr('{u}จากการซื้อ {n} เดือน ตั้งแต่', { u, n: fmtNum(r.keepMonths) })}</th><th>${tr('ได้{u}', { u })}</th><th>${tr('สิทธิพิเศษเพิ่มเติม')}</th><th class="num">${tr('สมาชิก')}</th></tr></thead>
       <tbody>${d.map(t => `<tr>
         <td><b>${tierDot(t.color)}${esc(t.name)}</b>${englishFeature() && t.nameEn ? `<div class="m-sub">${esc(t.nameEn)}</div>` : ''}</td>
         <td class="num">${fmtNum(t.minPoints)} ${u}${t.minPoints ? `<div class="m-sub">${esc(bahtFor(t.minPoints))}</div>` : ''}</td>
-        <td>${t.multiplier > 1 ? `<span class="mult">×${t.multiplier}</span>` : 'ปกติ'}</td>
+        <td>${t.multiplier > 1 ? `<span class="mult">×${t.multiplier}</span>` : tr('ปกติ')}</td>
         <td class="small">${t.benefits ? esc(t.benefits).replace(/\n/g, '<br>') : '-'}</td>
-        <td class="num"><a class="link" href="#members" data-act="tier-filter" data-id="${esc(t.id)}">${fmtNum(t.members)} คน</a></td>
+        <td class="num"><a class="link" href="#members" data-act="tier-filter" data-id="${esc(t.id)}">${tr('{n} คน', { n: fmtNum(t.members) })}</a></td>
       </tr>`).join('')}</tbody></table></div></section>
-      <p class="muted small">เจ้าของร้านเป็นคนตั้งระดับ</p>`;
+      <p class="muted small">${tr('เจ้าของร้านเป็นคนตั้งระดับ')}</p>`;
   }
   return `<section class="card adm-card">
     <form class="form" data-form="tiers" autocomplete="off">
-      <label class="field"><span>ข้อความหัวหน้าสิทธิ์สมาชิก <small>(ใช้ทั้งร้าน · ว่าง = ใช้ข้อความตั้งต้น)</small></span>
-        <textarea name="intro" rows="2" maxlength="200" placeholder="สมัครสมาชิกฟรี สะสม${u}ทุกบิล&#10;ยิ่งสะสมมาก ยิ่งได้สิทธิ์มาก">${esc(S.tierIntroDraft)}</textarea></label>
-      ${enField('ข้อความหัวหน้าสิทธิ์สมาชิก', 'introEn', S.tierIntroEnDraft, 200, { rows: 2, placeholder: 'ว่าง = ใช้ข้อความภาษาไทยของร้าน (ถ้าไม่ได้เขียน = ข้อความตั้งต้นภาษาอังกฤษ)' })}
+      <label class="field"><span>${tr('ข้อความหัวหน้าสิทธิ์สมาชิก')} <small>${tr('(ใช้ทั้งร้าน · ว่าง = ใช้ข้อความตั้งต้น)')}</small></span>
+        <textarea name="intro" rows="2" maxlength="200" placeholder="สมัครสมาชิกฟรี สะสม${esc((cfg().texts && cfg().texts.pointUnit) || 'แต้ม')}ทุกบิล&#10;ยิ่งสะสมมาก ยิ่งได้สิทธิ์มาก">${esc(S.tierIntroDraft)}</textarea></label>
+      ${enField(tr('ข้อความหัวหน้าสิทธิ์สมาชิก'), 'introEn', S.tierIntroEnDraft, 200, { rows: 2, placeholder: tr('ว่าง = ใช้ข้อความภาษาไทยของร้าน (ถ้าไม่ได้เขียน = ข้อความตั้งต้นภาษาอังกฤษ)') })}
       <div class="tier-edit-list">${d.map((t, i) => `
         <div class="tier-edit" data-row="${i}" data-tid="${esc(t.id || '')}">
           <div class="tier-edit-main">
-            <label class="field tier-f-color"><span>สี</span><input type="color" name="color" value="${esc(HEX.test(t.color || '') ? t.color : '#9CA3AF')}"></label>
-            <label class="field tier-f-name"><span>ชื่อระดับ</span><input name="name" value="${esc(t.name)}" maxlength="30" placeholder="เช่น Gold"></label>
-            <label class="field tier-f-spend"><span>${u}จากการซื้อ ${fmtNum(r.keepMonths)} เดือน ตั้งแต่</span>
-              ${i === 0 ? `<input name="minPoints" value="0" readonly title="ระดับแรกเริ่มที่ 0 ${u}เสมอ">` : `<input name="minPoints" value="${esc(t.minPoints === '' ? '' : String(t.minPoints))}" inputmode="numeric" placeholder="เช่น 250">`}
-              <small class="muted tier-baht">${esc(i === 0 ? 'สมาชิกทุกคน' : bahtFor(t.minPoints))}</small></label>
-            <label class="field tier-f-mult"><span>ได้${u}</span><select name="multiplier" class="select">${r.multipliers.map(m => `<option value="${m}" ${Number(t.multiplier) === m ? 'selected' : ''}>${m === 1 ? 'ปกติ' : '×' + m}</option>`).join('')}</select></label>
+            <label class="field tier-f-color"><span>${tr('สี')}</span><input type="color" name="color" value="${esc(HEX.test(t.color || '') ? t.color : '#9CA3AF')}"></label>
+            <label class="field tier-f-name"><span>${tr('ชื่อระดับ')}</span><input name="name" value="${esc(t.name)}" maxlength="30" placeholder="${tr('เช่น Gold')}"></label>
+            <label class="field tier-f-spend"><span>${tr('{u}จากการซื้อ {n} เดือน ตั้งแต่', { u, n: fmtNum(r.keepMonths) })}</span>
+              ${i === 0 ? `<input name="minPoints" value="0" readonly title="${tr('ระดับแรกเริ่มที่ 0 {u}เสมอ', { u })}">` : `<input name="minPoints" value="${esc(t.minPoints === '' ? '' : String(t.minPoints))}" inputmode="numeric" placeholder="${tr('เช่น 250')}">`}
+              <small class="muted tier-baht">${esc(i === 0 ? tr('สมาชิกทุกคน') : bahtFor(t.minPoints))}</small></label>
+            <label class="field tier-f-mult"><span>${tr('ได้{u}', { u })}</span><select name="multiplier" class="select">${r.multipliers.map(m => `<option value="${m}" ${Number(t.multiplier) === m ? 'selected' : ''}>${m === 1 ? tr('ปกติ') : '×' + m}</option>`).join('')}</select></label>
             <div class="tier-f-end">
-              ${t.id ? `<a class="link small" href="#members" data-act="tier-filter" data-id="${esc(t.id)}">${fmtNum(t.members || 0)} คน</a>` : '<span class="muted small">ใหม่</span>'}
-              ${i > 0 && d.length > r.minTiers ? `<button type="button" class="icon-btn" data-act="tier-remove" data-id="${i}" aria-label="เอาระดับนี้ออก">${icon('x', 16)}</button>` : ''}
+              ${t.id ? `<a class="link small" href="#members" data-act="tier-filter" data-id="${esc(t.id)}">${tr('{n} คน', { n: fmtNum(t.members || 0) })}</a>` : `<span class="muted small">${tr('ใหม่')}</span>`}
+              ${i > 0 && d.length > r.minTiers ? `<button type="button" class="icon-btn" data-act="tier-remove" data-id="${i}" aria-label="${tr('เอาระดับนี้ออก')}">${icon('x', 16)}</button>` : ''}
             </div>
           </div>
           <details class="tier-more" open>
-            <summary>รูปบัตร${englishFeature() ? ' สิทธิพิเศษ และภาษาอังกฤษ' : ' และสิทธิพิเศษ'} (หน้าสิทธิ์สมาชิกของลูกค้า)</summary>
+            <summary>${tr('รูปบัตร{x} (หน้าสิทธิ์สมาชิกของลูกค้า)', { x: englishFeature() ? tr(' สิทธิพิเศษ และภาษาอังกฤษ') : tr(' และสิทธิพิเศษ') })}</summary>
             <div class="tier-more-grid">
               <div class="tier-card-col">
                 <div class="tier-auto">${autoBanner(t)}</div>
-                ${imageField(t.image || '', 'tier-img-' + i, 'image-' + i, 'รูปบัตร', false, 'tier')}
+                ${imageField(t.image || '', 'tier-img-' + i, 'image-' + i, tr('รูปบัตร'), false, 'tier')}
               </div>
               <div class="tier-text-col">
-              ${enField('ชื่อระดับ', 'nameEn', t.nameEn, 30, { placeholder: 'ว่าง = ใช้ชื่อไทย (ชื่อที่เป็นภาษาอังกฤษอยู่แล้ว ไม่ต้องกรอก)' })}
-              <label class="field"><span>สิทธิพิเศษเพิ่มเติม <small>(บรรทัดละ 1 ข้อ ไม่เกิน ${fmtNum(r.maxBenefits || 8)} ข้อ — ตัวคูณ${u} ของรางวัล และโปรโมชันเฉพาะระดับ ระบบใส่ให้เอง)</small></span>
-                <textarea name="benefits" rows="5" placeholder="เช่น คูปองส่วนลดวันเกิด 15%&#10;สิทธิ์ทดลองเมนูใหม่ก่อนใคร">${esc(t.benefits || '')}</textarea></label>
-              ${enField('สิทธิพิเศษเพิ่มเติม', 'benefitsEn', t.benefitsEn, 1000, { rows: 5, hint: '(บรรทัดละ 1 ข้อ)', placeholder: 'ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นสิทธิพิเศษภาษาไทย' })}
+              ${enField(tr('ชื่อระดับ'), 'nameEn', t.nameEn, 30, { placeholder: tr('ว่าง = ใช้ชื่อไทย (ชื่อที่เป็นภาษาอังกฤษอยู่แล้ว ไม่ต้องกรอก)') })}
+              <label class="field"><span>${tr('สิทธิพิเศษเพิ่มเติม')} <small>${tr('(บรรทัดละ 1 ข้อ ไม่เกิน {n} ข้อ — ตัวคูณ{u} ของรางวัล และโปรโมชันเฉพาะระดับ ระบบใส่ให้เอง)', { n: fmtNum(r.maxBenefits || 8), u })}</small></span>
+                <textarea name="benefits" rows="5" placeholder="${tr('เช่น คูปองส่วนลดวันเกิด 15%&#10;สิทธิ์ทดลองเมนูใหม่ก่อนใคร')}">${esc(t.benefits || '')}</textarea></label>
+              ${enField(tr('สิทธิพิเศษเพิ่มเติม'), 'benefitsEn', t.benefitsEn, 1000, { rows: 5, hint: tr('(บรรทัดละ 1 ข้อ)'), placeholder: tr('ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นสิทธิพิเศษภาษาไทย') })}
               </div>
             </div>
           </details>
         </div>`).join('')}
       </div>
-      ${d.length < r.maxTiers ? `<button type="button" class="btn btn-sm" data-act="tier-add">+ เพิ่มระดับ</button>` : `<p class="muted small">ตั้งได้สูงสุด ${fmtNum(r.maxTiers)} ระดับ</p>`}
+      ${d.length < r.maxTiers ? `<button type="button" class="btn btn-sm" data-act="tier-add">${tr('+ เพิ่มระดับ')}</button>` : `<p class="muted small">${tr('ตั้งได้สูงสุด {n} ระดับ', { n: fmtNum(r.maxTiers) })}</p>`}
       <div class="modal-actions">
-        <button type="button" class="btn" data-act="refresh">${r.enabled ? 'ยกเลิกที่แก้' : 'ยกเลิก'}</button>
-        <button class="btn btn-primary" type="submit">${r.enabled ? 'บันทึก' : 'เปิดใช้ระดับสมาชิก'}</button>
+        <button type="button" class="btn" data-act="refresh">${r.enabled ? tr('ยกเลิกที่แก้') : tr('ยกเลิก')}</button>
+        <button class="btn btn-primary" type="submit">${r.enabled ? tr('บันทึก') : tr('เปิดใช้ระดับสมาชิก')}</button>
       </div>
     </form>
   </section>`;
@@ -2296,49 +2338,49 @@ function confirmTiers(form) {
   const r = S.tierPage;
   const u = esc(unit());
   for (const t of d) {
-    if (!t.name) return toast('กรุณาใส่ชื่อทุกระดับ', 'err');
-    if (!/^\d+$/.test(String(t.minPoints))) return toast(`ใส่${unit()}ของระดับ "${t.name}" เป็นจำนวนเต็ม`, 'err');
-    if (String(t.benefits || '').split('\n').filter(x => x.trim()).length > (r.maxBenefits || 8)) return toast(`สิทธิพิเศษของระดับ "${t.name}" ใส่ได้ไม่เกิน ${r.maxBenefits || 8} ข้อ`, 'err');
-    if (String(t.benefitsEn || '').split('\n').filter(x => x.trim()).length > (r.maxBenefits || 8)) return toast(`สิทธิพิเศษภาษาอังกฤษของระดับ "${t.name}" ใส่ได้ไม่เกิน ${r.maxBenefits || 8} ข้อ`, 'err');
+    if (!t.name) return toast(tr('กรุณาใส่ชื่อทุกระดับ'), 'err');
+    if (!/^\d+$/.test(String(t.minPoints))) return toast(`${tr('ใส่{u}ของระดับ "{name}" เป็นจำนวนเต็ม', { u: unit(), name: t.name })}`, 'err');
+    if (String(t.benefits || '').split('\n').filter(x => x.trim()).length > (r.maxBenefits || 8)) return toast(`${tr('สิทธิพิเศษของระดับ "{name}" ใส่ได้ไม่เกิน {x} ข้อ', { name: t.name, x: r.maxBenefits || 8 })}`, 'err');
+    if (String(t.benefitsEn || '').split('\n').filter(x => x.trim()).length > (r.maxBenefits || 8)) return toast(`${tr('สิทธิพิเศษภาษาอังกฤษของระดับ "{name}" ใส่ได้ไม่เกิน {x} ข้อ', { name: t.name, x: r.maxBenefits || 8 })}`, 'err');
   }
   const en = englishFeature();
   const rows = d.map(t => ({ id: t.id || '', name: t.name, minPoints: Number(t.minPoints), multiplier: Number(t.multiplier), color: t.color,
     image: t.image || '', benefits: t.benefits || '', ...(en ? { nameEn: t.nameEn || '', benefitsEn: t.benefitsEn || '' } : {}) })).sort((a, b) => a.minPoints - b.minPoints);
-  if (rows[0].minPoints !== 0) return toast(`ระดับแรกต้องเริ่มที่ 0 ${unit()}`, 'err');
+  if (rows[0].minPoints !== 0) return toast(`${tr('ระดับแรกต้องเริ่มที่ 0 {u}', { u: unit() })}`, 'err');
   for (let i = 1; i < rows.length; i++) {
-    if (rows[i].minPoints === rows[i - 1].minPoints) return toast(`แต่ละระดับต้องใช้${unit()}ไม่ซ้ำกัน`, 'err');
+    if (rows[i].minPoints === rows[i - 1].minPoints) return toast(`${tr('แต่ละระดับต้องใช้{u}ไม่ซ้ำกัน', { u: unit() })}`, 'err');
   }
-  if (new Set(rows.map(t => t.name.toLowerCase())).size !== rows.length) return toast('ชื่อระดับซ้ำกัน', 'err');
+  if (new Set(rows.map(t => t.name.toLowerCase())).size !== rows.length) return toast(tr('ชื่อระดับซ้ำกัน'), 'err');
   S.pendingTiers = rows;
   S.pendingIntro = S.tierIntroDraft;
   S.pendingIntroEn = en ? S.tierIntroEnDraft : null;
   const removed = r.enabled ? r.items.filter(t => !rows.some(x => x.id === t.id)) : [];
   openModal(`
-    <div class="modal-head"><h2>${r.enabled ? 'บันทึกระดับสมาชิก' : 'เปิดใช้ระดับสมาชิก'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-    <div class="tier-summary">${rows.map(t => `<div>${tierDot(t.color)}<b>${esc(t.name)}</b> <span class="muted">ตั้งแต่ ${fmtNum(t.minPoints)} ${u}${t.minPoints ? ` (${esc(bahtFor(t.minPoints))})` : ''}${t.multiplier > 1 ? ` · ${u} ×${t.multiplier}` : ''}</span></div>`).join('')}</div>
+    <div class="modal-head"><h2>${r.enabled ? tr('บันทึกระดับสมาชิก') : tr('เปิดใช้ระดับสมาชิก')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
+    <div class="tier-summary">${rows.map(t => `<div>${tierDot(t.color)}<b>${esc(t.name)}</b> <span class="muted">${tr('ตั้งแต่ {n} {u}{x}{x2}', { n: fmtNum(t.minPoints), u, x: t.minPoints ? ` (${esc(bahtFor(t.minPoints))})` : '', x2: t.multiplier > 1 ? ` · ${u} ×${t.multiplier}` : '' })}</span></div>`).join('')}</div>
     <ul class="muted small">
-      ${r.enabled ? '' : `<li>ระบบจัดระดับสมาชิกทุกคนตาม${u}จากการซื้อ ${fmtNum(r.keepMonths)} เดือนล่าสุดทันที</li>`}
-      ${removed.map(t => `<li>เอาระดับ "${esc(t.name)}" ออก: สมาชิก ${fmtNum(t.members)} คนย้ายไประดับที่ใกล้ที่สุดซึ่งไม่สูงกว่าเดิม</li>`).join('')}
-      <li>ลูกค้าเห็นระดับในบัตรสมาชิก และหน้าสิทธิ์สมาชิกทันที</li>
+      ${r.enabled ? '' : `<li>${tr('ระบบจัดระดับสมาชิกทุกคนตาม{u}จากการซื้อ {n} เดือนล่าสุดทันที', { u, n: fmtNum(r.keepMonths) })}</li>`}
+      ${removed.map(t => `<li>${tr('เอาระดับ "{name}" ออก: สมาชิก {n} คนย้ายไประดับที่ใกล้ที่สุดซึ่งไม่สูงกว่าเดิม', { name: esc(t.name), n: fmtNum(t.members) })}</li>`).join('')}
+      <li>${tr('ลูกค้าเห็นระดับในบัตรสมาชิก และหน้าสิทธิ์สมาชิกทันที')}</li>
     </ul>
     <div class="modal-actions">
-      <button class="btn" type="button" data-act="close">ยกเลิก</button>
-      <button class="btn btn-primary" type="button" data-act="tiers-save-confirm">ยืนยัน</button>
+      <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+      <button class="btn btn-primary" type="button" data-act="tiers-save-confirm">${tr('ยืนยัน')}</button>
     </div>`);
 }
 
 function confirmTiersOff() {
   if (!isOwner()) return;
   openModal(`
-    <div class="modal-head"><h2>ปิดใช้ระดับสมาชิก?</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tr('ปิดใช้ระดับสมาชิก?')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <ul class="muted small">
-      <li>ลูกค้าไม่เห็นระดับในบัตรอีก และไม่ได้ตัวคูณ${esc(unit())}ของระดับ</li>
-      <li>ของรางวัล / โปรโมชัน / แต้มพิเศษ ที่ตั้งระดับไว้ กลับเป็นใช้ได้ทุกคน</li>
-      <li>${esc(unit())} คูปอง และประวัติเดิมไม่หาย · เปิดใช้ใหม่ภายหลังได้ (ระบบจัดระดับใหม่จาก${esc(unit())}ที่สะสม)</li>
+      <li>${tr('ลูกค้าไม่เห็นระดับในบัตรอีก และไม่ได้ตัวคูณ{u}ของระดับ', { u: esc(unit()) })}</li>
+      <li>${tr('ของรางวัล / โปรโมชัน / แต้มพิเศษ ที่ตั้งระดับไว้ กลับเป็นใช้ได้ทุกคน')}</li>
+      <li>${tr('{u} คูปอง และประวัติเดิมไม่หาย · เปิดใช้ใหม่ภายหลังได้ (ระบบจัดระดับใหม่จาก{u2}ที่สะสม)', { u: esc(unit()), u2: esc(unit()) })}</li>
     </ul>
     <div class="modal-actions">
-      <button class="btn" type="button" data-act="close">ยกเลิก</button>
-      <button class="btn btn-danger" type="button" data-act="tiers-off-confirm">ปิดใช้</button>
+      <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+      <button class="btn btn-danger" type="button" data-act="tiers-off-confirm">${tr('ปิดใช้')}</button>
     </div>`);
 }
 
@@ -2352,12 +2394,12 @@ async function doSaveTiers(btn, off) {
     const r = await S.api.call('adminTiersSave', off ? { tiers } : body);
     closeModal();
     S.pendingTiers = null;
-    toast(off ? 'ปิดใช้ระดับสมาชิกแล้ว' : 'บันทึกระดับสมาชิกแล้ว', 'ok');
+    toast(off ? tr('ปิดใช้ระดับสมาชิกแล้ว') : tr('บันทึกระดับสมาชิกแล้ว'), 'ok');
     renderTierPage(r);
   } catch (e) {
     setBusy(btn, false);
     // เน็ตหลุดกลางทาง: อาจบันทึกไปแล้ว → โหลดค่าล่าสุดมาให้ดูก่อน (กันกดซ้ำแล้วได้ระดับใหม่ซ้อน)
-    if (e.code === 'NETWORK') { closeModal(); toast(e.message + ' — โหลดค่าล่าสุดให้แล้ว ตรวจดูก่อนกดบันทึกอีกครั้ง', 'err'); loadTierPage(); return; }
+    if (e.code === 'NETWORK') { closeModal(); toast(e.message + tr(' — โหลดค่าล่าสุดให้แล้ว ตรวจดูก่อนกดบันทึกอีกครั้ง'), 'err'); loadTierPage(); return; }
     toast(e.message, 'err');
   }
 }
@@ -2373,21 +2415,21 @@ function memberTierHtml(m, owner) {
   const hist = m.tierHistory || [];
   return `
     <section class="card adm-card">
-      <div class="card-head"><h2>ระดับสมาชิก</h2>${owner ? `<button class="btn btn-sm" data-act="member-tier">${icon('edit', 16)} เปลี่ยนระดับ</button>` : ''}</div>
+      <div class="card-head"><h2>${tr('ระดับสมาชิก')}</h2>${owner ? `<button class="btn btn-sm" data-act="member-tier">${icon('edit', 16)} ${tr('เปลี่ยนระดับ')}</button>` : ''}</div>
       <div class="tier-now">
         ${tierChip(ti.name, ti.color)}
-        ${ti.multiplier > 1 ? `<span class="muted small">ได้${esc(unit())} ×${ti.multiplier}</span>` : ''}
-        <span class="muted small">${ti.until ? `คงระดับถึง ${fmtDate(ti.until + 'T00:00:00+07:00')}` : 'ระดับแรก ไม่มีวันหมดอายุ'}</span>
+        ${ti.multiplier > 1 ? `<span class="muted small">${tr('ได้{u} ×{multiplier}', { u: esc(unit()), multiplier: ti.multiplier })}</span>` : ''}
+        <span class="muted small">${ti.until ? `${tr('คงระดับถึง {date}', { date: fmtDate(ti.until + 'T00:00:00+07:00') })}` : tr('ระดับแรก ไม่มีวันหมดอายุ')}</span>
       </div>
-      <p class="small">${u}จากการซื้อ 12 เดือนล่าสุด <b>${fmtNum(ti.points12m)} ${u}</b>${ti.next ? ` · อีก ${fmtNum(ti.next.remaining)} ${u} ถึงระดับ ${esc(ti.next.name)}` : ' · ระดับสูงสุดแล้ว'}</p>
+      <p class="small">${tr('{u}จากการซื้อ 12 เดือนล่าสุด <b>{n} {u2}</b>{n2}', { u, n: fmtNum(ti.points12m), u2: u, n2: ti.next ? ` ${tr('· อีก {n} {u} ถึงระดับ {name}', { n: fmtNum(ti.next.remaining), u, name: esc(ti.next.name) })}` : tr(' · ระดับสูงสุดแล้ว') })}</p>
       ${ti.next ? `<div class="tier-bar"><i style="width:${pct}%"></i></div>` : ''}
       ${hist.length ? `
       <div class="tbl-wrap tier-hist"><table class="tbl">
-        <thead><tr><th>วันเวลา</th><th>เปลี่ยน</th><th>เหตุ</th><th class="num">${u} 12 เดือน</th><th>โดย</th></tr></thead>
+        <thead><tr><th>${tr('วันเวลา')}</th><th>${tr('เปลี่ยน')}</th><th>${tr('เหตุ')}</th><th class="num">${tr('{u} 12 เดือน', { u })}</th><th>${tr('โดย')}</th></tr></thead>
         <tbody>${hist.map(h => `<tr>
           <td class="nowrap">${fmtDateTime(h.date)}</td>
-          <td class="nowrap">${h.from ? esc(h.fromName || name(h.from) || 'ระดับเดิม') + ' → ' : ''}${esc(h.toName || name(h.to) || 'ระดับเดิม')}</td>
-          <td class="nowrap">${esc(TIER_REASON[h.reason] || h.reason)}</td>
+          <td class="nowrap">${h.from ? esc(h.fromName || name(h.from) || tr('ระดับเดิม')) + ' → ' : ''}${esc(h.toName || name(h.to) || tr('ระดับเดิม'))}</td>
+          <td class="nowrap">${esc(tr(TIER_REASON[h.reason] || h.reason))}</td>
           <td class="num">${h.points12m != null ? fmtNum(h.points12m) : h.spend12m != null ? '฿' + fmtMoney(h.spend12m) : '-'}</td>
           <td>${esc(h.by)}</td>
         </tr>`).join('')}</tbody></table></div>` : ''}
@@ -2398,15 +2440,15 @@ function openMemberTier() {
   const m = S.member;
   if (!m || !isOwner() || !m.tierInfo) return;
   openModal(`
-    <div class="modal-head"><h2>เปลี่ยนระดับสมาชิก</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tr('เปลี่ยนระดับสมาชิก')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <p><b>${esc(m.name)}</b> <span class="muted mono">${esc(m.memberId)}</span></p>
     <form class="form" data-form="member-tier" autocomplete="off">
-      <label class="field"><span>ระดับ</span><select name="tierId" class="select">${(S.memberTiers || []).map(t => `<option value="${esc(t.id)}" ${t.id === m.tierInfo.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
-      <label class="field"><span>เหตุผล <em>*</em></span><input name="reason" maxlength="150" placeholder="เช่น ลูกค้า VIP ของร้าน"></label>
-      <p class="muted small">คงระดับนี้ 12 เดือนนับจากวันนี้ (ระดับแรกไม่มีวันหมดอายุ) แล้วเป็นไปตามยอดซื้อตามปกติ · บันทึกชื่อคุณและเหตุผลไว้ในประวัติ</p>
+      <label class="field"><span>${tr('ระดับ')}</span><select name="tierId" class="select">${(S.memberTiers || []).map(t => `<option value="${esc(t.id)}" ${t.id === m.tierInfo.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></label>
+      <label class="field"><span>${tr('เหตุผล <em>*</em>')}</span><input name="reason" maxlength="150" placeholder="${tr('เช่น ลูกค้า VIP ของร้าน')}"></label>
+      <p class="muted small">${tr('คงระดับนี้ 12 เดือนนับจากวันนี้ (ระดับแรกไม่มีวันหมดอายุ) แล้วเป็นไปตามยอดซื้อตามปกติ · บันทึกชื่อคุณและเหตุผลไว้ในประวัติ')}</p>
       <div class="modal-actions">
-        <button class="btn" type="button" data-act="close">ยกเลิก</button>
-        <button class="btn btn-primary" type="submit">บันทึก</button>
+        <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+        <button class="btn btn-primary" type="submit">${tr('บันทึก')}</button>
       </div>
     </form>`);
 }
@@ -2415,13 +2457,13 @@ async function saveMemberTier(form) {
   const m = S.member;
   const tierId = form.elements.tierId.value;
   const reason = form.elements.reason.value.trim();
-  if (reason.length < 3) return toast('กรุณาใส่เหตุผล', 'err');
+  if (reason.length < 3) return toast(tr('กรุณาใส่เหตุผล'), 'err');
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
   try {
     await S.api.call('adminMemberTier', { memberId: m.memberId, tierId, reason });
     closeModal();
-    toast('เปลี่ยนระดับแล้ว', 'ok');
+    toast(tr('เปลี่ยนระดับแล้ว'), 'ok');
     loadMember(m.memberId);
   } catch (e) {
     setBusy(btn, false);
@@ -2471,64 +2513,64 @@ function renderBrand(r) {
   const text = (name, label, placeholder, max) => `
     <label class="field"><span>${esc(label)}</span><input name="${name}" value="${esc(v[name])}" maxlength="${max}" placeholder="${esc(placeholder)}" ${dis}></label>`;
   // ข้อความหน้าจอ: ว่าง = ลูกค้าเห็นข้อความตั้งต้นภาษาอังกฤษของระบบ (ไม่ใช่ภาษาไทย) → placeholder บอกข้อความนั้น
-  const enName = (base.nameEn || (HAS_THAI.test(base.name || '') ? '' : base.name)) || 'ชื่อร้าน';
-  const textEn = (name, label, sysDefault, max) => enField(label, name, v[name], max, { placeholder: 'ว่าง = ' + sysDefault, disabled: !owner });
+  const enName = (base.nameEn || (HAS_THAI.test(base.name || '') ? '' : base.name)) || tr('ชื่อร้าน');
+  const textEn = (name, label, sysDefault, max) => enField(label, name, v[name], max, { placeholder: tr('ว่าง = ') + sysDefault, disabled: !owner });
   const policyEnHint = v.PRIVACY_TEXT && !v.PRIVACY_TEXT_EN
-    ? '<small class="warn-text">ร้านแก้ฉบับไทยเองแล้ว แต่ยังไม่มีฉบับภาษาอังกฤษ — ลูกค้าที่เลือกภาษาอังกฤษจะเห็นฉบับไทย</small>'
+    ? `<small class="warn-text">${tr('ร้านแก้ฉบับไทยเองแล้ว แต่ยังไม่มีฉบับภาษาอังกฤษ — ลูกค้าที่เลือกภาษาอังกฤษจะเห็นฉบับไทย')}</small>`
     : '';
   document.getElementById('view').innerHTML = `
-    ${pageHead('หน้าตาร้าน', owner ? 'แก้แล้วลูกค้าเห็นทันที · ช่องที่เว้นว่างใช้ค่าตั้งต้นของร้าน' : 'ผู้จัดการดูได้อย่างเดียว เจ้าของร้านเป็นคนแก้')}
+    ${pageHead(tr('หน้าตาร้าน'), owner ? tr('แก้แล้วลูกค้าเห็นทันที · ช่องที่เว้นว่างใช้ค่าตั้งต้นของร้าน') : tr('ผู้จัดการดูได้อย่างเดียว เจ้าของร้านเป็นคนแก้'))}
     <div class="brand-layout">
       <form class="card adm-card form brand-form" data-form="brand" autocomplete="off">
-        <h2 class="form-section">ชื่อและโลโก้</h2>
-        ${text('SHOP_NAME', 'ชื่อร้าน', base.name || '', 60)}
-        ${enField('ชื่อร้าน', 'SHOP_NAME_EN', v.SHOP_NAME_EN, 60, { placeholder: base.nameEn || 'ว่าง = ใช้ชื่อร้านภาษาไทย (ชื่อที่เป็นภาษาอังกฤษอยู่แล้ว ไม่ต้องกรอก)', disabled: !owner })}
-        ${imageField(v.LOGO_URL, 'logo-preview', 'LOGO_URL', 'โลโก้ (รูปสี่เหลี่ยมจัตุรัส)', !owner, 'logo')}
-        <h2 class="form-section">สไตล์และสี</h2>
-        <label class="field"><span>สไตล์</span>
+        <h2 class="form-section">${tr('ชื่อและโลโก้')}</h2>
+        ${text('SHOP_NAME', tr('ชื่อร้าน'), base.name || '', 60)}
+        ${enField(tr('ชื่อร้าน'), 'SHOP_NAME_EN', v.SHOP_NAME_EN, 60, { placeholder: base.nameEn || tr('ว่าง = ใช้ชื่อร้านภาษาไทย (ชื่อที่เป็นภาษาอังกฤษอยู่แล้ว ไม่ต้องกรอก)'), disabled: !owner })}
+        ${imageField(v.LOGO_URL, 'logo-preview', 'LOGO_URL', tr('โลโก้ (รูปสี่เหลี่ยมจัตุรัส)'), !owner, 'logo')}
+        <h2 class="form-section">${tr('สไตล์และสี')}</h2>
+        <label class="field"><span>${tr('สไตล์')}</span>
           <select name="THEME" class="select" ${dis}>
-            <option value="">ค่าตั้งต้นของร้าน (${esc(THEME_LABEL[base.theme] || base.theme || 'หรู โทนเข้ม')})</option>
-            ${Object.keys(THEME_LABEL).map(k => `<option value="${k}" ${v.THEME === k ? 'selected' : ''}>${THEME_LABEL[k]}</option>`).join('')}
+            <option value="">${tr('ค่าตั้งต้นของร้าน ({x})', { x: esc(tr(THEME_LABEL[base.theme] || base.theme || 'หรู โทนเข้ม')) })}</option>
+            ${Object.keys(THEME_LABEL).map(k => `<option value="${k}" ${v.THEME === k ? 'selected' : ''}>${tr(THEME_LABEL[k])}</option>`).join('')}
           </select></label>
         <div class="color-list">${BRAND_COLORS.map(([k, label, hint, slot]) => `
           <div class="color-row">
-            <span class="color-label">${esc(label)}<small>${esc(hint)}</small></span>
+            <span class="color-label">${esc(tr(label))}<small>${esc(tr(hint))}</small></span>
             <span class="color-input">
-              <input type="color" data-color="${k}" value="${esc(HEX.test(v[k]) ? v[k] : defaultColor(slot, theme))}" aria-label="เลือก${esc(label)}" ${dis}>
-              <input name="${k}" class="hex" value="${esc(v[k])}" maxlength="7" placeholder="ค่าเดิม" aria-label="รหัส${esc(label)}" ${dis}>
-              ${owner ? `<button type="button" class="link" data-act="color-reset" data-id="${k}">ค่าเดิม</button>` : ''}
+              <input type="color" data-color="${k}" value="${esc(HEX.test(v[k]) ? v[k] : defaultColor(slot, theme))}" aria-label="${tr('เลือก{label}', { label: esc(tr(label)) })}" ${dis}>
+              <input name="${k}" class="hex" value="${esc(v[k])}" maxlength="7" placeholder="${tr('ค่าเดิม')}" aria-label="${tr('รหัส{label}', { label: esc(tr(label)) })}" ${dis}>
+              ${owner ? `<button type="button" class="link" data-act="color-reset" data-id="${k}">${tr('ค่าเดิม')}</button>` : ''}
             </span>
           </div>`).join('')}
         </div>
-        <h2 class="form-section">ข้อความ</h2>
+        <h2 class="form-section">${tr('ข้อความ')}</h2>
         <div class="form-grid">
-          ${text('TEXT_POINT_UNIT', 'คำเรียกแต้ม', (base.texts && base.texts.pointUnit) || 'แต้ม', 20)}
-          ${text('TEXT_GREETING', 'ข้อความทักทายหน้าแรก', (base.texts && base.texts.greeting) || 'สวัสดี', 60)}
-          ${textEn('TEXT_POINT_UNIT_EN', 'คำเรียกแต้ม', 'points (ใส่แบบพหูพจน์ เช่น stars)', 20)}
-          ${textEn('TEXT_GREETING_EN', 'ข้อความทักทายหน้าแรก', EN_TEXT['สวัสดี'], 60)}
+          ${text('TEXT_POINT_UNIT', tr('คำเรียกแต้ม'), (base.texts && base.texts.pointUnit) || 'แต้ม', 20)}
+          ${text('TEXT_GREETING', tr('ข้อความทักทายหน้าแรก'), (base.texts && base.texts.greeting) || 'สวัสดี', 60)}
+          ${textEn('TEXT_POINT_UNIT_EN', tr('คำเรียกแต้ม'), tr('points (ใส่แบบพหูพจน์ เช่น stars)'), 20)}
+          ${textEn('TEXT_GREETING_EN', tr('ข้อความทักทายหน้าแรก'), EN_TEXT['สวัสดี'], 60)}
         </div>
-        ${text('TEXT_REGISTER_TITLE', 'หัวข้อหน้าสมัครสมาชิก', (base.texts && base.texts.registerTitle) || 'สมัครสมาชิก ' + (base.name || ''), 80)}
-        ${textEn('TEXT_REGISTER_TITLE_EN', 'หัวข้อหน้าสมัครสมาชิก', EN_TEXT['สมัครสมาชิก {shop}'].replace('{shop}', enName), 80)}
-        ${text('TEXT_REGISTER_SUBTITLE', 'คำอธิบายหน้าสมัครสมาชิก', (base.texts && base.texts.registerSubtitle) || 'สะสมแต้มทุกครั้งที่ซื้อ แลกของรางวัลและสิทธิพิเศษ', 150)}
-        ${textEn('TEXT_REGISTER_SUBTITLE_EN', 'คำอธิบายหน้าสมัครสมาชิก', EN_TEXT['สะสม{u}ทุกครั้งที่ซื้อ แลกของรางวัลและสิทธิพิเศษ'].replace('{u}', 'points'), 150)}
-        <h2 class="form-section">นโยบายความเป็นส่วนตัว</h2>
-        <label class="field"><span>ข้อความที่ลูกค้าอ่านตอนสมัคร <small>ตอนนี้เป็นฉบับที่ ${esc(r.consentVersion)}</small></span>
+        ${text('TEXT_REGISTER_TITLE', tr('หัวข้อหน้าสมัครสมาชิก'), (base.texts && base.texts.registerTitle) || 'สมัครสมาชิก ' + (base.name || ''), 80)}
+        ${textEn('TEXT_REGISTER_TITLE_EN', tr('หัวข้อหน้าสมัครสมาชิก'), EN_TEXT['สมัครสมาชิก {shop}'].replace('{shop}', enName), 80)}
+        ${text('TEXT_REGISTER_SUBTITLE', tr('คำอธิบายหน้าสมัครสมาชิก'), (base.texts && base.texts.registerSubtitle) || 'สะสมแต้มทุกครั้งที่ซื้อ แลกของรางวัลและสิทธิพิเศษ', 150)}
+        ${textEn('TEXT_REGISTER_SUBTITLE_EN', tr('คำอธิบายหน้าสมัครสมาชิก'), EN_TEXT['สะสม{u}ทุกครั้งที่ซื้อ แลกของรางวัลและสิทธิพิเศษ'].replace('{u}', 'points'), 150)}
+        <h2 class="form-section">${tr('นโยบายความเป็นส่วนตัว')}</h2>
+        <label class="field"><span>${tr('ข้อความที่ลูกค้าอ่านตอนสมัคร')} <small>${tr('ตอนนี้เป็นฉบับที่ {consentVersion}', { consentVersion: esc(r.consentVersion) })}</small></span>
           <textarea name="PRIVACY_TEXT" rows="9" maxlength="3000" placeholder="${esc((base.legal && base.legal.privacyText) || '')}" ${dis}>${esc(v.PRIVACY_TEXT)}</textarea>
           ${r.policyAccepted
             // ระบบใหม่ (PDPA ขั้นที่ 2): ลูกค้าเดิมต้องกดยอมรับฉบับใหม่ก่อนใช้บัตร + บอกว่ายอมรับแล้วกี่คน
-            ? `<small>แก้แล้วจะเป็นฉบับที่ ${next} อัตโนมัติ — ลูกค้าเดิมจะถูกขอให้กดยอมรับฉบับใหม่ตอนเปิดบัตรครั้งถัดไป (แลกของรางวัลไม่ได้จนกว่าจะยอมรับ / พนักงานยังบันทึกยอดให้ได้) · ว่าง = ใช้ข้อความตั้งต้นของร้าน</small>
-               <small class="policy-count">ยอมรับฉบับที่ ${esc(r.consentVersion)} แล้ว <b>${fmtNum(r.policyAccepted.accepted)}</b> จาก ${fmtNum(r.policyAccepted.total)} คน</small>`
-            : `<small>แก้แล้วจะเป็นฉบับที่ ${next} อัตโนมัติ — ลูกค้าที่สมัครหลังจากนี้ยอมรับฉบับใหม่ ส่วนลูกค้าเก่ายังบันทึกเป็นฉบับเดิม (ตามที่ PDPA ต้องการ) · ว่าง = ใช้ข้อความตั้งต้นของร้าน</small>`}</label>
-        ${enField('นโยบายความเป็นส่วนตัว (ฉบับแปล)', 'PRIVACY_TEXT_EN', v.PRIVACY_TEXT_EN, 3000, {
+            ? `<small>${tr('แก้แล้วจะเป็นฉบับที่ {next} อัตโนมัติ — ลูกค้าเดิมจะถูกขอให้กดยอมรับฉบับใหม่ตอนเปิดบัตรครั้งถัดไป (แลกของรางวัลไม่ได้จนกว่าจะยอมรับ / พนักงานยังบันทึกยอดให้ได้) · ว่าง = ใช้ข้อความตั้งต้นของร้าน', { next })}</small>
+               <small class="policy-count">${tr('ยอมรับฉบับที่ {consentVersion} แล้ว <b>{n}</b> จาก {n2} คน', { consentVersion: esc(r.consentVersion), n: fmtNum(r.policyAccepted.accepted), n2: fmtNum(r.policyAccepted.total) })}</small>`
+            : `<small>${tr('แก้แล้วจะเป็นฉบับที่ {next} อัตโนมัติ — ลูกค้าที่สมัครหลังจากนี้ยอมรับฉบับใหม่ ส่วนลูกค้าเก่ายังบันทึกเป็นฉบับเดิม (ตามที่ PDPA ต้องการ) · ว่าง = ใช้ข้อความตั้งต้นของร้าน', { next })}</small>`}</label>
+        ${enField(tr('นโยบายความเป็นส่วนตัว (ฉบับแปล)'), 'PRIVACY_TEXT_EN', v.PRIVACY_TEXT_EN, 3000, {
           rows: 9, disabled: !owner,
-          placeholder: v.PRIVACY_TEXT ? 'ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นฉบับไทย' : ((base.legal && base.legal.privacyTextEn) || 'ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นฉบับไทย'),
-          hint: '— แก้ฉบับอังกฤษไม่ขึ้นฉบับใหม่ ลูกค้าไม่ต้องกดยอมรับใหม่ (ลูกค้าเห็นหมายเหตุว่าฉบับไทยใช้บังคับ)'
+          placeholder: v.PRIVACY_TEXT ? tr('ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นฉบับไทย') : ((base.legal && base.legal.privacyTextEn) || tr('ว่าง = ลูกค้าที่เลือกภาษาอังกฤษเห็นฉบับไทย')),
+          hint: tr('— แก้ฉบับอังกฤษไม่ขึ้นฉบับใหม่ ลูกค้าไม่ต้องกดยอมรับใหม่ (ลูกค้าเห็นหมายเหตุว่าฉบับไทยใช้บังคับ)')
         }).replace('</label>', policyEnHint + '</label>')}
-        ${owner ? '<div class="form-actions"><button class="btn btn-primary" type="submit">บันทึกหน้าตาร้าน</button></div>' : ''}
+        ${owner ? `<div class="form-actions"><button class="btn btn-primary" type="submit">${tr('บันทึกหน้าตาร้าน')}</button></div>` : ''}
       </form>
       <aside class="brand-side">
-        <div class="muted small">ตัวอย่างหน้าจอลูกค้า (เปลี่ยนตามที่แก้ทันที)</div>
-        ${englishFeature() ? `<div class="lang-switch pv-lang" role="group" aria-label="ภาษาของตัวอย่าง">${['th', 'en'].map(l => `<button type="button" data-act="brand-lang" data-id="${l}" aria-pressed="${(S.previewLang || 'th') === l}">${l.toUpperCase()}</button>`).join('')}</div>` : ''}
+        <div class="muted small">${tr('ตัวอย่างหน้าจอลูกค้า (เปลี่ยนตามที่แก้ทันที)')}</div>
+        ${englishFeature() ? `<div class="lang-switch pv-lang" role="group" aria-label="${tr('ภาษาของตัวอย่าง')}">${['th', 'en'].map(l => `<button type="button" data-act="brand-lang" data-id="${l}" aria-pressed="${(S.previewLang || 'th') === l}">${l.toUpperCase()}</button>`).join('')}</div>` : ''}
         <div id="brand-preview"></div>
       </aside>
     </div>`;
@@ -2605,7 +2647,8 @@ function updateBrandPreview() {
   const en = englishFeature() && S.previewLang === 'en';
   document.querySelectorAll('.pv-lang button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.id === (en ? 'en' : 'th'))));
   const tx = k => (en ? c.textsEn && c.textsEn[k] : c.texts && c.texts[k]);
-  const L = (th, key) => (en ? EN_TEXT[key] || th : th);
+  // ข้อความในตัวอย่าง = สิ่งที่ลูกค้าเห็น → ไทยคงเป็นไทยแม้หลังบ้านเป็นอังกฤษ (ไม่ผ่าน tr) / อังกฤษใช้คำแปลของหน้าลูกค้า
+  const L = (th, key) => (en ? EN_TEXT[key || th] || th : th);
   const unitText = tx('pointUnit') || (en ? 'points' : 'แต้ม');
   const name = (en && c.nameEn) || c.name || '';
   const logo = c.logo ? S.shop.asset(c.logo) : '';
@@ -2613,10 +2656,10 @@ function updateBrandPreview() {
     <div class="pv" style="${Object.entries(vars).map(([n, x]) => `${n}:${esc(x)}`).join(';')}" lang="${en ? 'en' : 'th'}">
       <div class="pv-head">
         ${logo ? `<img class="pv-logo" src="${esc(logo)}" alt="" referrerpolicy="no-referrer">` : `<div class="pv-logo pv-logo-text">${esc(c.logoText || (c.name || '?').slice(0, 1))}</div>`}
-        <div><div class="pv-hello">${esc(tx('greeting') || L('สวัสดี', 'สวัสดี'))}</div><div class="pv-name">${en ? 'Sample Customer' : 'ลูกค้าตัวอย่าง'}</div></div>
+        <div><div class="pv-hello">${esc(tx('greeting') || L('สวัสดี'))}</div><div class="pv-name">${en ? 'Sample Customer' : 'ลูกค้าตัวอย่าง'}</div></div>
       </div>
       <div class="pv-card">
-        <div class="pv-card-top"><span>${esc(L('บัตรสมาชิก', 'บัตรสมาชิก'))}</span><b>${esc(name)}</b></div>
+        <div class="pv-card-top"><span>${esc(L('บัตรสมาชิก'))}</span><b>${esc(name)}</b></div>
         <div class="pv-points">1,250 <small>${esc(unitText)}</small></div>
       </div>
       <div class="pv-body">
@@ -2632,21 +2675,21 @@ function saveBrand(form) {
   const values = {};
   brandKeys().forEach(k => { if (form.elements[k]) values[k] = form.elements[k].value.trim(); });
   const badColor = BRAND_COLORS.find(([k]) => values[k] && !HEX.test(values[k]));
-  if (badColor) return toast(`${badColor[1]} ต้องเป็นรหัสสีแบบ #RRGGBB หรือเว้นว่าง`, 'err');
+  if (badColor) return toast(`${tr('{x} ต้องเป็นรหัสสีแบบ #RRGGBB หรือเว้นว่าง', { x: badColor[1] })}`, 'err');
   const changed = Object.keys(values).filter(k => values[k] !== String(S.brandValues[k] || '').trim());
-  if (!changed.length) return toast('ยังไม่ได้เปลี่ยนค่าใด', '');
+  if (!changed.length) return toast(tr('ยังไม่ได้เปลี่ยนค่าใด'), '');
   S.pendingBrand = values;
   if (!changed.includes('PRIVACY_TEXT')) return doSaveBrand(values, form.querySelector('button[type="submit"]'));
   const next = (parseInt(S.consentVersion, 10) || 1) + 1;
   openModal(`
-    <div class="modal-head"><h2>ยืนยันแก้นโยบายความเป็นส่วนตัว</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-    <p class="notice">${icon('shield', 18)}<span>นโยบายจะเปลี่ยนเป็น <b>ฉบับที่ ${next}</b> ลูกค้าที่สมัครหลังจากนี้ยอมรับฉบับใหม่ ส่วนลูกค้าเก่ายังบันทึกเป็นฉบับเดิม ถ้าเป็นการเปลี่ยนสาระสำคัญ ควรแจ้งลูกค้าเก่าด้วย</span></p>
+    <div class="modal-head"><h2>${tr('ยืนยันแก้นโยบายความเป็นส่วนตัว')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
+    <p class="notice">${icon('shield', 18)}<span>${tr('นโยบายจะเปลี่ยนเป็น <b>ฉบับที่ {next}</b> ลูกค้าที่สมัครหลังจากนี้ยอมรับฉบับใหม่ ส่วนลูกค้าเก่ายังบันทึกเป็นฉบับเดิม ถ้าเป็นการเปลี่ยนสาระสำคัญ ควรแจ้งลูกค้าเก่าด้วย', { next })}</span></p>
     ${englishFeature() && !changed.includes('PRIVACY_TEXT_EN') ? `<p class="notice notice-warn">${icon('alert', 18)}<span>${values.PRIVACY_TEXT_EN
-      ? 'ฉบับภาษาอังกฤษยังเป็นข้อความเดิม — แก้ให้ตรงกับฉบับไทยด้วย (ลูกค้าที่เลือกภาษาอังกฤษอ่านฉบับนี้)'
-      : 'ยังไม่มีฉบับภาษาอังกฤษที่ตรงกับฉบับไทยนี้ — ลูกค้าที่เลือกภาษาอังกฤษจะเห็นฉบับไทย'}</span></p>` : ''}
+      ? tr('ฉบับภาษาอังกฤษยังเป็นข้อความเดิม — แก้ให้ตรงกับฉบับไทยด้วย (ลูกค้าที่เลือกภาษาอังกฤษอ่านฉบับนี้)')
+      : tr('ยังไม่มีฉบับภาษาอังกฤษที่ตรงกับฉบับไทยนี้ — ลูกค้าที่เลือกภาษาอังกฤษจะเห็นฉบับไทย')}</span></p>` : ''}
     <div class="modal-actions">
-      <button class="btn" data-act="close">ยกเลิก</button>
-      <button class="btn btn-primary" data-act="brand-confirm">บันทึก</button>
+      <button class="btn" data-act="close">${tr('ยกเลิก')}</button>
+      <button class="btn btn-primary" data-act="brand-confirm">${tr('บันทึก')}</button>
     </div>`);
 }
 
@@ -2663,8 +2706,8 @@ async function doSaveBrand(values, btn) {
     renderShell();
     markNav();
     renderBrand(r);
-    const policy = r.consentVersion !== prevVersion ? ` · นโยบายเป็นฉบับที่ ${r.consentVersion}` : '';
-    toast(r.changed ? `บันทึกแล้ว ลูกค้าเห็นหน้าตาใหม่ทันที${policy}` : 'ค่าเหมือนเดิม ไม่มีอะไรเปลี่ยน', 'ok');
+    const policy = r.consentVersion !== prevVersion ? ` ${tr('· นโยบายเป็นฉบับที่ {consentVersion}', { consentVersion: r.consentVersion })}` : '';
+    toast(r.changed ? `${tr('บันทึกแล้ว ลูกค้าเห็นหน้าตาใหม่ทันที{policy}', { policy })}` : tr('ค่าเหมือนเดิม ไม่มีอะไรเปลี่ยน'), 'ok');
   } catch (e) {
     setBusy(btn, false);
     toast(e.message, 'err');
@@ -2686,10 +2729,12 @@ const SETTING_UI = {
   CONSENT_PRETICKED: { label: 'ติ๊กช่อง "รับข่าวสาร" ไว้ให้ในหน้าสมัคร', type: 'bool', hint: 'ลูกค้าเอาติ๊กออกได้ และยกเลิกทีหลังได้ที่ "แก้ไขข้อมูล"' },
   CONSENT_BONUS_POINTS: { label: 'แต้มเมื่อยินยอมรับข่าวสาร', suffix: 'แต้ม', hint: 'ได้ครั้งเดียวต่อคน · 0 = ไม่ให้' }
 };
-const ON_OFF = { ON: 'เปิด', OFF: 'ปิด' };
+const ON_OFF = { ON: 'เปิด@@สวิตช์', OFF: 'ปิด@@สวิตช์' }; // @@ = คำแปลเฉพาะที่ (On/Off) ภาษาไทยตัดทิ้ง
 // ค่าที่หน้านี้แสดง: เฉพาะที่ตัวกลางส่งมา (ระบบเดิมไม่มีค่าใหม่) + ค่าที่เกี่ยวกับ LINE OA เฉพาะร้านที่มีแพ็กเกจส่งข้อความ
 const settingKeys = () => Object.keys(SETTING_UI).filter(k => (S.settingsItems || []).some(x => x.key === k) && (!SETTING_UI[k].broadcast || broadcastFeature()));
-const settingText = (k, v) => (SETTING_UI[k].type === 'bool' ? ON_OFF[v] || v : v);
+const settingText = (k, v) => (SETTING_UI[k].type === 'bool' ? tr(ON_OFF[v] || v) : v);
+// ชื่อค่าร้าน: ภาษาไทยแทน "แต้ม" ด้วยคำเรียกแต้มของร้าน / ภาษาอังกฤษใช้ {u} ในคำแปล
+const settingLabel = k => (isEn() ? tr(SETTING_UI[k].label, { u: unit(), u1: unitOne() }) : SETTING_UI[k].label.replace('แต้ม', unit()));
 const READONLY_UI = {
   LIFF_ID: 'LIFF ID',
   MEMBER_PREFIX: 'ตัวอักษรนำหน้ารหัสสมาชิก',
@@ -2704,25 +2749,25 @@ function renderSettings(r) {
   S.settingsItems = r.items;
   const owner = isOwner();
   const get = k => (r.items.find(x => x.key === k) || {}).value || '';
-  const unitOf = s => (s === 'แต้ม' ? unit() : s);
+  const unitOf = s => (s === 'แต้ม' ? unit() : tr(s)); // หน่วยอื่น (บาท วัน รายการ) แปลตามภาษา
   document.getElementById('view').innerHTML = `
-    ${pageHead('ตั้งค่าร้าน', owner ? 'แก้แล้วมีผลกับรายการถัดไปทันที' : 'ผู้จัดการดูได้อย่างเดียว เจ้าของร้านเป็นคนแก้')}
+    ${pageHead(tr('ตั้งค่าร้าน'), owner ? tr('แก้แล้วมีผลกับรายการถัดไปทันที') : tr('ผู้จัดการดูได้อย่างเดียว เจ้าของร้านเป็นคนแก้'))}
     <section class="card adm-card">
       <form class="form settings-form" data-form="settings" autocomplete="off">
         ${settingKeys().map(k => `
           <label class="setting-row">
-            <span class="setting-label">${esc(SETTING_UI[k].label.replace('แต้ม', unit()))}${SETTING_UI[k].hint ? `<small>${esc(SETTING_UI[k].hint)}</small>` : ''}</span>
+            <span class="setting-label">${esc(settingLabel(k))}${SETTING_UI[k].hint ? `<small>${esc(tr(SETTING_UI[k].hint))}</small>` : ''}</span>
             <span class="setting-input">${SETTING_UI[k].type === 'bool'
-              ? `<select name="${k}" class="select" ${owner ? '' : 'disabled'}>${Object.keys(ON_OFF).map(v => `<option value="${v}" ${get(k) === v ? 'selected' : ''}>${ON_OFF[v]}</option>`).join('')}</select>`
+              ? `<select name="${k}" class="select" ${owner ? '' : 'disabled'}>${Object.keys(ON_OFF).map(v => `<option value="${v}" ${get(k) === v ? 'selected' : ''}>${tr(ON_OFF[v])}</option>`).join('')}</select>`
               : `<input name="${k}" value="${esc(get(k))}" inputmode="decimal" ${owner ? '' : 'disabled'}><span class="muted">${esc(unitOf(SETTING_UI[k].suffix))}</span>`}</span>
           </label>`).join('')}
-        ${owner ? '<div><button class="btn btn-primary" type="submit">บันทึกการตั้งค่า</button></div>' : ''}
+        ${owner ? `<div><button class="btn btn-primary" type="submit">${tr('บันทึกการตั้งค่า')}</button></div>` : ''}
       </form>
     </section>
     <section class="card adm-card">
-      <div class="card-head"><h2>ค่าระบบ</h2></div>
-      <dl class="kv">${Object.keys(READONLY_UI).map(k => `<dt>${esc(READONLY_UI[k])}</dt><dd class="mono">${esc(get(k) || '-')}</dd>`).join('')}</dl>
-      <p class="muted small">ค่าเหล่านี้เปลี่ยนแล้วกระทบการเข้าสู่ระบบหรือรหัสสมาชิก จึงไม่เปิดให้แก้ที่นี่ ถ้าต้องเปลี่ยนให้ติดต่อผู้ดูแลระบบ · ชื่อร้าน โลโก้ สี และนโยบาย แก้ได้ที่เมนู "หน้าตาร้าน"</p>
+      <div class="card-head"><h2>${tr('ค่าระบบ')}</h2></div>
+      <dl class="kv">${Object.keys(READONLY_UI).map(k => `<dt>${esc(tr(READONLY_UI[k]))}</dt><dd class="mono">${esc(get(k) || '-')}</dd>`).join('')}</dl>
+      <p class="muted small">${tr('ค่าเหล่านี้เปลี่ยนแล้วกระทบการเข้าสู่ระบบหรือรหัสสมาชิก จึงไม่เปิดให้แก้ที่นี่ ถ้าต้องเปลี่ยนให้ติดต่อผู้ดูแลระบบ · ชื่อร้าน โลโก้ สี และนโยบาย แก้ได้ที่เมนู "หน้าตาร้าน"')}</p>
     </section>`;
 }
 
@@ -2734,15 +2779,15 @@ function confirmSettings(form) {
     const after = form.elements[k].value.replace(/,/g, '').trim();
     if (after !== before) changes.push({ key: k, before, after });
   });
-  if (!changes.length) return toast('ยังไม่ได้เปลี่ยนค่าใด', '');
+  if (!changes.length) return toast(tr('ยังไม่ได้เปลี่ยนค่าใด'), '');
   S.pendingSettings = Object.fromEntries(changes.map(c => [c.key, c.after]));
   openModal(`
-    <div class="modal-head"><h2>ยืนยันการตั้งค่า</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-    <dl class="kv">${changes.map(c => `<dt>${esc(SETTING_UI[c.key].label.replace('แต้ม', unit()))}</dt><dd>${esc(settingText(c.key, c.before) || '-')} → <b>${esc(settingText(c.key, c.after) || '-')}</b></dd>`).join('')}</dl>
-    <p class="notice">${icon('alert', 18)}<span>มีผลกับรายการถัดไปทันที ${esc(unit())}ที่ลูกค้าได้ไปแล้วไม่เปลี่ยน</span></p>
+    <div class="modal-head"><h2>${tr('ยืนยันการตั้งค่า')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
+    <dl class="kv">${changes.map(c => `<dt>${esc(settingLabel(c.key))}</dt><dd>${esc(settingText(c.key, c.before) || '-')} → <b>${esc(settingText(c.key, c.after) || '-')}</b></dd>`).join('')}</dl>
+    <p class="notice">${icon('alert', 18)}<span>${tr('มีผลกับรายการถัดไปทันที {u}ที่ลูกค้าได้ไปแล้วไม่เปลี่ยน', { u: esc(unit()) })}</span></p>
     <div class="modal-actions">
-      <button class="btn" data-act="close">ยกเลิก</button>
-      <button class="btn btn-primary" data-act="settings-confirm">บันทึก</button>
+      <button class="btn" data-act="close">${tr('ยกเลิก')}</button>
+      <button class="btn btn-primary" data-act="settings-confirm">${tr('บันทึก')}</button>
     </div>`);
 }
 
@@ -2754,7 +2799,7 @@ async function doSaveSettings(btn) {
     S.pendingSettings = null;
     closeModal();
     renderSettings(r);
-    toast(r.changed ? 'บันทึกการตั้งค่าแล้ว' : 'ค่าเหมือนเดิม ไม่มีอะไรเปลี่ยน', 'ok');
+    toast(r.changed ? tr('บันทึกการตั้งค่าแล้ว') : tr('ค่าเหมือนเดิม ไม่มีอะไรเปลี่ยน'), 'ok');
   } catch (e) {
     setBusy(btn, false);
     toast(e.message, 'err');
@@ -2776,39 +2821,39 @@ function renderTx(r) {
   const staffList = t.staff && !r.staffNames.includes(t.staff) ? [t.staff, ...r.staffNames] : r.staffNames;
   const s = r.summary;
   document.getElementById('view').innerHTML = `
-    ${pageHead('รายการแต้ม', 'ทุกรายการที่ได้หรือใช้แต้ม เรียงจากใหม่ไปเก่า' + branchNote(), exportBtn('transactions'))}
+    ${pageHead(tr('รายการแต้ม'), tr('ทุกรายการที่ได้หรือใช้แต้ม เรียงจากใหม่ไปเก่า') + branchNote(), exportBtn('transactions'))}
     ${rangeBar()}
     <form class="filters" data-form="tx" autocomplete="off">
-      <select name="type" aria-label="ประเภท">
-        ${opt('', 'ทุกประเภท', t.type)}${Object.keys(TX_LABEL).map(k => opt(k, TX_LABEL[k], t.type)).join('')}
+      <select name="type" aria-label="${tr('ประเภท')}">
+        ${opt('', tr('ทุกประเภท'), t.type)}${Object.keys(TX_LABEL).map(k => opt(k, tr(TX_LABEL[k]), t.type)).join('')}
       </select>
-      <select name="staff" aria-label="พนักงาน">
-        ${opt('', 'พนักงานทุกคน', t.staff)}${staffList.map(n => opt(n, n === 'SYSTEM' ? 'ระบบ' : n, t.staff)).join('')}
+      <select name="staff" aria-label="${tr('พนักงาน')}">
+        ${opt('', tr('พนักงานทุกคน'), t.staff)}${staffList.map(n => opt(n, staffLabel(n), t.staff)).join('')}
       </select>
-      <div class="search-box">${icon('search', 18)}<input name="q" value="${esc(t.q)}" placeholder="ชื่อหรือรหัสสมาชิก" enterkeyhint="search"></div>
-      <button class="btn btn-sm btn-primary" type="submit">ค้นหา</button>
+      <div class="search-box">${icon('search', 18)}<input name="q" value="${esc(t.q)}" placeholder="${tr('ชื่อหรือรหัสสมาชิก')}" enterkeyhint="search"></div>
+      <button class="btn btn-sm btn-primary" type="submit">${tr('ค้นหา')}</button>
     </form>
     <div class="sum-row">
-      <span class="chip">${fmtNum(s.count)} รายการ</span>
-      <span class="chip">ยอดซื้อ ฿${fmtMoney(s.sales)}</span>
-      <span class="chip">ได้ +${fmtNum(s.pointsPlus)} ${esc(unit())}</span>
-      <span class="chip">ใช้ −${fmtNum(s.pointsMinus)} ${esc(unit())}</span>
+      <span class="chip">${tr('{n} รายการ', { n: fmtNum(s.count) })}</span>
+      <span class="chip">${tr('ยอดซื้อ ฿{n}', { n: fmtMoney(s.sales) })}</span>
+      <span class="chip">${tr('ได้ +{n} {u}', { n: fmtNum(s.pointsPlus), u: esc(unit()) })}</span>
+      <span class="chip">${tr('ใช้ −{n} {u}', { n: fmtNum(s.pointsMinus), u: esc(unit()) })}</span>
     </div>
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>วันเวลา</th><th>สมาชิก</th><th>ประเภท</th><th>รายละเอียด</th><th class="num">ยอดซื้อ</th><th class="num">${esc(unit())}</th><th class="num">คงเหลือ</th><th>พนักงาน</th>${hasBranches() ? '<th>สาขา</th>' : ''}</tr></thead>
+        <thead><tr><th>${tr('วันเวลา')}</th><th>${tr('สมาชิก')}</th><th>${tr('ประเภท')}</th><th>${tr('รายละเอียด')}</th><th class="num">${tr('ยอดซื้อ')}</th><th class="num">${esc(unit())}</th><th class="num">${tr('คงเหลือ')}</th><th>${tr('พนักงาน')}</th>${hasBranches() ? `<th>${tr('สาขา')}</th>` : ''}</tr></thead>
         <tbody>${r.items.length ? r.items.map(x => `
           <tr class="row-link" data-act="member" data-id="${esc(x.memberId)}">
             <td class="nowrap">${fmtDateTime(x.date)}</td>
             <td>${memberLink(x.memberId, x.memberName)}<div class="m-sub mono">${esc(x.memberId)}</div></td>
-            <td class="nowrap">${esc(TX_LABEL[x.type] || x.type)}</td>
-            <td>${esc(x.detail)}</td>
+            <td class="nowrap">${esc(tr(TX_LABEL[x.type] || x.type))}</td>
+            <td>${esc(txDetail(x))}</td>
             <td class="num">${x.type === 'EARN' ? '฿' + fmtMoney(x.amount) : ''}</td>
             <td class="num tx-points ${ptsClass(x.points)}">${signed(x.points)}</td>
             <td class="num">${fmtNum(x.balance)}</td>
-            <td>${esc(x.staff === 'SYSTEM' ? 'ระบบ' : x.staff || '-')}</td>
+            <td>${esc(staffLabel(x.staff))}</td>
             ${hasBranches() ? `<td class="nowrap">${esc(x.type === 'REDEEM' || x.type === 'WELCOME' || x.type === 'CONSENT' ? '-' : branchName(x.branch))}</td>` : ''}
-          </tr>`).join('') : emptyRow(9, 'ไม่มีรายการในช่วงนี้')}
+          </tr>`).join('') : emptyRow(9, tr('ไม่มีรายการในช่วงนี้'))}
         </tbody></table></div>
     </section>
     ${pager(r, 'tx')}`;
@@ -2824,17 +2869,17 @@ function loadCoupons() {
 
 function renderCoupons(r) {
   const cur = S.coupons.status;
-  const tabs = [['', 'ทั้งหมด', r.all], ['ACTIVE', 'ใช้ได้', r.counts.ACTIVE], ['USED', 'ใช้แล้ว', r.counts.USED], ['EXPIRED', 'หมดอายุ', r.counts.EXPIRED]];
-  if (r.counts.CANCELLED) tabs.push(['CANCELLED', 'ยกเลิก', r.counts.CANCELLED]);
+  const tabs = [['', tr('ทั้งหมด'), r.all], ['ACTIVE', tr('ใช้ได้'), r.counts.ACTIVE], ['USED', tr('ใช้แล้ว'), r.counts.USED], ['EXPIRED', tr('หมดอายุ'), r.counts.EXPIRED]];
+  if (r.counts.CANCELLED) tabs.push(['CANCELLED', tr('ยกเลิก'), r.counts.CANCELLED]);
   document.getElementById('view').innerHTML = `
-    ${pageHead('คูปอง', S.branch ? `คูปองที่ถูกใช้ที่${branchNote()} (ลูกค้าแลกในช่วงที่เลือก)` : 'คูปองที่ลูกค้าแลกในช่วงที่เลือก และสถานะตอนนี้')}
+    ${pageHead(tr('คูปอง'), S.branch ? `${tr('คูปองที่ถูกใช้ที่{x} (ลูกค้าแลกในช่วงที่เลือก)', { x: branchNote() })}` : tr('คูปองที่ลูกค้าแลกในช่วงที่เลือก และสถานะตอนนี้'))}
     ${rangeBar()}
     <div class="chips-scroll status-tabs">${tabs.map(([id, label, n]) => `
       <button type="button" class="chip-btn ${cur === id ? 'active' : ''}" data-act="coupon-status" data-id="${id}">${label} (${fmtNum(n)})</button>`).join('')}
     </div>
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>แลกเมื่อ</th><th>ของรางวัล</th><th>รหัสคูปอง</th><th>สมาชิก</th><th class="num">ใช้${esc(unit())}</th><th>สถานะ</th><th>ใช้ได้ถึง</th><th>ใช้เมื่อ · โดย</th>${hasBranches() ? '<th>ใช้ที่สาขา</th>' : ''}</tr></thead>
+        <thead><tr><th>${tr('แลกเมื่อ')}</th><th>${tr('ของรางวัล')}</th><th>${tr('รหัสคูปอง')}</th><th>${tr('สมาชิก')}</th><th class="num">${tr('ใช้{u}', { u: esc(unit()) })}</th><th>${tr('สถานะ')}</th><th>${tr('ใช้ได้ถึง')}</th><th>${tr('ใช้เมื่อ · โดย')}</th>${hasBranches() ? `<th>${tr('ใช้ที่สาขา')}</th>` : ''}</tr></thead>
         <tbody>${r.items.length ? r.items.map(c => `
           <tr class="row-link" data-act="member" data-id="${esc(c.memberId)}">
             <td class="nowrap">${fmtDateTime(c.issuedAt)}</td>
@@ -2842,11 +2887,11 @@ function renderCoupons(r) {
             <td class="mono">${esc(c.code)}</td>
             <td>${memberLink(c.memberId, c.memberName)}</td>
             <td class="num">${fmtNum(c.pointsUsed)}</td>
-            <td>${statusChip(c.status, COUPON_LABEL[c.status])}</td>
+            <td>${statusChip(c.status, tr(COUPON_LABEL[c.status] || c.status))}</td>
             <td class="nowrap">${fmtDate(c.expiresAt)}</td>
             <td class="nowrap">${c.usedAt ? fmtDateTime(c.usedAt) + (c.usedBy ? ' · ' + esc(c.usedBy) : '') : '-'}</td>
             ${hasBranches() ? `<td class="nowrap">${c.usedAt ? esc(branchName(c.usedBranch)) : '-'}</td>` : ''}
-          </tr>`).join('') : emptyRow(9, 'ไม่มีคูปองในช่วงนี้')}
+          </tr>`).join('') : emptyRow(9, tr('ไม่มีคูปองในช่วงนี้'))}
         </tbody></table></div>
     </section>
     ${pager(r, 'coupons')}`;
@@ -2864,7 +2909,7 @@ const canEdit = s => !s.isMe && (isOwner() || s.role === 'CASHIER');
 
 // สาขาของพนักงาน: เจ้าของร้านใช้ได้ทุกสาขาเสมอ / ALL = ทุกสาขา
 const allBranches = s => s.role === 'OWNER' || !s.branches || s.branches.includes('ALL');
-const staffBranchText = s => (allBranches(s) ? 'ทุกสาขา' : s.branches.map(branchName).join(', '));
+const staffBranchText = s => (allBranches(s) ? tr('ทุกสาขา') : s.branches.map(branchName).join(', '));
 
 function renderStaff(r) {
   S.staffItems = r.items;
@@ -2874,40 +2919,40 @@ function renderStaff(r) {
   const items = S.branch ? r.items.filter(s => s.status === 'PENDING' || allBranches(s) || s.branches.includes(S.branch)) : r.items;
   const withBranch = hasBranches();
   document.getElementById('view').innerHTML = `
-    ${pageHead('พนักงาน', (pending ? `<b>${fmtNum(pending)} คนรออนุมัติ</b>` : `${fmtNum(items.length)} คน`) + branchNote())}
+    ${pageHead(tr('พนักงาน'), (pending ? `${tr('<b>{n} คนรออนุมัติ</b>', { n: fmtNum(pending) })}` : `${tr('{n} คน', { n: fmtNum(items.length) })}`) + branchNote())}
     ${withBranch ? `<div class="filters">${branchSelect()}</div>` : ''}
     <section class="card adm-card invite">
       <div class="grow">
-        <b>เพิ่มพนักงานใหม่</b>
-        <p class="muted small">ส่งลิงก์นี้ให้พนักงานทาง LINE ส่วนตัว เมื่อเปิดแล้วชื่อจะขึ้นในรายการด้านล่างให้กดอนุมัติ</p>
+        ${tr('<b>เพิ่มพนักงานใหม่</b>')}
+        <p class="muted small">${tr('ส่งลิงก์นี้ให้พนักงานทาง LINE ส่วนตัว เมื่อเปิดแล้วชื่อจะขึ้นในรายการด้านล่างให้กดอนุมัติ')}</p>
         <code>${esc(link)}</code>
       </div>
-      <button class="btn btn-sm" data-act="copy" data-text="${esc(link)}">${icon('copy', 16)} คัดลอกลิงก์</button>
+      <button class="btn btn-sm" data-act="copy" data-text="${esc(link)}">${icon('copy', 16)} ${tr('คัดลอกลิงก์')}</button>
     </section>
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>ชื่อ</th><th>บทบาท</th>${withBranch ? '<th>สาขา</th>' : ''}<th>สถานะ</th><th>ขอสิทธิ์เมื่อ</th><th></th></tr></thead>
+        <thead><tr><th>${tr('ชื่อ')}</th><th>${tr('บทบาท')}</th>${withBranch ? `<th>${tr('สาขา')}</th>` : ''}<th>${tr('สถานะ')}</th><th>${tr('ขอสิทธิ์เมื่อ')}</th><th></th></tr></thead>
         <tbody>${items.length ? items.map(s => `
           <tr>
-            <td class="strong">${esc(s.name || '-')}${s.isMe ? ' <span class="chip">คุณ</span>' : ''}</td>
-            <td>${esc(ROLE_LABEL[s.role] || s.role)}</td>
+            <td class="strong">${esc(s.name || '-')}${s.isMe ? ` <span class="chip">${tr('คุณ')}</span>` : ''}</td>
+            <td>${esc(tr(ROLE_LABEL[s.role] || s.role))}</td>
             ${withBranch ? `<td>${s.status === 'PENDING' ? '-' : esc(staffBranchText(s))}</td>` : ''}
-            <td>${statusChip(s.status, STAFF_STATUS_LABEL[s.status])}</td>
+            <td>${statusChip(s.status, tr(STAFF_STATUS_LABEL[s.status] || s.status))}</td>
             <td class="nowrap">${s.requestedAt ? fmtDateTime(s.requestedAt) : '-'}</td>
             <td class="actions">${canEdit(s)
               ? (s.status === 'PENDING'
-                ? `<button class="btn btn-sm btn-primary" data-act="staff-edit" data-id="${esc(s.userId)}">${icon('check', 16)} อนุมัติ</button>`
-                : `<button class="btn btn-sm" data-act="staff-edit" data-id="${esc(s.userId)}">${icon('edit', 16)} แก้ไข</button>`)
+                ? `<button class="btn btn-sm btn-primary" data-act="staff-edit" data-id="${esc(s.userId)}">${icon('check', 16)} ${tr('อนุมัติ')}</button>`
+                : `<button class="btn btn-sm" data-act="staff-edit" data-id="${esc(s.userId)}">${icon('edit', 16)} ${tr('แก้ไข')}</button>`)
               : ''}</td>
-          </tr>`).join('') : emptyRow(6, 'ยังไม่มีพนักงาน')}
+          </tr>`).join('') : emptyRow(6, tr('ยังไม่มีพนักงาน'))}
         </tbody></table></div>
     </section>
     <section class="card adm-card">
-      <div class="card-head"><h2>แต่ละบทบาททำอะไรได้</h2></div>
+      <div class="card-head"><h2>${tr('แต่ละบทบาททำอะไรได้')}</h2></div>
       <dl class="kv roles">
-        <dt>แคชเชียร์</dt><dd>บันทึกยอดซื้อ ใช้คูปอง (เห็นเบอร์ลูกค้าแค่ 4 ตัวท้าย)</dd>
-        <dt>ผู้จัดการ</dt><dd>ทำได้เหมือนแคชเชียร์ + ปรับแต้ม + ดูหลังบ้าน + อนุมัติแคชเชียร์</dd>
-        <dt>เจ้าของร้าน</dt><dd>ทำได้ทุกอย่าง + เห็นเบอร์และวันเกิดลูกค้า + ส่งออกไฟล์ + ตั้งผู้จัดการ</dd>
+        <dt>${tr('แคชเชียร์')}</dt><dd>${tr('บันทึกยอดซื้อ ใช้คูปอง (เห็นเบอร์ลูกค้าแค่ 4 ตัวท้าย)')}</dd>
+        <dt>${tr('ผู้จัดการ')}</dt><dd>${tr('ทำได้เหมือนแคชเชียร์ + ปรับแต้ม + ดูหลังบ้าน + อนุมัติแคชเชียร์')}</dd>
+        <dt>${tr('เจ้าของร้าน')}</dt><dd>${tr('ทำได้ทุกอย่าง + เห็นเบอร์และวันเกิดลูกค้า + ส่งออกไฟล์ + ตั้งผู้จัดการ')}</dd>
       </dl>
     </section>`;
 }
@@ -2919,18 +2964,18 @@ function openStaffEdit(userId) {
   const roles = isOwner() ? ['CASHIER', 'ADMIN', 'OWNER'] : ['CASHIER'];
   const status = approving ? 'ACTIVE' : s.status;
   openModal(`
-    <div class="modal-head"><h2>${approving ? 'อนุมัติพนักงาน' : 'แก้ไขพนักงาน'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${approving ? tr('อนุมัติพนักงาน') : tr('แก้ไขพนักงาน')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <form class="form" data-form="staff-edit" data-id="${esc(s.userId)}" autocomplete="off">
-      <label class="field"><span>ชื่อที่แสดงในรายการ</span><input name="name" value="${esc(s.name)}" maxlength="60"></label>
-      <label class="field"><span>บทบาท</span>
-        <select name="role" class="select">${roles.map(r => `<option value="${r}" ${r === s.role ? 'selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select></label>
-      <label class="field"><span>สถานะ</span>
-        <select name="status" class="select">${['ACTIVE', 'DISABLED', 'PENDING'].map(v => `<option value="${v}" ${v === status ? 'selected' : ''}>${STAFF_STATUS_LABEL[v]}</option>`).join('')}</select></label>
+      <label class="field"><span>${tr('ชื่อที่แสดงในรายการ')}</span><input name="name" value="${esc(s.name)}" maxlength="60"></label>
+      <label class="field"><span>${tr('บทบาท')}</span>
+        <select name="role" class="select">${roles.map(r => `<option value="${r}" ${r === s.role ? 'selected' : ''}>${tr(ROLE_LABEL[r])}</option>`).join('')}</select></label>
+      <label class="field"><span>${tr('สถานะ')}</span>
+        <select name="status" class="select">${['ACTIVE', 'DISABLED', 'PENDING'].map(v => `<option value="${v}" ${v === status ? 'selected' : ''}>${tr(STAFF_STATUS_LABEL[v])}</option>`).join('')}</select></label>
       ${hasBranches() ? staffBranchField(s, approving) : ''}
-      ${isOwner() ? '' : '<p class="muted small">ผู้จัดการแก้ได้เฉพาะแคชเชียร์ ถ้าต้องการตั้งผู้จัดการ ให้เจ้าของร้านทำ</p>'}
+      ${isOwner() ? '' : `<p class="muted small">${tr('ผู้จัดการแก้ได้เฉพาะแคชเชียร์ ถ้าต้องการตั้งผู้จัดการ ให้เจ้าของร้านทำ')}</p>`}
       <div class="modal-actions">
-        <button class="btn" type="button" data-act="close">ยกเลิก</button>
-        <button class="btn btn-primary" type="submit">${approving ? 'อนุมัติ' : 'บันทึก'}</button>
+        <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+        <button class="btn btn-primary" type="submit">${approving ? tr('อนุมัติ') : tr('บันทึก')}</button>
       </div>
     </form>`);
 }
@@ -2941,12 +2986,12 @@ function staffBranchField(s, approving) {
   const all = !approving && (!s.branches || s.branches.includes('ALL'));
   const open = S.branches.filter(b => b.status === 'ACTIVE' || (s.branches || []).includes(b.id));
   return `
-    <fieldset class="field branch-field"><legend>สาขาที่ทำงานได้</legend>
-      <label class="check"><input type="checkbox" name="branchAll" data-branch-all ${all ? 'checked' : ''}><span><b>ทุกสาขา</b> (รวมสาขาที่เพิ่มทีหลัง)</span></label>
+    <fieldset class="field branch-field"><legend>${tr('สาขาที่ทำงานได้')}</legend>
+      <label class="check"><input type="checkbox" name="branchAll" data-branch-all ${all ? 'checked' : ''}><span>${tr('<b>ทุกสาขา</b> (รวมสาขาที่เพิ่มทีหลัง)')}</span></label>
       <div class="branch-checks">${open.map(b => `
-        <label class="check"><input type="checkbox" name="branch" value="${esc(b.id)}" ${!all && !approving && s.branches.includes(b.id) ? 'checked' : ''} ${all ? 'disabled' : ''}><span>${esc(b.name)}${b.status === 'ACTIVE' ? '' : ' (ปิดแล้ว)'}</span></label>`).join('')}
+        <label class="check"><input type="checkbox" name="branch" value="${esc(b.id)}" ${!all && !approving && s.branches.includes(b.id) ? 'checked' : ''} ${all ? 'disabled' : ''}><span>${esc(b.name)}${b.status === 'ACTIVE' ? '' : tr(' (ปิดแล้ว)')}</span></label>`).join('')}
       </div>
-      <small>เจ้าของร้านใช้ได้ทุกสาขาเสมอ / พนักงานหลายสาขาจะเลือกสาขาตอนเปิดหน้าพนักงาน</small>
+      <small>${tr('เจ้าของร้านใช้ได้ทุกสาขาเสมอ / พนักงานหลายสาขาจะเลือกสาขาตอนเปิดหน้าพนักงาน')}</small>
     </fieldset>`;
 }
 
@@ -2962,7 +3007,7 @@ function staffBranchValue(form) {
 
 async function saveStaff(form) {
   const branches = staffBranchValue(form);
-  if (branches && !branches.length) return toast('เลือกอย่างน้อย 1 สาขา หรือติ๊ก "ทุกสาขา"', 'err');
+  if (branches && !branches.length) return toast(tr('เลือกอย่างน้อย 1 สาขา หรือติ๊ก "ทุกสาขา"'), 'err');
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
   try {
@@ -2971,7 +3016,7 @@ async function saveStaff(form) {
       role: form.elements.role.value, status: form.elements.status.value, branches
     });
     closeModal();
-    toast(`บันทึกแล้ว · ${r.staff.name} เป็น${ROLE_LABEL[r.staff.role]} (${STAFF_STATUS_LABEL[r.staff.status]})`, 'ok');
+    toast(`${tr('บันทึกแล้ว · {name} เป็น{x} ({x2})', { name: r.staff.name, x: tr(ROLE_LABEL[r.staff.role]), x2: tr(STAFF_STATUS_LABEL[r.staff.status]) })}`, 'ok');
     loadStaff();
   } catch (e) {
     setBusy(btn, false);
@@ -2997,41 +3042,41 @@ function renderBranches(r) {
   const owner = isOwner();
   const open = r.items.filter(b => b.status === 'ACTIVE').length;
   const limit = branchLimit();
-  const quota = limit === Infinity ? '' : ` · แพ็กเกจของร้านเปิดได้ ${fmtNum(limit)} สาขา`;
+  const quota = limit === Infinity ? '' : ` ${tr('· แพ็กเกจของร้านเปิดได้ {n} สาขา', { n: fmtNum(limit) })}`;
   document.getElementById('view').innerHTML = `
-    ${pageHead('สาขา', (r.items.length ? `เปิดอยู่ ${fmtNum(open)} จาก ${fmtNum(r.items.length)} สาขา` : 'ร้านนี้ยังไม่ได้เพิ่มสาขา') + quota,
-      owner ? `<button class="btn btn-sm btn-primary" data-act="branch-edit" data-id="">+ เพิ่มสาขา</button>` : '')}
+    ${pageHead(tr('สาขา'), (r.items.length ? `${tr('เปิดอยู่ {n} จาก {n2} สาขา', { n: fmtNum(open), n2: fmtNum(r.items.length) })}` : tr('ร้านนี้ยังไม่ได้เพิ่มสาขา')) + quota,
+      owner ? `<button class="btn btn-sm btn-primary" data-act="branch-edit" data-id="">${tr('+ เพิ่มสาขา')}</button>` : '')}
     ${r.items.length ? `
     <section class="card adm-card flush">
       <div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>สาขา</th><th class="num">พนักงาน</th><th class="num">สมาชิกที่สมัคร</th><th>สถานะ</th><th></th></tr></thead>
+        <thead><tr><th>${tr('สาขา')}</th><th class="num">${tr('พนักงาน')}</th><th class="num">${tr('สมาชิกที่สมัคร')}</th><th>${tr('สถานะ')}</th><th></th></tr></thead>
         <tbody>${r.items.map(b => `
           <tr>
             <td><b>${esc(b.name)}</b><div class="m-sub mono">${esc(b.id)}</div></td>
             <td class="num">${fmtNum(b.staff)}</td>
             <td class="num">${fmtNum(b.members)}</td>
-            <td>${b.status === 'ACTIVE' ? statusChip('active', 'เปิดอยู่') : statusChip('inactive', 'ปิดแล้ว')}</td>
+            <td>${b.status === 'ACTIVE' ? statusChip('active', tr('เปิดอยู่')) : statusChip('inactive', tr('ปิดแล้ว'))}</td>
             <td class="actions">
-              ${b.status === 'ACTIVE' ? `<button class="btn btn-sm" data-act="branch-qr" data-id="${esc(b.id)}">${icon('qr', 16)} QR สมัคร</button>` : ''}
-              ${owner ? `<button class="btn btn-sm" data-act="branch-edit" data-id="${esc(b.id)}">${icon('edit', 16)} แก้ไข</button>` : ''}
+              ${b.status === 'ACTIVE' ? `<button class="btn btn-sm" data-act="branch-qr" data-id="${esc(b.id)}">${icon('qr', 16)} ${tr('QR สมัคร')}</button>` : ''}
+              ${owner ? `<button class="btn btn-sm" data-act="branch-edit" data-id="${esc(b.id)}">${icon('edit', 16)} ${tr('แก้ไข')}</button>` : ''}
             </td>
           </tr>`).join('')}
         </tbody></table></div>
     </section>
-    <p class="muted small">สมัครออนไลน์ (ไม่ได้สแกน QR ของสาขา) ${fmtNum(r.online)} คน · สาขาที่ไม่ใช้แล้วให้กดแก้ไขแล้วเลือก "ปิดสาขา" (ไม่ลบ เพราะรายการเก่ายังอ้างถึงอยู่)</p>` : `
+    <p class="muted small">${tr('สมัครออนไลน์ (ไม่ได้สแกน QR ของสาขา) {n} คน · สาขาที่ไม่ใช้แล้วให้กดแก้ไขแล้วเลือก "ปิดสาขา" (ไม่ลบ เพราะรายการเก่ายังอ้างถึงอยู่)', { n: fmtNum(r.online) })}</p>` : `
     <section class="card adm-card empty-branches">
       <div class="state-icon">${icon('pin', 36)}</div>
-      <h2>ร้านมีหลายสาขาใช่ไหม</h2>
-      <p class="muted">เพิ่มสาขาแล้วจะดูยอดซื้อ สมาชิกใหม่ และคูปองแยกตามสาขาได้ พนักงานจะเลือกสาขาตอนเปิดหน้าพนักงาน และแต่ละสาขามี QR สมัครสมาชิกของตัวเอง</p>
-      <p class="muted small">ร้านที่มีสาขาเดียวไม่ต้องเพิ่ม ระบบทำงานเหมือนเดิมทุกอย่าง · ${esc(unit())}ใช้ร่วมกันทุกสาขา</p>
-      ${owner ? `<button class="btn btn-primary" data-act="branch-edit" data-id="">+ เพิ่มสาขาแรก</button>` : '<p class="muted small">เจ้าของร้านเป็นคนเพิ่มสาขา</p>'}
+      <h2>${tr('ร้านมีหลายสาขาใช่ไหม')}</h2>
+      <p class="muted">${tr('เพิ่มสาขาแล้วจะดูยอดซื้อ สมาชิกใหม่ และคูปองแยกตามสาขาได้ พนักงานจะเลือกสาขาตอนเปิดหน้าพนักงาน และแต่ละสาขามี QR สมัครสมาชิกของตัวเอง')}</p>
+      <p class="muted small">${tr('ร้านที่มีสาขาเดียวไม่ต้องเพิ่ม ระบบทำงานเหมือนเดิมทุกอย่าง · {u}ใช้ร่วมกันทุกสาขา', { u: esc(unit()) })}</p>
+      ${owner ? `<button class="btn btn-primary" data-act="branch-edit" data-id="">${tr('+ เพิ่มสาขาแรก')}</button>` : `<p class="muted small">${tr('เจ้าของร้านเป็นคนเพิ่มสาขา')}</p>`}
     </section>`}
     <section class="card adm-card">
-      <div class="card-head"><h2>ระบบรู้ได้อย่างไรว่าเกิดที่สาขาไหน</h2></div>
+      <div class="card-head"><h2>${tr('ระบบรู้ได้อย่างไรว่าเกิดที่สาขาไหน')}</h2></div>
       <dl class="kv roles">
-        <dt>ยอดซื้อ / ใช้คูปอง</dt><dd>สาขาที่พนักงานเลือกไว้ในหน้าพนักงาน (ตั้งว่าใครอยู่สาขาไหนได้ที่เมนูพนักงาน)</dd>
-        <dt>สมาชิกใหม่</dt><dd>สาขาของ QR ที่ลูกค้าสแกนสมัคร (สมัครเองโดยไม่สแกน = ออนไลน์)</dd>
-        <dt>${esc(unit())}</dt><dd>ใช้ร่วมกันทุกสาขา สะสมที่สาขาหนึ่ง แลกที่อีกสาขาได้</dd>
+        <dt>${tr('ยอดซื้อ / ใช้คูปอง')}</dt><dd>${tr('สาขาที่พนักงานเลือกไว้ในหน้าพนักงาน (ตั้งว่าใครอยู่สาขาไหนได้ที่เมนูพนักงาน)')}</dd>
+        <dt>${tr('สมาชิกใหม่')}</dt><dd>${tr('สาขาของ QR ที่ลูกค้าสแกนสมัคร (สมัครเองโดยไม่สแกน = ออนไลน์)')}</dd>
+        <dt>${esc(unit())}</dt><dd>${tr('ใช้ร่วมกันทุกสาขา สะสมที่สาขาหนึ่ง แลกที่อีกสาขาได้')}</dd>
       </dl>
     </section>`;
   openPending('branch', openBranchEdit);
@@ -3042,10 +3087,10 @@ function overBranchLimit(adding) {
   const open = (S.branchItems || []).filter(x => x.status === 'ACTIVE').length;
   if (!adding || open < branchLimit()) return false;
   openModal(`
-    <div class="modal-head"><h2>สาขาครบตามแพ็กเกจแล้ว</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
-    <p>แพ็กเกจของร้านเปิดสาขาพร้อมกันได้ <b>${fmtNum(branchLimit())} สาขา</b> (เปิดอยู่ ${fmtNum(open)})</p>
-    <p class="muted">ต้องการเพิ่มสาขา ติดต่อผู้ดูแลระบบเพื่ออัปเกรดแพ็กเกจ หรือปิดสาขาที่ไม่ใช้แล้วก่อน</p>
-    <div class="modal-actions"><button class="btn btn-primary" data-act="close">ตกลง</button></div>`);
+    <div class="modal-head"><h2>${tr('สาขาครบตามแพ็กเกจแล้ว')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
+    <p>${tr('แพ็กเกจของร้านเปิดสาขาพร้อมกันได้ <b>{n} สาขา</b> (เปิดอยู่ {n2})', { n: fmtNum(branchLimit()), n2: fmtNum(open) })}</p>
+    <p class="muted">${tr('ต้องการเพิ่มสาขา ติดต่อผู้ดูแลระบบเพื่ออัปเกรดแพ็กเกจ หรือปิดสาขาที่ไม่ใช้แล้วก่อน')}</p>
+    <div class="modal-actions"><button class="btn btn-primary" data-act="close">${tr('ตกลง')}</button></div>`);
   return true;
 }
 
@@ -3055,22 +3100,22 @@ function openBranchEdit(id) {
   if (id && !b) return;
   if (overBranchLimit(!b)) return;
   openModal(`
-    <div class="modal-head"><h2>${b ? 'แก้ไขสาขา' : 'เพิ่มสาขา'}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${b ? tr('แก้ไขสาขา') : tr('เพิ่มสาขา')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <form class="form" data-form="branch" data-id="${esc(b ? b.id : '')}" autocomplete="off">
-      <label class="field"><span>ชื่อสาขา <em>*</em></span><input name="name" value="${esc(b ? b.name : '')}" maxlength="40" placeholder="เช่น สาขาสยาม"></label>
-      ${enField('ชื่อสาขา', 'nameEn', b ? b.nameEn : '', 40, { hint: '(ลูกค้าเห็นในเงื่อนไขแต้มพิเศษ "เฉพาะสาขา…")' })}
+      <label class="field"><span>${tr('ชื่อสาขา <em>*</em>')}</span><input name="name" value="${esc(b ? b.name : '')}" maxlength="40" placeholder="${tr('เช่น สาขาสยาม')}"></label>
+      ${enField(tr('ชื่อสาขา'), 'nameEn', b ? b.nameEn : '', 40, { hint: tr('(ลูกค้าเห็นในเงื่อนไขแต้มพิเศษ "เฉพาะสาขา…")') })}
       <div class="form-grid">
-        <label class="field"><span>ลำดับที่แสดง</span><input name="sort" value="${esc(b ? b.sort : '')}" inputmode="numeric" placeholder="เลขน้อยขึ้นก่อน"></label>
-        <label class="field"><span>สถานะ</span>
+        <label class="field"><span>${tr('ลำดับที่แสดง')}</span><input name="sort" value="${esc(b ? b.sort : '')}" inputmode="numeric" placeholder="${tr('เลขน้อยขึ้นก่อน')}"></label>
+        <label class="field"><span>${tr('สถานะ')}</span>
           <select name="status" class="select">
-            <option value="ACTIVE" ${!b || b.status === 'ACTIVE' ? 'selected' : ''}>เปิดอยู่</option>
-            <option value="INACTIVE" ${b && b.status !== 'ACTIVE' ? 'selected' : ''}>ปิดสาขา</option>
+            <option value="ACTIVE" ${!b || b.status === 'ACTIVE' ? 'selected' : ''}>${tr('เปิดอยู่')}</option>
+            <option value="INACTIVE" ${b && b.status !== 'ACTIVE' ? 'selected' : ''}>${tr('ปิดสาขา')}</option>
           </select></label>
       </div>
-      ${b ? '<p class="muted small">ปิดสาขาแล้ว พนักงานจะบันทึกให้สาขานี้ไม่ได้ และ QR สมัครของสาขานี้จะนับเป็นสมัครออนไลน์ (ข้อมูลเก่ายังอยู่ครบ)</p>' : ''}
+      ${b ? `<p class="muted small">${tr('ปิดสาขาแล้ว พนักงานจะบันทึกให้สาขานี้ไม่ได้ และ QR สมัครของสาขานี้จะนับเป็นสมัครออนไลน์ (ข้อมูลเก่ายังอยู่ครบ)')}</p>` : ''}
       <div class="modal-actions">
-        <button class="btn" type="button" data-act="close">ยกเลิก</button>
-        <button class="btn btn-primary" type="submit">บันทึก</button>
+        <button class="btn" type="button" data-act="close">${tr('ยกเลิก')}</button>
+        <button class="btn btn-primary" type="submit">${tr('บันทึก')}</button>
       </div>
     </form>`);
 }
@@ -3079,12 +3124,12 @@ async function saveBranch(form) {
   const branch = formValues(form, ['name', 'sort', 'status']);
   branch.id = form.dataset.id;
   Object.assign(branch, enValues(form, ['nameEn']));
-  if (!branch.name) return toast('กรุณากรอกชื่อสาขา', 'err');
+  if (!branch.name) return toast(tr('กรุณากรอกชื่อสาขา'), 'err');
   // เปิดสาขาที่ปิดไปแล้วกลับมา ก็นับเป็นสาขาที่เปิดเพิ่ม
   const before = branch.id ? (S.branchItems || []).find(x => x.id === branch.id) : null;
   if (branch.status === 'ACTIVE' && before && before.status !== 'ACTIVE') {
     const open = S.branchItems.filter(x => x.status === 'ACTIVE').length;
-    if (open >= branchLimit()) return toast(`แพ็กเกจของร้านเปิดได้ ${fmtNum(branchLimit())} สาขา ปิดสาขาอื่นก่อน หรือติดต่อผู้ดูแลระบบเพื่ออัปเกรด`, 'err');
+    if (open >= branchLimit()) return toast(`${tr('แพ็กเกจของร้านเปิดได้ {n} สาขา ปิดสาขาอื่นก่อน หรือติดต่อผู้ดูแลระบบเพื่ออัปเกรด', { n: fmtNum(branchLimit()) })}`, 'err');
   }
   const btn = form.querySelector('button[type="submit"]');
   setBusy(btn, true);
@@ -3092,7 +3137,7 @@ async function saveBranch(form) {
     const r = await withRequestId('branch|' + JSON.stringify(branch), rid => S.api.call('adminBranchSave', { branch, requestId: rid }));
     S.branches = r.items;
     closeModal();
-    toast(`${r.created ? 'เพิ่ม' : 'บันทึก'} "${r.branch.name}" แล้ว${r.created ? ' · ตั้งสาขาให้พนักงานได้ที่เมนูพนักงาน' : ''}`, 'ok');
+    toast(`${tr('{x} "{name}" แล้ว{x2}', { x: r.created ? tr('เพิ่ม') : tr('บันทึก'), name: r.branch.name, x2: r.created ? tr(' · ตั้งสาขาให้พนักงานได้ที่เมนูพนักงาน') : '' })}`, 'ok');
     loadBranches();
   } catch (e) {
     setBusy(btn, false);
@@ -3104,22 +3149,22 @@ async function openBranchQr(id) {
   const b = S.branches.find(x => x.id === id);
   if (!b) return;
   const link = branchJoinLink(id);
-  showLoading('กำลังสร้าง QR...');
+  showLoading(tr('กำลังสร้าง QR...'));
   try {
     await loadScript(QR_JS);
   } catch (e) {
-    return toast('สร้าง QR ไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วลองใหม่', 'err');
+    return toast(tr('สร้าง QR ไม่สำเร็จ กรุณาตรวจอินเทอร์เน็ตแล้วลองใหม่'), 'err');
   } finally {
     hideLoading();
   }
   openModal(`
-    <div class="modal-head"><h2>QR สมัครสมาชิก · ${esc(b.name)}</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tr('QR สมัครสมาชิก · {name}', { name: esc(b.name) })}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <div class="qr-box branch-qr">${qrSvg(link)}</div>
-    <p class="muted small center">พิมพ์ติดที่เคาน์เตอร์ของสาขานี้ ลูกค้าที่สแกนแล้วสมัครจะนับเป็นสมาชิกของ${esc(b.name)}</p>
-    <div class="copy-row"><code>${esc(link)}</code><button class="btn btn-sm" data-act="copy" data-text="${esc(link)}">${icon('copy', 16)} คัดลอก</button></div>
+    <p class="muted small center">${tr('พิมพ์ติดที่เคาน์เตอร์ของสาขานี้ ลูกค้าที่สแกนแล้วสมัครจะนับเป็นสมาชิกของ{name}', { name: esc(b.name) })}</p>
+    <div class="copy-row"><code>${esc(link)}</code><button class="btn btn-sm" data-act="copy" data-text="${esc(link)}">${icon('copy', 16)} ${tr('คัดลอก')}</button></div>
     <div class="modal-actions">
-      <button class="btn" data-act="close">ปิด</button>
-      <button class="btn btn-primary" data-act="branch-qr-save" data-id="${esc(id)}">${icon('download', 16)} บันทึกเป็นรูป</button>
+      <button class="btn" data-act="close">${tr('ปิด')}</button>
+      <button class="btn btn-primary" data-act="branch-qr-save" data-id="${esc(id)}">${icon('download', 16)} ${tr('บันทึกเป็นรูป')}</button>
     </div>`);
 }
 
@@ -3127,7 +3172,7 @@ async function openBranchQr(id) {
 async function saveBranchQr(id, btn) {
   const b = S.branches.find(x => x.id === id);
   if (!b) return;
-  setBusy(btn, true, 'กำลังสร้างรูป...');
+  setBusy(btn, true, tr('กำลังสร้างรูป...'));
   try {
     const svg = qrSvg(branchJoinLink(id)).replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ');
     const img = new Image();
@@ -3144,20 +3189,20 @@ async function saveBranchQr(id, btn) {
     x.font = `700 46px ${font}`; x.fillText(b.name, W / 2, 196, W - 80);
     x.imageSmoothingEnabled = false; // QR ต้องคม ไม่ให้ขอบเบลอจนสแกนยาก
     x.drawImage(img, 120, 250, 760, 760);
-    x.font = `700 44px ${font}`; x.fillText('สแกนเพื่อสมัครสมาชิก', W / 2, 1100, W - 80);
-    x.fillStyle = '#666666'; x.font = `400 32px ${font}`; x.fillText(`สะสม${unit()}ทุกครั้งที่ซื้อ`, W / 2, 1160, W - 80);
+    x.font = `700 44px ${font}`; x.fillText(tr('สแกนเพื่อสมัครสมาชิก'), W / 2, 1100, W - 80);
+    x.fillStyle = '#666666'; x.font = `400 32px ${font}`; x.fillText(`${tr('สะสม{u}ทุกครั้งที่ซื้อ', { u: unit() })}`, W / 2, 1160, W - 80);
     const blob = await new Promise(res => c.toBlob(res, 'image/png'));
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `QR-สมัครสมาชิก-${b.name}.png`;
+    a.download = `${tr('QR-สมัครสมาชิก-{name}.png', { name: b.name })}`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 10000);
-    toast('บันทึกรูป QR แล้ว', 'ok');
+    toast(tr('บันทึกรูป QR แล้ว'), 'ok');
   } catch (e) {
-    toast('บันทึกรูปไม่สำเร็จ ลองแคปหน้าจอ QR แทนได้', 'err');
+    toast(tr('บันทึกรูปไม่สำเร็จ ลองแคปหน้าจอ QR แทนได้'), 'err');
   } finally {
     setBusy(btn, false);
   }
@@ -3168,25 +3213,25 @@ async function saveBranchQr(id, btn) {
  * ===================================================== */
 function confirmExport(kind) {
   if (!isOwner()) return;
-  const what = kind === 'members' ? 'รายชื่อสมาชิกทั้งหมด' : `รายการแต้ม ${rangeText()}`;
+  const what = kind === 'members' ? tr('รายชื่อสมาชิกทั้งหมด') : `${tr('รายการแต้ม {x}', { x: rangeText() })}`;
   openModal(`
-    <div class="modal-head"><h2>ส่งออกไฟล์</h2><button class="icon-btn" data-act="close" aria-label="ปิด">${icon('x')}</button></div>
+    <div class="modal-head"><h2>${tr('ส่งออกไฟล์')}</h2><button class="icon-btn" data-act="close" aria-label="${tr('ปิด')}">${icon('x')}</button></div>
     <p><b>${esc(what)}</b></p>
-    <p class="notice">${icon('shield', 18)}<span>ไฟล์นี้มีข้อมูลส่วนตัวของลูกค้า (ชื่อ เบอร์โทร วันเกิด) เก็บไว้ในเครื่องที่ปลอดภัย และอย่าส่งต่อให้คนนอก ตามกฎหมาย PDPA</span></p>
+    <p class="notice">${icon('shield', 18)}<span>${tr('ไฟล์นี้มีข้อมูลส่วนตัวของลูกค้า (ชื่อ เบอร์โทร วันเกิด) เก็บไว้ในเครื่องที่ปลอดภัย และอย่าส่งต่อให้คนนอก ตามกฎหมาย PDPA')}</span></p>
     <div class="modal-actions">
-      <button class="btn" data-act="close">ยกเลิก</button>
-      <button class="btn btn-primary" data-act="export-confirm" data-id="${esc(kind)}">${icon('download', 16)} ดาวน์โหลด</button>
+      <button class="btn" data-act="close">${tr('ยกเลิก')}</button>
+      <button class="btn btn-primary" data-act="export-confirm" data-id="${esc(kind)}">${icon('download', 16)} ${tr('ดาวน์โหลด')}</button>
     </div>`);
 }
 
 async function doExport(kind, btn) {
-  setBusy(btn, true, 'กำลังเตรียมไฟล์...');
+  setBusy(btn, true, tr('กำลังเตรียมไฟล์...'));
   try {
     const r = await S.api.call('adminExport', kind === 'transactions' ? { kind, ...rangeData() } : { kind });
-    const name = kind === 'members' ? 'สมาชิก' : `รายการแต้ม-${S.range.from}-ถึง-${S.range.to}`;
+    const name = kind === 'members' ? tr('สมาชิก') : `${tr('รายการแต้ม-{from}-ถึง-{to}', { from: S.range.from, to: S.range.to })}`;
     downloadCsv(`${S.shop.id}-${name}-${todayKey()}.csv`, [r.columns, ...r.rows]);
     closeModal();
-    toast(`ส่งออก ${fmtNum(r.rows.length)} แถวแล้ว`, 'ok');
+    toast(`${tr('ส่งออก {n} แถวแล้ว', { n: fmtNum(r.rows.length) })}`, 'ok');
   } catch (e) {
     setBusy(btn, false);
     toast(e.message, 'err');
@@ -3215,6 +3260,6 @@ function downloadCsv(filename, rows) {
 }
 
 function copyText(text) {
-  if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast('คัดลอกแล้ว', 'ok'), () => toast(text));
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast(tr('คัดลอกแล้ว'), 'ok'), () => toast(text));
   else toast(text);
 }

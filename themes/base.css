@@ -939,3 +939,6 @@ input.input-err { border-color: var(--danger); }
 .en-missing .link { font-weight: 600; font-size: 14px; text-align: left; }
 .pv-lang { align-self: flex-start; }
 .tier-text-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+/* ปุ่ม TH | EN ของหลังบ้าน อยู่แถวชื่อร้าน (คอม = เมนูข้าง / มือถือ = แถบบน) */
+.adm-brand .adm-lang { margin-left: auto; }
+.adm-brand .adm-lang button { min-width: 34px; min-height: 28px; padding: 3px 8px; font-size: 12px; }

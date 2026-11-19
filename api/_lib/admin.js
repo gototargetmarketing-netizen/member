@@ -5,6 +5,7 @@
 // (ข้อมูลหลายหมื่นรายการต่อปี ถ้าดึงมานับเองจะช้าและเปลือง) — ผลต้องเหมือนเดิมทุกตัว
 const { userError } = require('./errors');
 const U = require('./util');
+const I18N = require('./i18n'); // ไฟล์ Excel ภาษาอังกฤษ
 const { SHOP_SQL, cfg, publicBrand, LEGACY_SHOP_NAME, THEMES } = require('./shop');
 const { once } = require('./once');
 const V = require('./views');
@@ -692,7 +693,9 @@ async function adminExport(p, ctx) {
   const list = await S.branchList(ctx.db, shopId);
   const withBranch = list.length > 0; // คอลัมน์สาขาใส่เฉพาะร้านที่มีสาขา
   const bn = V.branchNames(list);
-  const branchName = (v) => { const k = U.upper(v); return k ? (bn[k] || k) : 'ไม่ระบุ'; };
+  // หลังบ้านภาษาอังกฤษ → หัวคอลัมน์และค่าที่ระบบเขียนเป็นอังกฤษ (ข้อมูลที่คนพิมพ์คงเดิม)
+  const X = (s) => I18N.exportText(s, ctx.lang);
+  const branchName = (v) => { const k = U.upper(v); return k ? X(bn[k] || k) : X('ไม่ระบุ'); };
   let columns, rows;
   if (kind === 'members') {
     columns = ['รหัสสมาชิก', 'ชื่อ', 'นามสกุล', 'เบอร์โทร', 'วันเกิด', 'แต้มคงเหลือ', 'ยอดซื้อรวม', 'จำนวนครั้งที่มา',
@@ -701,7 +704,7 @@ async function adminExport(p, ctx) {
       const first = String(m.first_name || '') || String(m.name || '');
       return [String(m.id), first, String(m.last_name || ''), fmtPhone(m.phone), String(m.birth_date || ''),
         U.toInt(m.points), U.toNum(m.total_spend), U.toInt(m.visit_count), fmtDateTimeOrBlank(m.joined_at),
-        fmtDateTimeOrBlank(m.last_visit_at), m.marketing_consent === true ? 'ใช่' : 'ไม่', U.upper(m.status) || 'ACTIVE']
+        fmtDateTimeOrBlank(m.last_visit_at), X(m.marketing_consent === true ? 'ใช่' : 'ไม่'), U.upper(m.status) || 'ACTIVE']
         .concat(withBranch ? [branchName(m.joined_branch)] : []);
     });
     if (withBranch) columns.push('สาขาที่สมัคร');
@@ -712,14 +715,15 @@ async function adminExport(p, ctx) {
         t.points, t.balance_after, t.detail, t.staff, t.branch
         from transactions t left join members m on m.shop_id = t.shop_id and m.id = t.member_id
         where t.shop_id = $1 and t.created_at >= $2 and t.created_at < $3 order by t.created_at, t.id`, [shopId, per.from, per.end])).rows.map((tx) =>
-      [String(tx.id), fmtDateTimeOrBlank(tx.created_at), String(tx.member_id || ''), String(tx.member_name || ''), U.upper(tx.type),
-        U.toNum(tx.amount), U.toInt(tx.points), U.toInt(tx.balance_after), String(tx.detail || ''), String(tx.staff || '')]
+      [String(tx.id), fmtDateTimeOrBlank(tx.created_at), String(tx.member_id || ''), X(String(tx.member_name || '')), U.upper(tx.type),
+        U.toNum(tx.amount), U.toInt(tx.points), U.toInt(tx.balance_after), I18N.detailText(U.upper(tx.type), tx.detail, ctx.lang), String(tx.staff || '')]
         .concat(withBranch ? [branchName(tx.branch)] : []));
     if (withBranch) columns.push('สาขา');
   } else {
     throw userError('ไม่รู้จักข้อมูลที่จะส่งออก', 'BAD_EXPORT');
   }
   // ไฟล์ที่ส่งออกไปแล้วร้านควบคุมไม่ได้ (PDPA) → จดไว้ว่าใครส่งออกเมื่อไร
+  columns = columns.map(X);
   console.log('ส่งออก ' + kind + ' ' + rows.length + ' แถว ร้าน ' + shopId + ' โดย ' + ctx.staff.name + ' (' + ctx.user.userId + ')');
   return { columns, rows };
 }
